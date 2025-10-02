@@ -1,0 +1,164 @@
+# PINNs 逆重建專案預設配置檔案
+# 用於設定基本參數與實驗框架
+
+# 基本實驗設定
+experiment:
+  name: "pinnx_inverse"
+  version: "v1.0"
+  seed: 42
+  device: "cuda"  # cuda, cpu, mps
+  precision: "float32"  # float32, float64
+
+# 資料相關設定
+data:
+  # 高保真資料來源（JHTDB/UT Austin）
+  source: "jhtdb"  # jhtdb, custom
+  dataset: "channel"  # channel, hit, custom
+  
+  # 資料預處理
+  normalize: true
+  cache_dir: "./data/cache"
+  
+  # 噪聲與遺失設定
+  noise_sigma: 0.02  # 高斯噪聲標準差 (1-3%)
+  dropout_prob: 0.10  # 隨機遺失比例
+  
+# 感測點配置
+sensors:
+  K: 12  # 感測點數量 (≤8-16)
+  selection_method: "qr_pivot"  # qr_pivot, random, uniform, adaptive
+  spatial_coverage: "optimal"  # optimal, uniform, clustered
+  
+# 模型架構設定
+model:
+  type: "fourier_mlp"
+  
+  # 網路結構
+  in_dim: 3  # [t, x, y] 或 [x, y] (定常)
+  out_dim: 4  # [u, v, p, S] (速度、壓力、源項)
+  width: 256
+  depth: 5
+  activation: "tanh"
+  
+  # Fourier Features
+  fourier_m: 32  # Fourier 模態數
+  fourier_sigma: 5.0  # 頻率分佈參數
+  
+  # VS-PINN 變數尺度化
+  scaling:
+    learnable: true  # 是否可學習尺度參數
+    input_norm: "standard"  # standard, minmax, none
+    output_norm: "standard"
+    
+# 物理設定
+physics:
+  # 流體參數
+  nu: 1.6e-3  # 動力黏性係數
+  rho: 1.0    # 密度
+  
+  # 計算域
+  domain:
+    x_range: [0.0, 4.0]
+    y_range: [0.0, 2.0]
+    t_range: [0.0, 1.0]  # 非定常流場
+    
+  # 邊界條件
+  boundary_conditions:
+    type: "dirichlet"  # dirichlet, neumann, periodic
+    wall_velocity: [0.0, 0.0]  # 壁面速度
+    inlet_profile: "parabolic"  # parabolic, uniform
+    
+# 損失函數權重
+losses:
+  # 基本損失權重
+  data_weight: 1.0      # 觀測資料一致性
+  residual_weight: 1.0  # PDE 殘差
+  boundary_weight: 1.0  # 邊界條件
+  initial_weight: 1.0   # 初始條件 (非定常)
+  
+  # 先驗與正則化
+  prior_weight: 0.3     # 低保真一致性 (軟先驗)
+  source_l1: 1.0e-6     # 源項 L1 稀疏正則化
+  gradient_penalty: 0.0 # 梯度懲罰
+  
+  # 動態權重設定
+  adaptive_weighting: true
+  weight_update_freq: 1000
+  grad_norm_alpha: 0.9  # GradNorm 動量係數
+  
+  # 時間因果權重
+  causal_weighting: true
+  causal_eps: 1.0  # 因果權重衰減參數
+  
+# 訓練設定
+training:
+  # 最佳化器
+  optimizer: "adam"
+  lr: 1.0e-3
+  weight_decay: 1.0e-6
+  lr_scheduler: "cosine"  # cosine, step, exponential
+  
+  # 訓練參數
+  max_epochs: 200000
+  batch_size: 1024
+  validation_freq: 500
+  checkpoint_freq: 5000
+  early_stopping: false
+  patience: 10000
+  
+  # 取樣策略
+  sampling:
+    pde_points: 10000    # PDE 殘差計算點數
+    boundary_points: 1000 # 邊界點數
+    initial_points: 1000  # 初始條件點數 (非定常)
+    
+  # 課程學習
+  curriculum: false
+  curriculum_schedule: "linear"  # linear, exponential
+  
+# Ensemble 與不確定性量化
+ensemble:
+  enable: false
+  n_models: 8
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7]
+  
+  # UQ 設定
+  uncertainty_quantification: true
+  confidence_level: 0.95
+  
+# 評估設定
+evaluation:
+  # 評估網格
+  grid_resolution: [256, 256]  # [nx, ny]
+  
+  # 評估指標
+  metrics:
+    - "relative_l2"      # 相對 L2 誤差
+    - "spectrum_rmse"    # 能譜 RMSE
+    - "wall_shear"       # 壁面剪應力
+    - "uncertainty_corr" # UQ 相關性
+    
+  # 成功門檻
+  thresholds:
+    l2_error: 0.15       # ≤ 10-15%
+    rmse_improvement: 0.30  # ≥ 30% 改善
+    uq_correlation: 0.6   # r ≥ 0.6
+    
+# 日誌與儲存
+logging:
+  level: "info"  # debug, info, warning, error
+  log_freq: 100
+  save_predictions: true
+  save_checkpoints: true
+  
+  # wandb 設定
+  wandb:
+    project: "pinnx-inverse"
+    entity: null  # 填入你的 wandb 用戶名
+    tags: ["pinns", "inverse", "turbulence"]
+    
+# 重現性設定
+reproducibility:
+  deterministic: true
+  benchmark: false  # CUDA benchmark 模式
+  num_workers: 4    # 資料載入器工作程序數

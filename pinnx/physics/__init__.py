@@ -1,0 +1,77 @@
+"""
+Physics 模組初始化檔案
+=====================
+
+物理定律計算與數值方法模組
+包含：
+- NS方程殘差計算 (ns_2d.py)
+- VS-PINN變數尺度化 (scaling.py)  
+- 物理量守恆檢查
+- 數值微分算子
+"""
+
+from .ns_2d import (
+    ns_residual_2d,
+    incompressible_ns_2d,
+    compute_vorticity,
+    compute_q_criterion,
+    compute_derivatives,
+    check_conservation_laws
+)
+
+from .scaling import (
+    VSScaler,
+    StandardScaler, 
+    MinMaxScaler,
+    create_scaler_from_data,
+    denormalize_gradients
+)
+
+# 物理常數與參數
+class PhysicsConstants:
+    """常用物理常數"""
+    # 流體性質 (水，標準條件)
+    WATER_DENSITY = 1000.0      # kg/m³
+    WATER_VISCOSITY = 1.0e-6    # m²/s (動力黏度)
+    
+    # 空氣性質 (標準條件)  
+    AIR_DENSITY = 1.225         # kg/m³
+    AIR_VISCOSITY = 1.5e-5      # m²/s
+    
+    # 數值計算參數
+    EPSILON = 1e-12             # 數值穩定性參數
+    PI = 3.14159265359          # 圓周率
+
+# 通用物理工具函數
+def reynolds_number(velocity_scale, length_scale, kinematic_viscosity):
+    """計算雷諾數 Re = UL/ν"""
+    return velocity_scale * length_scale / kinematic_viscosity
+
+def friction_velocity(wall_shear_stress, density):
+    """計算摩擦速度 u_τ = sqrt(τ_w/ρ)"""
+    import torch
+    return torch.sqrt(wall_shear_stress / density)
+
+def plus_units(y, u_tau, nu):
+    """轉換為壁面單位 y+ = y*u_τ/ν"""
+    return y * u_tau / nu
+
+def check_cfl_condition(velocity, grid_spacing, time_step):
+    """檢查CFL條件 CFL = u*dt/dx < 1"""
+    import torch
+    cfl = torch.abs(velocity) * time_step / grid_spacing
+    return torch.max(cfl)
+
+__all__ = [
+    # NS方程相關
+    'ns_residual_2d', 'incompressible_ns_2d', 'compute_vorticity', 
+    'compute_q_criterion', 'compute_derivatives', 'check_conservation_laws',
+    
+    # 尺度化相關
+    'VSScaler', 'StandardScaler', 'MinMaxScaler', 
+    'create_scaler_from_data', 'denormalize_gradients',
+    
+    # 物理工具
+    'PhysicsConstants', 'reynolds_number', 'friction_velocity', 
+    'plus_units', 'check_cfl_condition'
+]

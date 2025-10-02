@@ -1,0 +1,167 @@
+# 均質等向性湍流 (Homogeneous Isotropic Turbulence) 專用配置
+# 用於 HIT 資料的 PINNs 逆重建實驗
+
+# 覆寫實驗名稱
+experiment:
+  name: "hit_inverse"
+  description: "Homogeneous isotropic turbulence reconstruction"
+
+# 資料集特定設定
+data:
+  dataset: "hit"
+  
+  # HIT 特定參數
+  Re_lambda: 433  # Taylor 微尺度雷諾數
+  box_size: 2.0   # 計算域邊長 (無量綱)
+  
+  # JHTDB 資料擷取設定
+  jhtdb:
+    dataset_name: "isotropic1024coarse"
+    time_step: 0
+    spatial_range:
+      x: [0.0, 2.0]
+      y: [0.0, 2.0] 
+      z: [0.0, 2.0]
+    resolution: [1024, 1024, 1024]  # DNS 解析度
+    
+# 感測點配置
+sensors:
+  K: 16  # HIT 可能需要稍多感測點
+  # 等向性湍流感測點策略
+  placement_strategy: "isotropic"  # 等向性分佈
+  clustering: false  # 避免聚集，保持均勻
+  spectral_coverage: true  # 考慮頻譜覆蓋
+  
+# 物理參數
+physics:
+  nu: 1.0e-4  # 對應目標雷諾數的黏性
+  
+  # HIT 計算域：週期性立方體
+  domain:
+    x_range: [0.0, 2.0]
+    y_range: [0.0, 2.0]
+    z_range: [0.0, 2.0]
+    periodic_x: true
+    periodic_y: true
+    periodic_z: true
+    
+  # 邊界條件：全週期
+  boundary_conditions:
+    type: "periodic"
+    
+  # 強制項設定 (HIT 維持)
+  forcing:
+    enable: true
+    type: "spectral"  # 頻譜強制
+    target_modes: [1, 2, 3]  # 低波數強制
+    energy_injection_rate: 0.1
+    
+# 損失函數權重
+losses:
+  data_weight: 1.0
+  residual_weight: 1.0
+  boundary_weight: 0.0  # 週期邊界無需額外約束
+  
+  # HIT 特定損失
+  incompressibility_weight: 1.5  # 加強散度約束
+  energy_spectrum_weight: 0.3    # 能譜匹配
+  enstrophy_weight: 0.2          # 渦量保持
+  
+  # 統計量匹配
+  velocity_variance_weight: 0.4  # 速度方差
+  length_scale_weight: 0.3       # 積分長度尺度
+  
+# 訓練設定
+training:
+  lr: 1.2e-3  # HIT 可能需要較高學習率
+  max_epochs: 250000  # 等向性湍流較複雜
+  
+  # 取樣策略
+  sampling:
+    pde_points: 15000  # 增加內部點
+    boundary_points: 0  # 週期邊界
+    
+  # 多尺度訓練
+  multiscale: true
+  scale_schedule:
+    - {epochs: 0,      grid_size: 64}   # 粗解析度開始
+    - {epochs: 80000,  grid_size: 128}  # 中等解析度
+    - {epochs: 160000, grid_size: 256}  # 高解析度
+    
+# 評估設定
+evaluation:
+  grid_resolution: [256, 256, 256]  # 3D 評估網格
+  
+  # HIT 特定評估指標
+  metrics:
+    - "relative_l2"
+    - "energy_spectrum"           # 能量頻譜
+    - "velocity_pdf"              # 速度機率密度函數
+    - "structure_function"        # 結構函數
+    - "integral_length_scale"     # 積分長度尺度
+    - "taylor_microscale"         # Taylor 微尺度
+    - "kolmogorov_scale"          # Kolmogorov 尺度
+    - "intermittency"             # 間歇性指標
+    
+  # 統計分析
+  statistics:
+    spectral_analysis: true
+    pdf_analysis: true
+    structure_function_orders: [2, 4, 6]  # 高階結構函數
+    
+# 後處理
+postprocess:
+  save_fields: ["u", "v", "w", "p", "vorticity", "source"]
+  
+  # 3D 可視化
+  plots:
+    - "velocity_magnitude_slices"  # 速度大小切片
+    - "vorticity_isosurfaces"      # 渦量等值面
+    - "energy_spectrum_log"        # 對數能譜
+    - "structure_functions"        # 結構函數
+    - "velocity_pdfs"              # 速度PDF
+    - "sensor_distribution_3d"     # 3D感測點分佈
+    
+# 頻譜分析設定
+spectral:
+  # FFT 設定
+  dealiasing: true
+  window_function: "hann"
+  
+  # 能譜計算
+  energy_spectrum:
+    k_bins: 128
+    k_max: 512  # 最高波數
+    averaging: "spherical"  # 球平均
+    
+  # 結構函數計算
+  structure_function:
+    r_bins: 64
+    r_max: 1.0
+    orders: [2, 3, 4, 6]
+    
+# 低保真先驗 (粗LES)
+prior:
+  type: "coarse_les"  # 粗網格LES作為先驗
+  mesh_resolution: [64, 64, 64]  # 1/4 解析度
+  subgrid_model: "smagorinsky"
+  
+  # 先驗資料路徑
+  data_path: "./data/lowfi/hit_coarse_les.npz"
+  
+  # 先驗一致性：重點匹配大尺度結構
+  consistency_regions:
+    - "large_scales"    # 大尺度結構高一致性
+    - "inertial_range"  # 慣性區中等一致性
+    - "dissipation_range"  # 耗散區低一致性
+    
+# Ensemble 特殊設定 (HIT 不確定性較大)
+ensemble:
+  enable: true
+  n_models: 12  # 增加ensemble數量
+  
+  # 初始化多樣性
+  initialization_diversity:
+    fourier_sigma_range: [3.0, 8.0]  # 不同Fourier參數
+    network_width_range: [128, 512]  # 不同網路寬度
+    learning_rate_range: [8e-4, 2e-3]  # 不同學習率

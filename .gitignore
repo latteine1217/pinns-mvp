@@ -1,0 +1,10 @@
+# Data and results artifacts
+data/
+results/
+
+# Model checkpoints and arrays
+*.pt
+*.npz
+
+# Notebook checkpoints
+.ipynb_checkpoints/

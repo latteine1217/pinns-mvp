@@ -1,0 +1,128 @@
+# 通道流 (Channel Flow) 專用配置
+# 繼承 defaults.yml 的基本設定，專門用於通道流逆重建實驗
+
+# 覆寫實驗名稱
+experiment:
+  name: "channel_flow_inverse"
+  description: "Channel flow reconstruction with sparse sensors"
+
+# 資料集特定設定
+data:
+  dataset: "channel"
+  
+  # 通道流特定參數
+  Re_tau: 180  # 摩擦雷諾數
+  channel_height: 2.0
+  
+  # JHTDB 資料擷取設定
+  jhtdb:
+    dataset_name: "channel"
+    time_step: 0
+    spatial_range:
+      x: [0.0, 8.0]   # 流向範圍
+      y: [0.0, 2.0]   # 法向範圍 (通道高度)
+      z: [0.0, 3.0]   # 展向範圍
+    resolution: [512, 256, 384]  # DNS 解析度
+    
+# 感測點特殊配置
+sensors:
+  K: 12
+  # 通道流感測點優化策略
+  placement_strategy: "wall_normal"  # 考慮壁面法向分佈
+  wall_clustering: true  # 壁面附近密集佈點
+  log_spacing: true      # 對數間距分佈
+  
+# 物理參數
+physics:
+  nu: 1.0e-4  # 對應 Re_tau=180 的黏性係數
+  
+  # 通道流計算域
+  domain:
+    x_range: [0.0, 8.0]   # 約 4δ 流向長度
+    y_range: [0.0, 2.0]   # 通道高度 2δ
+    periodic_x: true      # 流向週期邊界
+    periodic_z: true      # 展向週期邊界
+    
+  # 邊界條件：無滑移壁面
+  boundary_conditions:
+    type: "no_slip"
+    top_wall: [0.0, 0.0]     # 上壁面速度
+    bottom_wall: [0.0, 0.0]  # 下壁面速度
+    pressure_gradient: -0.0025  # 驅動壓力梯度
+    
+# 損失函數權重調整
+losses:
+  # 通道流特定權重
+  data_weight: 1.0
+  residual_weight: 0.8    # 降低 PDE 殘差權重
+  boundary_weight: 2.0    # 加強邊界條件
+  prior_weight: 0.2       # 適中的先驗權重
+  
+  # 壁面相關損失
+  wall_shear_weight: 0.5  # 壁面剪應力匹配
+  mean_profile_weight: 0.3 # 平均速度剖面匹配
+  
+# 訓練設定調整
+training:
+  lr: 8.0e-4  # 稍微降低學習率
+  max_epochs: 150000  # 通道流通常較快收斂
+  
+  # 取樣策略
+  sampling:
+    pde_points: 8000
+    boundary_points: 1500  # 增加邊界點
+    wall_points: 500       # 專門的壁面點
+    
+  # 課程學習：從低雷諾數開始
+  curriculum: true
+  curriculum_schedule:
+    - {epochs: 0,     Re_tau: 90}   # 從一半雷諾數開始
+    - {epochs: 50000, Re_tau: 135}  # 逐漸增加
+    - {epochs: 100000, Re_tau: 180} # 最終目標
+    
+# 評估設定
+evaluation:
+  grid_resolution: [512, 256]  # 匹配 DNS 解析度
+  
+  # 通道流特定評估
+  metrics:
+    - "relative_l2"
+    - "mean_velocity_profile"  # 平均速度剖面
+    - "reynolds_stress"        # 雷諾應力
+    - "wall_shear_stress"      # 壁面剪應力
+    - "turbulent_kinetic_energy"  # 湍流動能
+    - "pressure_fluctuation"   # 壓力脈動
+    
+  # 統計量計算
+  statistics:
+    averaging_time: 10  # 時間平均長度
+    wall_normal_bins: 128  # 法向分bin數
+    
+# 後處理與可視化
+postprocess:
+  save_fields: ["u", "v", "p", "source"]
+  save_statistics: true
+  
+  # 可視化選項
+  plots:
+    - "velocity_contours"     # 速度等值線
+    - "pressure_field"        # 壓力場
+    - "mean_profiles"         # 平均剖面
+    - "reynolds_stress_profiles"  # 雷諾應力剖面
+    - "sensor_locations"      # 感測點位置
+    - "reconstruction_error"  # 重建誤差分佈
+    
+# 低保真先驗設定
+prior:
+  type: "rans_kw"  # k-ω RANS 模型作為先驗
+  mesh_resolution: [128, 64]  # 粗網格 RANS
+  wall_function: true
+  
+  # 先驗資料路徑
+  data_path: "./data/lowfi/channel_rans_kw.npz"
+  
+  # 先驗一致性設定
+  consistency_regions:
+    - "bulk_flow"     # 主流區域高一致性
+    - "buffer_layer"  # 緩衝層中等一致性
+    - "viscous_sublayer"  # 黏性子層低一致性

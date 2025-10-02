@@ -1,0 +1,141 @@
+2025-09-29 19:51:34,178 - pinnx - ERROR - Missing required packages: scikit-learn
+2025-09-29 19:51:34,179 - pinnx - ERROR - Please install missing packages using: conda env create -f environment.yml
+2025-09-29 20:01:11,967 - pinnx - ERROR - Missing required packages: scikit-learn
+2025-09-29 20:01:11,968 - pinnx - ERROR - Please install missing packages using: conda env create -f environment.yml
+2025-09-29 20:06:04,747 - pinnx - ERROR - Missing required packages: scikit-learn
+2025-09-29 20:06:04,748 - pinnx - ERROR - Please install missing packages using: conda env create -f environment.yml
+2025-09-29 20:11:37,595 - pinnx - INFO - All required dependencies are available
+2025-09-29 20:11:37,604 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-29 20:11:37,604 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-29 20:11:37,604 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-29 20:11:37,604 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-29 20:11:37,604 - pinnx - INFO - Default device: cpu
+2025-09-29 20:11:37,604 - pinnx - INFO - Default precision: torch.float32
+2025-09-29 20:11:56,780 - pinnx - INFO - All required dependencies are available
+2025-09-29 20:11:56,782 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-29 20:11:56,782 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-29 20:11:56,782 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-29 20:11:56,782 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-29 20:11:56,782 - pinnx - INFO - Default device: cpu
+2025-09-29 20:11:56,782 - pinnx - INFO - Default precision: torch.float32
+2025-09-29 20:13:08,108 - pinnx - INFO - All required dependencies are available
+2025-09-29 20:13:08,112 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-29 20:13:08,112 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-29 20:13:08,112 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-29 20:13:08,112 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-29 20:13:08,112 - pinnx - INFO - Default device: cpu
+2025-09-29 20:13:08,112 - pinnx - INFO - Default precision: torch.float32
+2025-09-29 20:13:14,798 - pinnx.sensors.qr_pivot - INFO - 使用預設貪心策略
+2025-09-29 20:13:28,536 - pinnx - INFO - All required dependencies are available
+2025-09-29 20:13:28,544 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-29 20:13:28,545 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-29 20:13:28,545 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-29 20:13:28,545 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-29 20:13:28,545 - pinnx - INFO - Default device: cpu
+2025-09-29 20:13:28,545 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 00:46:33,552 - pinnx - INFO - All required dependencies are available
+2025-09-30 00:46:33,556 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 00:46:33,556 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 00:46:33,556 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 00:46:33,556 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 00:46:33,556 - pinnx - INFO - Default device: cpu
+2025-09-30 00:46:33,557 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 00:46:33,587 - root - WARNING - NetCDF4 not available, NetCDF files cannot be loaded
+2025-09-30 22:14:15,191 - pinnx - INFO - All required dependencies are available
+2025-09-30 22:14:15,195 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 22:14:15,195 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 22:14:15,197 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 22:14:15,197 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 22:14:15,197 - pinnx - INFO - Default device: cpu
+2025-09-30 22:14:15,197 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 22:24:37,941 - pinnx - INFO - All required dependencies are available
+2025-09-30 22:24:37,946 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 22:24:37,946 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 22:24:37,946 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 22:24:37,946 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 22:24:37,946 - pinnx - INFO - Default device: cpu
+2025-09-30 22:24:37,946 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 22:25:18,240 - pinnx - INFO - All required dependencies are available
+2025-09-30 22:25:18,242 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 22:25:18,242 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 22:25:18,242 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 22:25:18,242 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 22:25:18,242 - pinnx - INFO - Default device: cpu
+2025-09-30 22:25:18,242 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 22:25:50,635 - pinnx - INFO - All required dependencies are available
+2025-09-30 22:25:50,645 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 22:25:50,645 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 22:25:50,645 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 22:25:50,645 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 22:25:50,645 - pinnx - INFO - Default device: cpu
+2025-09-30 22:25:50,645 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 22:27:42,314 - pinnx - INFO - All required dependencies are available
+2025-09-30 22:27:42,316 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 22:27:42,316 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 22:27:42,316 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 22:27:42,316 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 22:27:42,316 - pinnx - INFO - Default device: cpu
+2025-09-30 22:27:42,316 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 22:27:50,099 - pinnx - INFO - All required dependencies are available
+2025-09-30 22:27:50,105 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 22:27:50,105 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 22:27:50,105 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 22:27:50,105 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 22:27:50,105 - pinnx - INFO - Default device: cpu
+2025-09-30 22:27:50,105 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:02:09,021 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:02:09,029 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:02:09,029 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:02:09,029 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:02:09,029 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:02:09,029 - pinnx - INFO - Default device: cpu
+2025-09-30 23:02:09,029 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:02:17,820 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:02:17,825 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:02:17,825 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:02:17,825 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:02:17,825 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:02:17,825 - pinnx - INFO - Default device: cpu
+2025-09-30 23:02:17,825 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:17:39,118 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:17:39,122 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:17:39,123 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:17:39,123 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:17:39,123 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:17:39,123 - pinnx - INFO - Default device: cpu
+2025-09-30 23:17:39,123 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:18:46,273 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:18:46,276 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:18:46,276 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:18:46,276 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:18:46,276 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:18:46,276 - pinnx - INFO - Default device: cpu
+2025-09-30 23:18:46,277 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:19:45,441 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:19:45,446 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:19:45,446 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:19:45,446 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:19:45,446 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:19:45,446 - pinnx - INFO - Default device: cpu
+2025-09-30 23:19:45,446 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:33:36,383 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:33:36,384 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:33:36,384 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:33:36,384 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:33:36,384 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:33:36,384 - pinnx - INFO - Default device: cpu
+2025-09-30 23:33:36,384 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:39:28,965 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:39:28,967 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:39:28,967 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:39:28,967 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:39:28,967 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:39:28,967 - pinnx - INFO - Default device: cpu
+2025-09-30 23:39:28,967 - pinnx - INFO - Default precision: torch.float32
+2025-09-30 23:39:42,209 - pinnx - INFO - All required dependencies are available
+2025-09-30 23:39:42,212 - pinnx - WARNING - Some modules not available: cannot import name 'check_conservation' from 'pinnx.physics' (/Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/__init__.py)
+2025-09-30 23:39:42,212 - pinnx - WARNING - This is normal if modules are not yet implemented
+2025-09-30 23:39:42,212 - pinnx - INFO - PINNx v1.0.0 initialized successfully
+2025-09-30 23:39:42,212 - pinnx - INFO - Project root: /Users/latteine/Documents/coding/pinns-mvp
+2025-09-30 23:39:42,212 - pinnx - INFO - Default device: cpu
+2025-09-30 23:39:42,212 - pinnx - INFO - Default precision: torch.float32

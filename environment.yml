@@ -1,0 +1,146 @@
+# PINNs 逆重建專案 Conda 環境配置
+name: pinnx-inverse
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+
+dependencies:
+  # Python 基礎
+  - python=3.10
+  
+  # 深度學習框架
+  - pytorch>=2.2
+  - pytorch-cuda=12.1  # CUDA 支援，可根據實際GPU調整
+  - torchvision
+  - torchaudio
+  
+  # 科學計算核心
+  - numpy>=1.24
+  - scipy>=1.10
+  - pandas>=2.0
+  
+  # 資料處理與儲存
+  - h5py>=3.8          # HDF5 檔案處理
+  - netcdf4>=1.6       # NetCDF 檔案處理 (JHTDB)
+  - zarr               # 高效能陣列儲存
+  - xarray>=2023.1     # 多維陣列資料分析
+  
+  # 配置與序列化
+  - pyyaml>=6.0        # YAML 配置檔案
+  - toml               # TOML 配置檔案
+  - joblib             # 序列化與平行處理
+  
+  # 可視化
+  - matplotlib>=3.7
+  - seaborn>=0.12
+  - plotly>=5.13       # 互動式可視化
+  
+  # 機器學習與統計
+  - scikit-learn>=1.3
+  - statsmodels        # 統計分析
+  
+  # 數值計算加速
+  - numba              # JIT 編譯加速
+  - cython             # C 擴展支援
+  
+  # 開發工具
+  - jupyter
+  - ipykernel
+  - black              # 程式碼格式化
+  - flake8             # 程式碼檢查
+  - pytest             # 單元測試
+  - pytest-cov        # 測試覆蓋率
+  
+  # 系統工具
+  - tqdm               # 進度條
+  - click              # 命令列介面
+  - rich               # 豐富終端輸出
+  
+  # 記憶體分析
+  - memory_profiler    # 記憶體使用分析
+  
+  # pip 安裝的套件
+  - pip
+  - pip:
+      # JHTDB 資料庫存取
+      - pyJHTDB>=0.0.10
+      
+      # 實驗管理與日誌
+      - wandb>=0.16        # Weights & Biases 實驗追蹤
+      - tensorboard>=2.13  # TensorBoard 可視化
+      
+      # 張量操作
+      - einops>=0.7        # 優雅的張量操作
+      - opt-einsum         # 最佳化張量收縮
+      
+      # 數值微分 (可選，用於驗證自動微分)
+      - findiff            # 有限差分
+      
+      # 網格與插值
+      - scipy-interpolate  # 高級插值方法
+      
+      # 平行處理
+      - ray[default]>=2.7  # 分散式計算 (可選)
+      
+      # 高效能數值計算
+      - jax[cpu]           # JAX 計算框架 (可選)
+      - jaxlib             # JAX 函式庫
+      
+      # 最佳化器
+      - torch-optimizer    # 額外的 PyTorch 最佳化器
+      
+      # 模型檢查點
+      - safetensors        # 安全的模型儲存格式
+      
+      # 配置管理
+      - hydra-core>=1.3    # 階層式配置管理
+      - omegaconf>=2.3     # 配置檔案處理
+      
+      # 資料驗證
+      - pydantic>=2.0      # 資料驗證與設定
+      
+      # 類型檢查
+      - mypy               # 靜態類型檢查
+      - typing-extensions  # 類型提示擴展
+      
+      # 文檔生成
+      - sphinx>=6.0        # 文檔生成
+      - sphinx-rtd-theme   # ReadTheDocs 主題
+      
+      # 程式碼品質
+      - pre-commit         # Git hooks
+      - isort              # import 排序
+      
+      # 效能監控
+      - psutil             # 系統資源監控
+      - gpustat            # GPU 狀態監控
+      
+      # 科學繪圖
+      - mayavi             # 3D 科學可視化 (可選)
+      - vtk                # 可視化工具包
+      
+      # 頻譜分析
+      - pyfftw             # 快速傅立葉變換
+      
+      # 網格生成 (可選)
+      - meshio             # 網格 I/O
+      - pygmsh             # 網格生成
+      
+      # CUDA 工具 (如果需要)
+      - cupy-cuda12x       # GPU 加速 NumPy
+      
+      # 高級數學函數
+      - mpmath             # 任意精度算術
+      
+      # 資料庫連接 (用於結果儲存)
+      - sqlalchemy         # SQL 工具包
+      - sqlite3
+
+# 環境變量設定 (可選)
+variables:
+  CUDA_VISIBLE_DEVICES: "0"
+  OMP_NUM_THREADS: "8"
+  MKL_NUM_THREADS: "8"
+  PYTORCH_CUDA_ALLOC_CONF: "max_split_size_mb:128"
