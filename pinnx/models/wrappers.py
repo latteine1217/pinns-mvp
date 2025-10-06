@@ -14,7 +14,7 @@ PINN 模型包裝器模組
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Any, Dict, List, Optional, Tuple, Callable, Union
+from typing import Dict, List, Optional, Tuple, Callable, Union
 import numpy as np
 
 from .fourier_mlp import PINNNet, MultiScalePINNNet
@@ -184,7 +184,13 @@ class ScaledPINNWrapper(nn.Module):
         """
         # 輸入標準化
         if self.input_scaler is not None:
-            x_scaled = self.input_scaler.encode(x)
+            # 根據尺度器類型選擇正確的方法
+            if hasattr(self.input_scaler, 'encode'):
+                x_scaled = self.input_scaler.encode(x)
+            elif hasattr(self.input_scaler, 'transform_input'):
+                x_scaled = self.input_scaler.transform_input(x)
+            else:
+                x_scaled = self.input_scaler.transform(x)
         else:
             x_scaled = x
         
@@ -193,7 +199,13 @@ class ScaledPINNWrapper(nn.Module):
         
         # 輸出反標準化
         if self.output_scaler is not None:
-            y = self.output_scaler.decode(y_scaled)
+            # 根據尺度器類型選擇正確的方法
+            if hasattr(self.output_scaler, 'decode'):
+                y = self.output_scaler.decode(y_scaled)
+            elif hasattr(self.output_scaler, 'inverse_transform_output'):
+                y = self.output_scaler.inverse_transform_output(y_scaled)
+            else:
+                y = self.output_scaler.inverse_transform(y_scaled)
         else:
             y = y_scaled
         
@@ -262,77 +274,6 @@ class ScaledPINNWrapper(nn.Module):
                 'params': self.output_scaler.get_params() if hasattr(self.output_scaler, 'get_params') else None
             }
         return info
-
-
-class ResidualWrapper(nn.Module):
-    """在基礎模型輸出上疊加殘差分支以增強表達能力"""
-
-    def __init__(self,
-                 base_model: nn.Module,
-                 residual_config: Optional[Dict[str, Any]] = None):
-        super().__init__()
-
-        config = residual_config or {}
-        self.base_model = base_model
-        self.skip_connections = config.get('skip_connections', [])
-        self.residual_scale = float(config.get('residual_scale', 1.0))
-
-        try:
-            first_param = next(base_model.parameters())
-            self.model_device = first_param.device
-        except StopIteration:
-            self.model_device = torch.device('cpu')
-
-        # 判定輸入與輸出維度
-        self.input_dim = config.get('input_dim', getattr(base_model, 'in_dim', None))
-        if self.input_dim is None:
-            self.input_dim = getattr(base_model, 'input_dim', None)
-        if self.input_dim is None:
-            raise ValueError("ResidualWrapper 需要透過 base_model 屬性或 residual_config['input_dim'] 指定輸入維度")
-
-        self.output_dim = config.get('output_dim', getattr(base_model, 'out_dim', None))
-        if self.output_dim is None:
-            self.output_dim = getattr(base_model, 'output_dim', None)
-        if self.output_dim is None:
-            with torch.no_grad():
-                probe = torch.zeros(1, self.input_dim, device=self.model_device)
-                self.output_dim = base_model(probe).shape[-1]
-
-        branch_count = max(1, len(self.skip_connections) or 1)
-        self.residual_branches = nn.ModuleList()
-        for _ in range(branch_count):
-            layer = nn.Linear(self.input_dim, self.output_dim)
-            nn.init.xavier_normal_(layer.weight, gain=0.1)
-            nn.init.zeros_(layer.bias)
-            self.residual_branches.append(layer)
-
-        activation_name = config.get('activation', 'identity')
-        self.activation = self._resolve_activation(activation_name)
-
-    @staticmethod
-    def _resolve_activation(name: str) -> Callable[[torch.Tensor], torch.Tensor]:
-        name = (name or 'identity').lower()
-        if name == 'tanh':
-            return torch.tanh
-        if name == 'relu':
-            return F.relu
-        if name == 'sigmoid':
-            return torch.sigmoid
-        return lambda x: x
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        base_output = self.base_model(x)
-
-        residual = None
-        for branch in self.residual_branches:
-            branch_out = branch(x)
-            residual = branch_out if residual is None else residual + branch_out
-
-        if residual is None:
-            residual = torch.zeros_like(base_output)
-
-        residual = self.activation(residual)
-        return base_output + self.residual_scale * residual
 
 
 class PhysicsConstrainedWrapper(nn.Module):
@@ -449,16 +390,16 @@ class EnsemblePINNWrapper(nn.Module):
             mean = torch.einsum('m,mbo->bo', self.weights, stacked)
             var = torch.var(stacked, dim=0)
             std = torch.std(stacked, dim=0)
-            min_vals = torch.min(stacked, dim=0)[0]  # 新增
-            max_vals = torch.max(stacked, dim=0)[0]  # 新增
+            min_vals = torch.min(stacked, dim=0)[0]
+            max_vals = torch.max(stacked, dim=0)[0]
             
             return {
                 'mean': mean,
                 'var': var,
                 'std': std,
                 'uncertainty': std,  # 別名
-                'min': min_vals,     # 新增
-                'max': max_vals      # 新增
+                'min': min_vals,
+                'max': max_vals
             }
             
         elif mode == 'all':
@@ -646,10 +587,6 @@ def create_ensemble_pinn(model_configs: List[Dict],
         models.append(model)
     
     return EnsemblePINNWrapper(models=models, weights=weights)
-
-
-# 向後相容別名
-EnsembleWrapper = EnsemblePINNWrapper
 
 
 if __name__ == "__main__":

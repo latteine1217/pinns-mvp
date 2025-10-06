@@ -4,7 +4,8 @@ Physics 模組初始化檔案
 
 物理定律計算與數值方法模組
 包含：
-- NS方程殘差計算 (ns_2d.py)
+- NS方程殘差計算 (ns_2d.py, ns_3d_temporal.py)
+- RANS湍流方程 (turbulence.py)
 - VS-PINN變數尺度化 (scaling.py)  
 - 物理量守恆檢查
 - 數值微分算子
@@ -17,6 +18,24 @@ from .ns_2d import (
     compute_q_criterion,
     compute_derivatives,
     check_conservation_laws
+)
+
+try:
+    from .ns_3d_temporal import (
+        NSEquations3DTemporal,
+        compute_derivatives_3d_temporal
+    )
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Cannot import ns_3d_temporal module: {e}")
+    NSEquations3DTemporal = None
+    compute_derivatives_3d_temporal = None
+
+from .turbulence import (
+    rans_momentum_residual,
+    continuity_residual,
+    k_epsilon_residuals,
+    RANSEquations2D
 )
 
 from .scaling import (
@@ -66,6 +85,12 @@ __all__ = [
     # NS方程相關
     'ns_residual_2d', 'incompressible_ns_2d', 'compute_vorticity', 
     'compute_q_criterion', 'compute_derivatives', 'check_conservation_laws',
+    
+    # 3D時間依賴NS方程
+    'NSEquations3DTemporal', 'compute_derivatives_3d_temporal',
+    
+    # RANS湍流方程相關
+    'compute_reynolds_stress', 'k_epsilon_model', 'rans_momentum_residual', 'RANSEquations2D',
     
     # 尺度化相關
     'VSScaler', 'StandardScaler', 'MinMaxScaler', 

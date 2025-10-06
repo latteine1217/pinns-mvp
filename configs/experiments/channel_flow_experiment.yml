@@ -1,0 +1,83 @@
+# Channel Flow Re1000 PINNs 逆重建實驗配置
+# 基於載入器的真實實驗設定
+
+experiment:
+  name: "channel_flow_pinns_reconstruction"
+  version: "v1.0"
+  seed: 42
+  device: "cpu"  # 測試時使用 CPU
+  precision: "float32"
+
+# Channel Flow 載入器設定
+channel_flow:
+  enabled: true
+  strategy: "qr_pivot"  # 或 "random" 用於對比
+  
+# 感測器設定
+sensors:
+  K: 8  # 感測點數量
+  
+# PINNs 模型設定
+model:
+  in_dim: 3  # x, y, t
+  out_dim: 3  # u, v, p
+  width: 64  # 減小網路尺寸用於快速測試
+  depth: 4
+  activation: "tanh"
+  fourier_m: 32
+  fourier_sigma: 1.0
+
+# VS-PINN 尺度化設定
+scaling:
+  enabled: true
+  input_stats:
+    # 將從 Channel Flow 資料中自動推導
+    
+# 物理方程設定
+physics:
+  equations: ["continuity", "momentum_x", "momentum_y"]
+  Re: 180  # 基於中心流速的雷諾數
+  nu: 0.001  # 運動黏性係數
+  
+# 訓練設定
+training:
+  epochs: 100  # 快速測試
+  lr: 1e-3
+  optimizer: "adam"
+  
+  # 取樣點設定
+  sampling:
+    pde_points: 1000
+    boundary_points: 200
+    
+  # 權重策略
+  weighting:
+    strategy: "gradnorm"
+    boundary_weight: 10.0
+    data_weight: 10.0
+    pde_weight: 1.0
+    
+# 損失函數設定
+losses:
+  data_loss:
+    type: "mse"
+    weight: 10.0
+  pde_loss:
+    type: "mse" 
+    weight: 1.0
+  boundary_loss:
+    type: "mse"
+    weight: 10.0
+
+# 評估設定
+evaluation:
+  metrics: ["l2_relative", "max_error", "rmse"]
+  save_fields: true
+  plot_results: true
+  
+# 輸出設定
+output:
+  log_interval: 10
+  save_interval: 50
+  checkpoint_dir: "checkpoints/channel_flow"
+  results_dir: "results/channel_flow"

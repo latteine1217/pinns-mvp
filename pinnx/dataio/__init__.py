@@ -41,7 +41,7 @@ from .lowfi_loader import (
 
 # JHTDB 客戶端
 try:
-    from .jhtdb_client import JHTDBClient
+    from .jhtdb_client import JHTDBManager as JHTDBClient, JHTDBConfig
 except ImportError:
     # 如果 pyJHTDB 不可用，提供警告
     import warnings
@@ -50,6 +50,19 @@ except ImportError:
         ImportWarning
     )
     JHTDBClient = None
+    JHTDBConfig = None
+
+# Channel Flow 專用載入器
+try:
+    from .channel_flow_loader import ChannelFlowLoader, ChannelFlowData
+except ImportError:
+    import warnings
+    warnings.warn(
+        "ChannelFlowLoader unavailable. Some functionality may be limited.",
+        ImportWarning
+    )
+    ChannelFlowLoader = None
+    ChannelFlowData = None
 
 # 版本信息
 __version__ = "0.1.0"
@@ -93,6 +106,10 @@ __all__ = [
     
     # JHTDB
     'JHTDBClient',
+    
+    # Channel Flow專用
+    'ChannelFlowLoader',
+    'ChannelFlowData',
     
     # 便利函數
     'load_lowfi_data',

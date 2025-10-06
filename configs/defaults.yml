@@ -6,7 +6,7 @@ experiment:
   name: "pinnx_inverse"
   version: "v1.0"
   seed: 42
-  device: "cuda"  # cuda, cpu, mps
+  device: "auto"  # auto, cuda, cpu, mps (auto會自動選擇最佳設備)
   precision: "float32"  # float32, float64
 
 # 資料相關設定

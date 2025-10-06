@@ -80,64 +80,49 @@ check_dependencies()
 
 # 核心功能模組導入
 try:
-    # 物理與數值計算
+    # 物理與數值計算 - 只匯入實際存在的函數
     from .physics import (
         ns_residual_2d,
         VSScaler,
         compute_derivatives,
-        check_conservation
+        check_conservation_laws,
+        ns_2d,
+        compute_vorticity,
+        incompressible_ns_2d
     )
     
-    # 神經網路模型
+    # 神經網路模型 - 只匯入實際存在的類別
     from .models import (
         FourierFeatures,
         PINNNet,
-        MultiOutputWrapper,
-        create_model
+        create_pinn_model,
+        fourier_pinn
     )
     
-    # 損失函數
+    # 損失函數 - 只匯入實際存在的類別
     from .losses import (
-        residual_loss,
-        data_loss,
-        boundary_loss,
-        prior_consistency_loss,
-        GradNorm,
-        causal_weights
+        LossManager,
+        GradNormWeighter,
+        CausalWeighter,
+        create_loss_manager
     )
     
-    # 感測點選擇
+    # 感測點選擇 - 只匯入實際存在的類別
     from .sensors import (
-        qr_pivot_select,
-        optimal_sensor_placement,
-        sensor_sensitivity_analysis
+        QRPivotSelector,
+        create_sensor_selector,
+        evaluate_sensor_placement
     )
     
-    # 資料處理
+    # 資料處理 - 只匯入實際存在的類別
     from .dataio import (
         JHTDBClient,
-        LowFidelityLoader,
-        DataModule,
-        create_dataloader
+        ChannelFlowLoader,
+        LowFiLoader,
+        load_lowfi_data
     )
     
-    # 訓練框架  
-    from .train import (
-        train_single_model,
-        train_ensemble,
-        TrainingConfig,
-        EnsembleConfig
-    )
-    
-    # 評估與分析
-    from .evals import (
-        compute_metrics,
-        plot_results,
-        uncertainty_analysis,
-        convergence_analysis
-    )
-    
-    logger.info("Successfully imported all PINNx modules")
+    logger.info("Successfully imported all available PINNx modules")
     
 except ImportError as e:
     logger.warning(f"Some modules not available: {e}")
@@ -147,8 +132,14 @@ except ImportError as e:
 class Config:
     """全域配置類別"""
     
-    # 預設設定
-    default_device = "cuda" if __import__('torch').cuda.is_available() else "cpu"
+    # 預設設定 - 優先選擇GPU加速器
+    import torch
+    if torch.cuda.is_available():
+        default_device = "cuda"
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        default_device = "mps" 
+    else:
+        default_device = "cpu"
     default_dtype = __import__('torch').float32
     
     # 數值精度設定
@@ -167,6 +158,17 @@ class Config:
     @classmethod
     def set_device(cls, device: str):
         """設定計算裝置"""
+        if device == "auto":
+            # 自動選擇最佳設備
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+            logger.info(f"Auto-selected device: {device}")
+        
         cls.default_device = device
         logger.info(f"Device set to: {device}")
     
@@ -236,32 +238,26 @@ def setup_experiment(config_name: str = "defaults", device: str = None, seed: in
     logger.info(f"Experiment setup complete for: {config_name}")
     return config
 
-# 模組資訊
+# 模組資訊 - 只包含實際可用的函數
 __all__ = [
     # 版本與配置
     '__version__', 'Config', 'load_config', 'setup_experiment',
     
     # 物理模組
-    'ns_residual_2d', 'VSScaler', 'compute_derivatives', 'check_conservation',
+    'ns_residual_2d', 'VSScaler', 'compute_derivatives', 'check_conservation_laws',
+    'ns_2d', 'compute_vorticity', 'incompressible_ns_2d',
     
     # 模型模組
-    'FourierFeatures', 'PINNNet', 'MultiOutputWrapper', 'create_model',
+    'FourierFeatures', 'PINNNet', 'create_pinn_model', 'fourier_pinn',
     
     # 損失模組
-    'residual_loss', 'data_loss', 'boundary_loss', 'prior_consistency_loss',
-    'GradNorm', 'causal_weights',
+    'LossManager', 'GradNormWeighter', 'CausalWeighter', 'create_loss_manager',
     
     # 感測器模組
-    'qr_pivot_select', 'optimal_sensor_placement', 'sensor_sensitivity_analysis',
+    'QRPivotSelector', 'create_sensor_selector', 'evaluate_sensor_placement',
     
     # 資料模組
-    'JHTDBClient', 'LowFidelityLoader', 'DataModule', 'create_dataloader',
-    
-    # 訓練模組
-    'train_single_model', 'train_ensemble', 'TrainingConfig', 'EnsembleConfig',
-    
-    # 評估模組
-    'compute_metrics', 'plot_results', 'uncertainty_analysis', 'convergence_analysis'
+    'JHTDBClient', 'ChannelFlowLoader', 'LowFiLoader', 'load_lowfi_data',
 ]
 
 # 套件初始化完成

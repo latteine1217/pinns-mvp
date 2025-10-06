@@ -1,0 +1,204 @@
+# RANS方程式湍流建模配置檔案
+# 基於RANS (Reynolds-Averaged Navier-Stokes) 方程的湍流PINNs配置
+
+# 基本實驗設定
+experiment:
+  name: "pinnx_rans_turbulence"
+  version: "v1.0"
+  seed: 42
+  device: "cuda"  # cuda, cpu, mps
+  precision: "float32"
+
+# 資料相關設定
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  normalize: true
+  cache_dir: "./data/cache"
+  noise_sigma: 0.02
+  dropout_prob: 0.10
+
+# 感測點配置
+sensors:
+  K: 12
+  selection_method: "qr_pivot"
+  spatial_coverage: "optimal"
+
+# 模型架構設定 (擴展輸出維度支持湍流量)
+model:
+  type: "fourier_mlp"
+  
+  # 網路結構 - 增加湍流量輸出
+  in_dim: 3     # [t, x, y]
+  out_dim: 6    # [u, v, p, k, ε, S] (速度、壓力、湍動能、耗散率、源項)
+  width: 512    # 增加網路寬度以處理複雜湍流
+  depth: 6      # 增加深度
+  activation: "tanh"
+  
+  # Fourier Features
+  fourier_m: 64  # 增加 Fourier 模態處理湍流尺度
+  fourier_sigma: 8.0
+  
+  # VS-PINN 變數尺度化
+  scaling:
+    learnable: true
+    input_norm: "standard"
+    output_norm: "standard"
+
+# 物理設定 - RANS特有參數
+physics:
+  # 流體參數
+  nu: 1.6e-3      # 分子運動黏度
+  rho: 1.0        # 密度
+  
+  # RANS湍流模型設定
+  turbulence:
+    model: "k_epsilon"  # k_epsilon, k_omega
+    constants:
+      C_mu: 0.09      # 湍流黏性係數
+      C_1e: 1.44      # ε方程常數1
+      C_2e: 1.92      # ε方程常數2
+      sigma_k: 1.0    # k方程Prandtl數
+      sigma_e: 1.3    # ε方程Prandtl數
+  
+  # 計算域
+  domain:
+    x_range: [0.0, 4.0]
+    y_range: [0.0, 2.0]
+    t_range: [0.0, 1.0]
+    
+  # 邊界條件 - 湍流量
+  boundary_conditions:
+    type: "dirichlet"
+    wall_velocity: [0.0, 0.0]
+    inlet_profile: "parabolic"
+    # 湍流量邊界條件
+    wall_k: 0.0     # 壁面湍動能
+    wall_epsilon: 0.1  # 壁面耗散率
+    inlet_k: 0.01   # 入口湍動能
+    inlet_epsilon: 0.1  # 入口耗散率
+
+# 損失函數權重 - RANS特有
+losses:
+  # 基本損失權重
+  data_weight: 1.0
+  boundary_weight: 1.0
+  initial_weight: 1.0
+  
+  # RANS方程權重 - 調優版本 (平衡損失量級)
+  momentum_x_weight: 1.0      # x方向動量方程
+  momentum_y_weight: 1.0      # y方向動量方程
+  continuity_weight: 1.0      # 連續方程
+  k_equation_weight: 1.0e-4   # 湍動能方程 (減少權重平衡量級)
+  epsilon_equation_weight: 1.0e-5 # 耗散率方程 (大幅減少權重)
+  
+  # 先驗與正則化
+  prior_weight: 0.3
+  source_l1: 1.0e-6
+  
+  # 湍流特有正則化 - 增強版
+  k_min_constraint: 1.0e-6    # k ≥ 0 約束
+  epsilon_min_constraint: 1.0e-6  # ε ≥ 0 約束
+  realizability_weight: 0.1   # 可實現性約束
+  
+  # 物理約束懲罰項
+  physical_constraint_weight: 1.0  # 物理約束懲罰權重
+  constraint_type: "softplus"      # softplus, relu, clip
+  
+  # 動態權重
+  adaptive_weighting: true
+  weight_update_freq: 1000
+  grad_norm_alpha: 0.9
+  
+  # 時間因果權重
+  causal_weighting: true
+  causal_eps: 1.0
+
+# 訓練設定 - 針對RANS調整
+training:
+  optimizer: "adam"
+  lr: 5.0e-4         # 降低學習率，提高穩定性
+  weight_decay: 1.0e-5
+  lr_scheduler: "cosine"
+  
+  max_epochs: 100      # 快速測試設定
+  batch_size: 2048     # 增加批次大小
+  validation_freq: 1000
+  checkpoint_freq: 5000
+  early_stopping: false
+  patience: 20000
+  
+  # 取樣策略
+  sampling:
+    pde_points: 15000    # 增加PDE點數處理5個方程
+    boundary_points: 2000
+    initial_points: 1000
+    
+  # 課程學習 - 對湍流模型很重要
+  curriculum: true
+  curriculum_schedule: "exponential"
+  curriculum_stages:
+    - epochs: 30        # 階段1：只訓練平均流動
+      active_losses: ["momentum", "continuity", "data", "boundary"]
+    - epochs: 60        # 階段2：加入湍動能
+      active_losses: ["momentum", "continuity", "k_equation", "data", "boundary"]
+    - epochs: -1        # 階段3：全部方程
+      active_losses: ["all"]
+
+# Ensemble 與不確定性量化
+ensemble:
+  enable: false
+  n_models: 8
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7]
+  uncertainty_quantification: true
+  confidence_level: 0.95
+
+# 評估設定
+evaluation:
+  grid_resolution: [256, 256]
+  
+  # RANS特有評估指標
+  metrics:
+    - "relative_l2"
+    - "spectrum_rmse"
+    - "wall_shear"
+    - "uncertainty_corr"
+    - "turbulent_viscosity"   # 湍流黏性分佈
+    - "reynolds_stress"       # 雷諾茲應力
+    - "turbulence_intensity"  # 湍流強度
+    
+  # 成功門檻
+  thresholds:
+    l2_error: 0.20        # 湍流模型容許較高誤差
+    rmse_improvement: 0.25
+    uq_correlation: 0.5
+    k_physical_range: [0.0, 1.0]      # k的物理合理範圍
+    epsilon_physical_range: [0.0, 10.0] # ε的物理合理範圍
+
+# 日誌與儲存
+logging:
+  level: "info"
+  log_freq: 10         # 更頻繁的日誌記錄
+  save_predictions: true
+  save_checkpoints: true
+  
+  # 湍流專用可視化
+  save_turbulence_fields: true  # 保存湍流場可視化
+  
+  wandb:
+    project: "pinnx-rans-turbulence"
+    entity: null
+    tags: ["pinns", "rans", "turbulence", "k-epsilon"]
+
+# 重現性設定
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# 數值穩定性設定 (湍流模型特有)
+numerical:
+  epsilon_clip_min: 1.0e-10     # ε的最小值剪切
+  k_clip_min: 1.0e-10          # k的最小值剪切
+  nu_t_clip_max: 1.0e3         # 湍流黏性的最大值剪切
+  gradient_clip: 1.0           # 梯度剪切
