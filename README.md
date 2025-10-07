@@ -4,7 +4,8 @@
 
 [![Research](https://img.shields.io/badge/Research-PINNs%20Inverse%20Problems-blue)](https://github.com/latteine1217/pinns-mvp)
 [![Data Source](https://img.shields.io/badge/Data-JHTDB%20Channel%20Flow-green)](http://turbulence.pha.jhu.edu/)
-[![Status](https://img.shields.io/badge/Status-Breakthrough%20Achieved-success)](tasks/task-014/completion_summary.json)
+[![Status](https://img.shields.io/badge/Status-Active%20Development-success)](README.md)
+[![Best Result](https://img.shields.io/badge/Best%20Error-68.2%25-orange)](evaluation_results_k80_wall_balanced_early_stopped/)
 
 > 🎯 **Mission**: Reconstruct full 3D turbulent flow fields from minimal sensor data using physics-informed neural networks and real Johns Hopkins Turbulence Database (JHTDB) benchmarks.
 
@@ -12,22 +13,34 @@
 
 ## 🏆 Key Achievements
 
-### 🎊 **Task-014 Breakthrough: 27.1% Average Error** 
-Successfully achieved **< 30%** reconstruction error using only **15 sensor points** to reconstruct **65,536-point 3D flow field**:
+### 🎯 **最佳結果: 68.2% Average Error (K=80 Wall-Balanced)**
+使用 **80 個感測點**重建 **8,192 點通道流場** (Re_τ=1000):
 
-| Component | Error (%) | Improvement vs Baseline |
-|-----------|-----------|------------------------|
-| **u-velocity** | 5.7% | 91.0% ↓ |
-| **v-velocity** | 33.2% | 84.5% ↓ |
-| **w-velocity** | 56.7% | 37.8% ↓ |
-| **pressure** | 12.6% | 86.5% ↓ |
-| **🎯 Average** | **27.1%** | **88.4% ↓** |
+| Component | Error (%) | Training Strategy |
+|-----------|-----------|-------------------|
+| **u-velocity** | 45.7% | Wall-balanced sensors |
+| **v-velocity** | 100.9% | QR-pivot selection |
+| **pressure** | 57.9% | Conservation-based early stopping |
+| **🎯 Average** | **68.2%** | **507 epochs** ✅ |
 
-### 🔬 **Scientific Contributions**
-- **Sparse Reconstruction**: 15 sensors → 65K points (4,369:1 ratio)
-- **Engineering Threshold**: < 30% error for practical applications ✅
-- **Real Data Validation**: JHTDB Channel Flow Re=1000 ✅
-- **Complete Framework**: End-to-end 3D PINNs optimization pipeline ✅
+### 🔬 **關鍵技術洞察**
+
+**Over-Training 警示**:
+- ✅ Early stopping 在 ~500 epochs 防止災難性退化
+- ❌ 訓練至 2000 epochs → 誤差暴增至 144% (+111.7%)
+- 🎯 **建議監控指標**: `data_loss` 而非 `total_loss`
+
+**配置文件**: 
+- 模型: `checkpoints/pinnx_channel_flow_re1000_K80_wall_balanced_epoch_507.pth`
+- 配置: `configs/channel_flow_re1000_K80_wall_balanced.yml`
+
+> **詳細分析**: 參見 [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) 第 X 章
+
+### 🏗️ **科學貢獻**
+- **Real Data Validation**: JHTDB Channel Flow Re_τ=1000 ✅
+- **Robust Sensor Selection**: QR-pivot wall-balanced strategy ✅
+- **Training Best Practices**: Early stopping on data_loss ✅
+- **Complete Framework**: End-to-end PINNs optimization pipeline ✅
 
 ---
 
@@ -44,22 +57,28 @@ conda env create -f environment.yml
 conda activate pinns-mvp
 ```
 
-### ⚡ Run Breakthrough Model
+### ⚡ Run Best Configuration
 ```bash
-# Execute Task-014 breakthrough configuration
-python test_targeted_3d_optimization.py
+# 使用最佳配置訓練 (K=80 wall-balanced)
+python scripts/train.py --cfg configs/channel_flow_re1000_K80_wall_balanced.yml
 
-# Expected output: 27.1% average error in ~800 epochs
+# 載入最佳檢查點進行評估
+python scripts/evaluate.py \
+  --checkpoint checkpoints/pinnx_channel_flow_re1000_K80_wall_balanced_epoch_507.pth \
+  --cfg configs/channel_flow_re1000_K80_wall_balanced.yml
 ```
 
 ### 🎯 Custom Training
 ```bash
-# Basic RANS-constrained training
-python scripts/train_rans.py --config configs/rans_optimized.yml
+# 基礎通道流訓練
+python scripts/train.py --cfg configs/channel_flow_re1000_stable.yml
 
-# Advanced 3D reconstruction
-python scripts/train.py --sensors 15 --epochs 800 --adaptive-weights
+# 使用 QR-pivot 感測點策略
+python scripts/generate_sensors_wall_balanced.py --K 80
+python scripts/train.py --cfg configs/defaults.yml --sensors 80 --epochs 1500
 ```
+
+> ⚠️ **重要**: 建議使用 `data_loss` 作為 early stopping 指標，避免 over-training
 
 ---
 
@@ -101,16 +120,27 @@ Physics-Informed Training → 3D Field Reconstruction
 
 ```
 pinns-mvp/
-├── 🏆 tasks/task-014/           # Breakthrough achievement files
 ├── 🧠 pinnx/                   # Core PINNs framework
 │   ├── physics/                # NS equations, scaling, constraints
 │   ├── models/                 # Neural network architectures
 │   ├── sensors/                # QR-pivot sensor selection
-│   └── losses/                 # Physics-informed loss functions
+│   ├── losses/                 # Physics-informed loss functions
+│   ├── dataio/                 # Data I/O and preprocessing
+│   └── evals/                  # Evaluation metrics
 ├── 📊 scripts/                 # Training and evaluation scripts
-├── ⚙️ configs/                 # Configuration files
-├── 🧪 tests/                   # Unit tests and validation
-└── 📚 Technical Documentation  # Detailed technical guides
+│   ├── train.py               # Main training script
+│   ├── evaluate_training_result.py  # Result evaluation
+│   ├── k_scan_experiment.py   # Sensor count experiments
+│   └── validation/            # Physics validation scripts
+├── ⚙️ configs/                # Configuration files
+│   ├── defaults.yml           # Base configuration
+│   ├── channel_flow_re1000_stable.yml  # Current stable config
+│   ├── channelflow.yml        # Channel flow specific
+│   └── hit.yml                # Isotropic turbulence
+├── 🧪 tests/                  # Unit tests and validation
+├── 📈 results/                # Experimental results
+├── 🗃️ deprecated/             # Archived files (RANS, old experiments)
+└── 📚 Documentation          # Technical guides and analysis
 ```
 
 ---
@@ -152,12 +182,16 @@ python tests/test_sensors_integration.py
 python tests/test_losses.py
 ```
 
-### 🔍 **Reproduce Breakthrough Results**
+### 🔍 **Current Experiments**
 ```bash
-# Task-014 breakthrough reproduction
-python test_targeted_3d_optimization.py
+# Standard channel flow training
+python scripts/train.py --cfg configs/channel_flow_re1000.yml
 
-# Expected: 27.1% ± 0.5% average error
+# QR-pivot sensor experiments
+python scripts/k_scan_experiment.py
+
+# Physics validation
+python scripts/validation/physics_validation.py
 ```
 
 ---
@@ -166,10 +200,10 @@ python test_targeted_3d_optimization.py
 
 | Document | Purpose |
 |----------|---------|
-| **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)** | Complete technical details (5 core technologies) |
-| **[JHTDB_VISUALIZATION_DIAGNOSIS.md](JHTDB_VISUALIZATION_DIAGNOSIS.md)** | Data validation and visualization |
+| **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)** | Complete technical details and architecture |
 | **[context/decisions_log.md](context/decisions_log.md)** | Development decisions and milestones |
 | **[AGENTS.md](AGENTS.md)** | Development workflow and guidelines |
+| **[deprecated/README.md](deprecated/README.md)** | Archived files and legacy experiments |
 
 ---
 
@@ -198,7 +232,7 @@ python test_targeted_3d_optimization.py
   author={Research Team},
   year={2025},
   url={https://github.com/your-repo/pinns-mvp},
-  note={Breakthrough: 27.1\% reconstruction error from 15 sensor points}
+  note={Best Result: 68.2\% reconstruction error with K=80 wall-balanced sensors}
 }
 ```
 
