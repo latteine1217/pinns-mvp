@@ -2,7 +2,7 @@
 
 **Sparse-Data, Physics-Informed Inversion on Public Turbulence Benchmarks: Reconstruction and Uncertainty Quantification**
 
-[![Research](https://img.shields.io/badge/Research-PINNs%20Inverse%20Problems-blue)](https://github.com/your-repo)
+[![Research](https://img.shields.io/badge/Research-PINNs%20Inverse%20Problems-blue)](https://github.com/latteine1217/pinns-mvp)
 [![Data Source](https://img.shields.io/badge/Data-JHTDB%20Channel%20Flow-green)](http://turbulence.pha.jhu.edu/)
 [![Status](https://img.shields.io/badge/Status-Breakthrough%20Achieved-success)](tasks/task-014/completion_summary.json)
 
