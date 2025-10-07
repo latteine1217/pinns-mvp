@@ -36,7 +36,7 @@ Successfully achieved **< 30%** reconstruction error using only **15 sensor poin
 ### 📋 Prerequisites
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/pinns-mvp.git
+git clone https://github.com/latteine1217/pinns-mvp.git
 cd pinns-mvp
 
 # Install dependencies
