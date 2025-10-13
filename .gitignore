@@ -48,3 +48,7 @@ htmlcov/
 *.temp
 *.bak
 *.backup
+deprecated/
+
+# 環境變數（包含敏感憑證）
+.env

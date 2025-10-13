@@ -1,0 +1,254 @@
+# Channel Flow Curriculum Training - SHORT TEST (200 epochs)
+# 🎯 目標：快速驗證修復方案是否有效
+# ⏱️ 測試時長：200 epochs (約 5-10 分鐘)
+# 📊 驗證指標：Data Loss 是否下降（不再增加）
+
+experiment:
+  name: "pinnx_channel_flow_curriculum_test_fixed"
+  version: "v2.0_quick_test"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "🧪 快速測試：驗證 Data Loss 修復方案"
+
+initial_condition:
+  enabled: true
+  use_data: true
+  n_points: 256
+  time: 0.0
+
+inlet:
+  enabled: true
+  n_points: 64
+  x_position: -1.0
+
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000)"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+  noise_sigma: 0.02
+  dropout_prob: 0.10
+  
+  slice_config:
+    plane: "xy"
+    z_position: 4.71
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+sensors:
+  K: 80
+  selection_method: "wall_balanced"
+  sensor_file: "sensors_K80_wall_balanced.npz"
+  
+  spatial_coverage: "proportional_layering"
+  layer_allocation: [8, 24, 15, 24, 9]
+  sampling_method: "u_quantile"
+
+model:
+  type: "fourier_mlp"
+  in_dim: 2
+  out_dim: 3
+  width: 256
+  depth: 6
+  activation: "sine"
+  
+  fourier_m: 48
+  fourier_sigma: 3.0
+  
+  scaling:
+    learnable: false
+    input_norm:
+      x: [0.0, 25.13]
+      y: [-1.0, 1.0]
+    output_norm:
+      u: [0.0, 16.5]
+      v: [-0.5, 0.6]      # 🔥 修復
+      p: [-85.0, 3.0]
+
+physics:
+  nu: 1.0e-3
+  rho: 1.0
+  
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 41980.0
+    u_tau: 1.0
+    pressure_gradient: -1.0
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    pressure_driven: true
+    mean_pressure_gradient: -1.0
+
+# 🧪 快速測試：單階段 200 epochs
+curriculum:
+  enable: true
+  mode: "staged"
+  total_epochs: 200
+  
+  stages:
+    - name: "Stage1_Test"
+      epoch_range: [0, 200]
+      description: "🧪 測試階段：驗證 Data Loss 下降"
+      
+      Re_tau: 100.0
+      nu: 1.0e-2
+      pressure_gradient: -0.1
+      
+      # 🔥 修復後的權重
+      weights:
+        data: 10.0                    # ✅ 高優先級
+        wall_constraint: 50.0         # ✅ 降低
+        periodicity: 25.0
+        inlet: 50.0
+        initial_condition: 50.0       # ✅ 降低
+        momentum_x: 5.0
+        momentum_y: 5.0
+        continuity: 10.0
+        prior: 0.0
+      
+      inlet:
+        profile_type: 'parabolic'
+        u_max: 6.0
+      
+      sampling:
+        pde_points: 2048
+        boundary_points: 3000
+      
+      lr: 1.0e-3
+
+losses:
+  data_weight: 10.0
+  wall_constraint_weight: 50.0
+  periodicity_weight: 25.0
+  inlet_weight: 50.0
+  initial_condition_weight: 50.0
+  momentum_x_weight: 5.0
+  momentum_y_weight: 5.0
+  continuity_weight: 10.0
+  prior_weight: 0.0
+  
+  source_l1: 1.0e-6
+  gradient_penalty: 1.0e-4
+  
+  adaptive_weighting: true
+  weight_update_freq: 50
+  grad_norm_alpha: 0.15
+  
+  causal_weighting: false
+
+training:
+  optimizer: "adam"
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  lr_scheduler: "cosine"
+  
+  max_epochs: 200              # 🧪 快速測試
+  batch_size: 1024
+  validation_freq: 50          # 更頻繁驗證
+  checkpoint_freq: 50
+  early_stopping: false
+  patience: 500
+  
+  sampling:
+    pde_points: 2048
+    boundary_points: 3000
+    wall_clustering: 0.1
+    center_enhancement: 0.4
+    high_velocity_sampling: 0.3
+
+ensemble:
+  enable: false
+
+evaluation:
+  grid_resolution: [256, 128]
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "velocity_profile"
+    - "mass_conservation"
+    
+  thresholds:
+    l2_error: 0.15
+    wall_shear_error: 0.10
+    velocity_profile_error: 0.08
+    rmse_improvement: 0.30
+    mass_conservation_error: 0.1
+    
+  channel_flow_validation:
+    log_law_region: [30, 300]
+    von_karman_constant: 0.41
+    wake_parameter: 0.55
+
+logging:
+  level: "info"
+  log_freq: 10              # 🧪 更頻繁日誌
+  save_predictions: true
+  save_checkpoints: true
+  
+  save_velocity_profiles: true
+  save_wall_quantities: true
+  save_turbulence_fields: false
+  
+  monitor_conservation: true
+  conservation_check_freq: 25
+  
+  save_stage_checkpoints: true
+  stage_checkpoint_dir: "./checkpoints/curriculum_test"
+  
+  wandb:
+    project: "pinnx-channel-flow-test"
+    entity: null
+    tags: ["test", "data_loss_fix", "200epochs"]
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+validation:
+  dns_benchmark: true
+  dns_data_path: "./data/jhtdb/channel_flow_re1000/dns_reference"
+  
+  turbulence_statistics:
+    reynolds_stress: false
+    turbulent_kinetic_energy: false
+    dissipation_rate: false
+    
+  wall_quantities:
+    skin_friction: true
+    heat_transfer: false
+    pressure_fluctuation: false
+
+performance:
+  mixed_precision: false
+  gradient_checkpointing: false
+  vectorized_operations: true
+  parallel_sampling: true
+  max_gpu_memory_fraction: 0.9
+  clear_cache_freq: 1000

@@ -23,7 +23,8 @@ from .fourier_mlp import (
     DenseLayer,
     create_pinn_model,
     fourier_pinn,
-    multiscale_pinn
+    multiscale_pinn,
+    init_siren_weights
 )
 
 from .wrappers import (
@@ -53,7 +54,10 @@ __all__ = [
     'fourier_pinn',
     'multiscale_pinn',
     'create_scaled_pinn',
-    'create_ensemble_pinn'
+    'create_ensemble_pinn',
+    
+    # 初始化函數
+    'init_siren_weights'
 ]
 
 
@@ -73,7 +77,8 @@ def get_model_info():
         'features': [
             'Fourier Random Features 高頻擬合',
             'VS-PINN 變數尺度化支援',
-            '多種激活函數 (tanh, swish, gelu)',
+            '多種激活函數 (tanh, swish, gelu, sine)',
+            'SIREN 權重初始化支援',
             '集成不確定性量化',
             '物理約束強制',
             '多尺度架構支援'

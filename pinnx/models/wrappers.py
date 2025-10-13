@@ -21,6 +21,54 @@ from .fourier_mlp import PINNNet, MultiScalePINNNet
 from ..physics.scaling import VSScaler, StandardScaler, MinMaxScaler
 
 
+class ManualScalingWrapper(nn.Module):
+    """
+    手動標準化包裝器 - 用於臨時解決 Fourier feature 飽和問題
+    
+    將輸入從物理範圍縮放到 [-1, 1]，輸出從網路範圍反縮放到物理範圍。
+    避免 Fourier embedding 在大範圍座標上飽和。
+    """
+    
+    def __init__(self,
+                 base_model: nn.Module,
+                 input_ranges: Dict[str, Tuple[float, float]],
+                 output_ranges: Dict[str, Tuple[float, float]]):
+        """
+        Args:
+            base_model: 基礎神經網路
+            input_ranges: 輸入變數範圍，例如 {'x': (0, 25.13), 'y': (-1, 1)}
+            output_ranges: 輸出變數範圍，例如 {'u': (0, 2), 'v': (-0.5, 0.5), 'p': (-2, 2)}
+        """
+        super().__init__()
+        self.base_model = base_model
+        
+        # 儲存輸入範圍 (假設輸入順序為 x, y)
+        input_keys = list(input_ranges.keys())
+        self.register_buffer('input_min', torch.tensor([input_ranges[k][0] for k in input_keys], dtype=torch.float32))
+        self.register_buffer('input_max', torch.tensor([input_ranges[k][1] for k in input_keys], dtype=torch.float32))
+        
+        # 儲存輸出範圍 (假設輸出順序為 u, v, p, ...)
+        output_keys = list(output_ranges.keys())
+        self.register_buffer('output_min', torch.tensor([output_ranges[k][0] for k in output_keys], dtype=torch.float32))
+        self.register_buffer('output_max', torch.tensor([output_ranges[k][1] for k in output_keys], dtype=torch.float32))
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        前向傳播：縮放輸入 → 網路 → 反縮放輸出
+        """
+        # 輸入縮放到 [-1, 1]
+        x_scaled = 2 * (x - self.input_min) / (self.input_max - self.input_min) - 1
+        
+        # 網路預測 (假設輸出在 [-1, 1] 附近)
+        y_scaled = self.base_model(x_scaled)
+        
+        # 輸出反縮放到物理範圍
+        # 假設網路輸出為 [-1, 1]，映射到 [min, max]
+        y = (y_scaled + 1) / 2 * (self.output_max - self.output_min) + self.output_min
+        
+        return y
+
+
 class MultiHeadWrapper(nn.Module):
     """
     多頭輸出包裝器

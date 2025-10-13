@@ -94,15 +94,11 @@ class QRPivotSelector(BaseSensorSelector):
         X = data_matrix.copy()
         n_locations, n_features = X.shape
         
-        # 限制感測點數量
-        n_sensors = min(n_sensors, n_locations, n_features)
+        # 限制感測點數量（只受空間點數限制，不受特徵數限制）
+        n_sensors = min(n_sensors, n_locations)
         
-        # 添加正則化避免奇異矩陣
-        if X.shape[1] > X.shape[0]:
-            # 寬矩陣：添加行正則化
-            reg_rows = np.random.randn(max(1, X.shape[1] - X.shape[0]), X.shape[1]) * self.regularization
-            X = np.vstack([X, reg_rows])
-        
+        Q = None
+        R = None
         try:
             if self.pivoting:
                 # 使用選主元 QR 分解
@@ -111,7 +107,7 @@ class QRPivotSelector(BaseSensorSelector):
                     Q, R, piv = qr(X.T, mode='economic', pivoting=True)
                     selected_indices = piv[:n_sensors]
                 else:
-                    # 對 X 做 QR 分解選擇行
+                    # mode='row': 直接對 X 做 QR 分解以選擇列（對應原矩陣的特徵）
                     Q, R, piv = qr(X, mode='economic', pivoting=True)
                     selected_indices = piv[:n_sensors]
             else:

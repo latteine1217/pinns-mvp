@@ -26,7 +26,7 @@ data:
     
 # 感測點配置
 sensors:
-  K: 16  # HIT 可能需要稍多感測點
+  K: 20  # 感測點數量 - 標準化為20個點 (HIT 複雜性較高)
   # 等向性湍流感測點策略
   placement_strategy: "isotropic"  # 等向性分佈
   clustering: false  # 避免聚集，保持均勻
@@ -78,7 +78,7 @@ training:
   
   # 取樣策略
   sampling:
-    pde_points: 15000  # 增加內部點
+    pde_points: 4096  # PDE 殘差計算點數 - 標準化為4096個點
     boundary_points: 0  # 週期邊界
     
   # 多尺度訓練

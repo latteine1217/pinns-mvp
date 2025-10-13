@@ -104,11 +104,11 @@ def divergence(velocity: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     Returns:
         divergence: [batch_size]
     """
-    div = 0.0
+    div = torch.zeros(velocity.shape[0], device=velocity.device, dtype=velocity.dtype)
     for i in range(velocity.shape[-1]):
         u_i = velocity[:, i]
         du_dx = compute_gradients(u_i, x, order=1)
-        div += du_dx[:, i]  # ∂u_i/∂x_i
+        div = div + du_dx[:, i]  # ∂u_i/∂x_i
     
     return div
 
@@ -421,6 +421,86 @@ class BoundaryConditionLoss(nn.Module):
         """
         loss = torch.mean((predictions_1 - predictions_2) ** 2)
         return loss
+    
+    def inlet_velocity_profile_loss(self,
+                                   inlet_coords: torch.Tensor,
+                                   inlet_predictions: torch.Tensor,
+                                   profile_type: str = 'parabolic',
+                                   Re_tau: float = 1000.0,
+                                   u_max: float = 16.5,
+                                   y_range: Tuple[float, float] = (-1.0, 1.0)) -> torch.Tensor:
+        """
+        Inlet 速度剖面邊界條件：指導模型學習主流方向
+        
+        Args:
+            inlet_coords: inlet 位置座標 [N, spatial_dim]
+            inlet_predictions: 模型在 inlet 的預測 [N, spatial_dim + 1]
+            profile_type: 速度剖面類型 ('parabolic', 'log_law', 'turbulent')
+            Re_tau: 摩擦雷諾數
+            u_max: 中心線最大速度
+            y_range: y 方向範圍 (壁面位置)
+            
+        Returns:
+            loss: Inlet 速度剖面損失
+        """
+        spatial_dim = inlet_predictions.shape[-1] - 1
+        u_pred = inlet_predictions[:, 0]  # 主流方向 (x) 速度
+        v_pred = inlet_predictions[:, 1] if spatial_dim >= 2 else None  # 法向速度
+        
+        # 提取 y 座標 (假設 inlet_coords 為 [x, y] 或 [x, y, z])
+        y = inlet_coords[:, 1]  # y 座標
+        
+        # 計算目標速度剖面
+        if profile_type == 'parabolic':
+            # 拋物線剖面（層流/低 Re）：u(y) = u_max * (1 - (y/h)²)
+            h = (y_range[1] - y_range[0]) / 2.0  # 半通道高度
+            y_normalized = y / h
+            u_target = u_max * (1.0 - y_normalized ** 2)
+            
+        elif profile_type == 'log_law':
+            # 對數律剖面（湍流）：u^+ = (1/κ) ln(y^+) + C^+
+            kappa = 0.41  # von Karman 常數
+            C = 5.0       # 對數律常數
+            h = (y_range[1] - y_range[0]) / 2.0
+            
+            # y^+ = Re_tau * |y| / h
+            y_abs = torch.abs(y)
+            y_plus = Re_tau * y_abs / h
+            
+            # 避免 log(0)
+            y_plus = torch.clamp(y_plus, min=1.0)
+            
+            # u^+ = (1/κ) ln(y^+) + C
+            u_plus = (1.0 / kappa) * torch.log(y_plus) + C
+            
+            # 轉換為物理速度：u = u_τ * u^+
+            # u_τ ≈ u_max / (u_max^+)，這裡簡化假設 u_max^+ ≈ Re_tau / 15
+            u_tau = u_max / (Re_tau / 15.0)
+            u_target = u_tau * u_plus
+            
+            # 標準化到 u_max
+            u_target = u_target * (u_max / u_target.max())
+            
+        elif profile_type == 'turbulent':
+            # 充分發展湍流剖面 (1/7 次方律)：u(y) = u_max * (1 - |y/h|)^(1/7)
+            h = (y_range[1] - y_range[0]) / 2.0
+            y_normalized = torch.abs(y) / h
+            u_target = u_max * (1.0 - y_normalized) ** (1.0 / 7.0)
+            
+        else:
+            raise ValueError(f"不支援的速度剖面類型: {profile_type}")
+        
+        # Inlet 損失：主流方向速度匹配
+        u_loss = torch.mean((u_pred - u_target) ** 2)
+        
+        # 法向速度為零（無穿透條件）
+        if v_pred is not None:
+            v_loss = torch.mean(v_pred ** 2)
+            total_loss = u_loss + v_loss
+        else:
+            total_loss = u_loss
+        
+        return total_loss
 
 
 class InitialConditionLoss(nn.Module):

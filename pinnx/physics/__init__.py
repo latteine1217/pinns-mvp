@@ -31,6 +31,26 @@ except ImportError as e:
     NSEquations3DTemporal = None
     compute_derivatives_3d_temporal = None
 
+# 3D Thin-Slab NS方程模組 (用於通道流等薄片配置)
+try:
+    from .ns_3d_thin_slab import (
+        NSEquations3DThinSlab,
+        ns_residual_3d_thin_slab,
+        compute_derivatives_3d,
+        apply_periodic_bc_3d,
+        apply_wall_bc_3d,
+        check_conservation_3d
+    )
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Cannot import ns_3d_thin_slab module: {e}")
+    NSEquations3DThinSlab = None
+    ns_residual_3d_thin_slab = None
+    compute_derivatives_3d = None
+    apply_periodic_bc_3d = None
+    apply_wall_bc_3d = None
+    check_conservation_3d = None
+
 from .turbulence import (
     rans_momentum_residual,
     continuity_residual,
@@ -45,6 +65,18 @@ from .scaling import (
     create_scaler_from_data,
     denormalize_gradients
 )
+
+# VS-PINN通道流模組
+try:
+    from .vs_pinn_channel_flow import (
+        VSPINNChannelFlow,
+        create_vs_pinn_channel_flow
+    )
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Cannot import vs_pinn_channel_flow module: {e}")
+    VSPINNChannelFlow = None
+    create_vs_pinn_channel_flow = None
 
 # 物理常數與參數
 class PhysicsConstants:
@@ -89,12 +121,20 @@ __all__ = [
     # 3D時間依賴NS方程
     'NSEquations3DTemporal', 'compute_derivatives_3d_temporal',
     
+    # 3D Thin-Slab NS方程
+    'NSEquations3DThinSlab', 'ns_residual_3d_thin_slab', 
+    'compute_derivatives_3d', 'apply_periodic_bc_3d', 
+    'apply_wall_bc_3d', 'check_conservation_3d',
+    
     # RANS湍流方程相關
-    'compute_reynolds_stress', 'k_epsilon_model', 'rans_momentum_residual', 'RANSEquations2D',
+    'rans_momentum_residual', 'continuity_residual', 'k_epsilon_residuals', 'RANSEquations2D',
     
     # 尺度化相關
     'VSScaler', 'StandardScaler', 'MinMaxScaler', 
     'create_scaler_from_data', 'denormalize_gradients',
+    
+    # VS-PINN通道流
+    'VSPINNChannelFlow', 'create_vs_pinn_channel_flow',
     
     # 物理工具
     'PhysicsConstants', 'reynolds_number', 'friction_velocity', 

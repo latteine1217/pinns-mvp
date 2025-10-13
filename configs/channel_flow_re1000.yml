@@ -52,7 +52,7 @@ data:
 
 # 感測點配置 - 針對Channel Flow優化
 sensors:
-  K: 4096  # 目標稀疏感測點數 (擴展到4096點進行大規模測試)
+  K: 20  # 感測點數量 - 標準化為20個點
   selection_method: "qr_pivot"  # QR-pivot最適感測配置
   spatial_coverage: "wall_biased"  # 偏向壁面區域覆蓋
   
@@ -170,7 +170,7 @@ training:
   
   # 取樣策略 - Channel Flow 優化
   sampling:
-    pde_points: 8000     # 重點採樣壁面高梯度區域
+    pde_points: 4096     # PDE 殘差計算點數 - 標準化為4096個點
     boundary_points: 1000 # 壁面採樣
     wall_clustering: 0.3  # 30% 點集中在近壁面區域 (y+ < 30)
     

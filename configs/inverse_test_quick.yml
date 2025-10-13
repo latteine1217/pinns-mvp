@@ -1,0 +1,313 @@
+# ============================================================================
+# PINNs 逆重建 - 測試用快速配置
+# ============================================================================
+# 目標：快速驗證代碼邏輯、調試、單元測試
+# 用途：開發階段快速迭代，CI/CD 流水線
+# 特點：小網路、少 epochs、低解析度、快速收斂
+# ============================================================================
+
+# 繼承主配置
+_base_: "inverse_reconstruction_main.yml"
+
+# ============================================================================
+# 實驗設定覆寫
+# ============================================================================
+experiment:
+  name: "test_quick"
+  description: "Quick test configuration for debugging and validation"
+  phase: "development"
+  seed: 42
+
+# ============================================================================
+# 資料配置 - 小資料集
+# ============================================================================
+data:
+  # 2D 切片（快速）
+  slice_config:
+    plane: "xy"
+    z_position: 4.71
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+  
+  dimensionality: "2d"
+  
+  # 快取配置
+  cache_dir: "./data/jhtdb/channel_flow_re1000/test"
+  use_cache: true
+  
+  # 測試用：無噪聲（簡化問題）
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+
+# ============================================================================
+# 感測點配置 - 極少點數
+# ============================================================================
+sensors:
+  K: 20  # 測試用：僅 20 個點
+  
+  # 簡單選點策略
+  selection_method: "uniform"  # 均勻分佈（最快）
+  spatial_coverage: "uniform"
+  
+  # 禁用複雜功能
+  physics_guided:
+    wall_enhancement: false
+    boundary_layer_focus: false
+  
+  qr_pivot:
+    snapshot_ensemble_size: 10  # 最小快照數
+  
+  # 關閉可識別性測試
+  identifiability_test:
+    enabled: false
+
+# ============================================================================
+# 模型架構 - 小網路
+# ============================================================================
+model:
+  in_dim: 2
+  out_dim: 3      # [u, v, p]
+  width: 64       # 小網路：64 neurons（vs. 200）
+  depth: 4        # 淺網路：4 layers（vs. 8）
+  activation: "tanh"  # tanh 更穩定（測試用）
+  
+  # Fourier Features - 簡化
+  fourier:
+    enabled: true
+    m: 16         # 少量模態（vs. 64）
+    sigma: 3.0
+    trainable: false
+  
+  # 關閉 VS-PINN（簡化）
+  scaling:
+    enabled: false
+    learnable: false
+  
+  # 簡單初始化
+  initialization:
+    method: "xavier_uniform"
+  
+  weight_norm: false
+
+# ============================================================================
+# 物理配置 - 簡化域
+# ============================================================================
+physics:
+  domain:
+    x_range: [0.0, 12.57]  # 4π（一半流向長度）
+    y_range: [-1.0, 1.0]
+    dimensionality: "2d"
+  
+  equations: "nse_2d_steady"
+  
+  boundary_conditions:
+    wall:
+      type: "no_slip"
+      locations: [-1.0, 1.0]
+      velocity: [0.0, 0.0]
+    periodic:
+      x: true
+
+# ============================================================================
+# 損失函數 - 簡化權重
+# ============================================================================
+losses:
+  # 固定權重（不使用動態權重）
+  data_weight: 1.0
+  boundary_weight: 1.0
+  momentum_x_weight: 0.1
+  momentum_y_weight: 0.1
+  continuity_weight: 0.1
+  
+  # 關閉先驗（簡化）
+  prior_weight: 0.0
+  
+  # 關閉源項正則（簡化）
+  source_l1: 0.0
+  source_l2: 0.0
+  gradient_penalty: 0.0
+  
+  # 關閉動態權重
+  adaptive_weighting:
+    enabled: false
+  
+  # 關閉因果權重
+  causal_weighting:
+    enabled: false
+  
+  # 關閉權重標準化
+  weight_normalization:
+    enabled: false
+
+# ============================================================================
+# 訓練配置 - 快速訓練
+# ============================================================================
+training:
+  # 僅使用 Adam（不用 L-BFGS）
+  optimizer_stage1:
+    type: "adam"
+    lr: 1.0e-3
+    weight_decay: 0.0  # 不使用正則
+  
+  optimizer_stage2:
+    type: "adam"  # 不切換到 L-BFGS
+    lr: 1.0e-4
+  
+  optimizer_schedule:
+    stage1_epochs: 800   # 快速：800 epochs
+    stage2_epochs: 200   # 快速：200 epochs
+  
+  # 訓練參數
+  max_epochs: 1000      # 總共 1000 epochs（vs. 15000）
+  batch_size: 512       # 較小 batch（快速）
+  validation_freq: 100
+  checkpoint_freq: 500
+  log_freq: 50
+  
+  gradient_clip: 10.0   # 寬鬆梯度裁剪
+  
+  # 關閉早停（測試用）
+  early_stopping:
+    enabled: false
+  
+  # 簡化採樣
+  sampling:
+    pde_points: 1024     # 少量配點（vs. 4096）
+    boundary_points: 200
+    wall_clustering: 0.0  # 均勻採樣
+    prior_points: 0       # 不使用先驗
+  
+  # 關閉課程學習
+  curriculum:
+    enabled: false
+
+# ============================================================================
+# Ensemble - 關閉
+# ============================================================================
+ensemble:
+  enabled: false
+
+# ============================================================================
+# 評估配置 - 低解析度
+# ============================================================================
+evaluation:
+  grid_resolution: [64, 32]  # 低解析度（vs. 512x256）
+  
+  # 基本指標
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+  
+  # 寬鬆門檻（測試用）
+  thresholds:
+    l2_error_u: 0.30      # 30%（vs. 15%）
+    l2_error_v: 0.30
+    l2_error_p: 0.30
+  
+  # 關閉複雜驗證
+  channel_flow_validation:
+    log_law:
+      enabled: false
+    wake_region:
+      enabled: false
+
+# ============================================================================
+# 日誌與輸出 - 簡化
+# ============================================================================
+logging:
+  level: "debug"  # 詳細日誌（調試用）
+  log_freq: 50
+  
+  # 簡化輸出
+  save_predictions: true
+  save_checkpoints: true
+  save_optimizer_state: false
+  
+  save_velocity_profiles: false
+  save_wall_quantities: false
+  save_turbulence_fields: false
+  save_source_term_field: false
+  save_reconstruction_error: true
+  
+  # 輸出目錄
+  output_dir: "./results/test"
+  checkpoint_dir: "./checkpoints/test"
+  log_dir: "./logs/test"
+  
+  # 關閉 wandb
+  wandb:
+    enabled: false
+
+# ============================================================================
+# 重現性配置
+# ============================================================================
+reproducibility:
+  deterministic: true
+  benchmark: false
+  seed_everything: true
+  num_workers: 2  # 少量 workers
+
+# ============================================================================
+# 低保真先驗 - 關閉
+# ============================================================================
+prior:
+  type: "none"
+  enabled: false
+
+# ============================================================================
+# 效能配置 - 簡化
+# ============================================================================
+performance:
+  mixed_precision: false         # 關閉混合精度（測試用）
+  gradient_checkpointing: false
+  vectorized_operations: true
+  parallel_sampling: false       # 關閉並行（簡化）
+  jit_compile: false
+  
+  max_gpu_memory_fraction: 0.5   # 僅使用一半 GPU
+  clear_cache_freq: 500
+  empty_cache_on_validation: true
+  
+  distributed:
+    enabled: false
+
+# ============================================================================
+# 實驗追蹤 - 關閉
+# ============================================================================
+experiments:
+  k_scan:
+    enabled: false
+  noise_robustness:
+    enabled: false
+  prior_weight_sweep:
+    enabled: false
+  ablation:
+    enabled: false
+
+# ============================================================================
+# 資料驗證 - 簡化
+# ============================================================================
+data_validation:
+  check_jhtdb_data: false
+  check_lowfi_data: false
+  check_statistics: false
+  visualize_data: false
+
+# ============================================================================
+# 測試特定配置
+# ============================================================================
+test:
+  # 單元測試模式
+  unit_test_mode: true
+  
+  # 快速驗證目標
+  target_metrics:
+    loss_convergence: true        # 損失是否收斂
+    gradient_flow: true           # 梯度是否正常流動
+    boundary_satisfaction: true   # 邊界條件是否滿足
+    
+  # 預期結果（寬鬆）
+  expected_results:
+    final_loss: 1.0e-2           # 最終損失 < 0.01
+    wall_velocity_error: 1.0e-3  # 壁面速度誤差 < 0.001
+    max_training_time_minutes: 10  # 最多訓練 10 分鐘

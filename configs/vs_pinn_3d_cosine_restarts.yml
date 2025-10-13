@@ -1,0 +1,237 @@
+# VS-PINN 3D CosineAnnealingWarmRestarts 測試配置
+# 目的：驗證週期性重啟學習率調度器的效果
+# 策略：每 100 epochs 重啟學習率至初始值，幫助跳出局部最優
+
+# 基本實驗設定
+experiment:
+  name: "vs_pinn_3d_cosine_restarts"
+  version: "v1.0-restart-test"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Testing CosineAnnealingWarmRestarts with K=500 sensors, T_0=100 epochs"
+
+# 資料相關設定
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000) - CosineWarmRestarts 測試"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+  noise_sigma: 0.02
+  dropout_prob: 0.10
+  
+  slice_config:
+    plane: "xyz"
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# 感測點配置
+sensors:
+  K: 500
+  selection_method: "qr_pivot"
+  sensor_file: "sensors_K500_qr_pivot_3d_wall_enhanced.npz"
+  spatial_coverage: "wall_biased"
+  wall_enhancement: true
+  wall_region_ratio: 0.4
+  log_layer_coverage: true
+
+# 模型架構設定
+model:
+  type: "fourier_mlp"
+  in_dim: 3
+  out_dim: 4
+  width: 200
+  depth: 8
+  activation: "sine"
+  
+  fourier_m: 64
+  fourier_sigma: 5.0
+  
+  scaling:
+    learnable: false
+    input_norm: "vs_pinn"
+    output_norm:
+      u: [0.0, 20.0]
+      v: [-2.0, 2.0]
+      w: [-5.0, 5.0]
+      p: [-300.0, 50.0]
+
+# 物理設定
+physics:
+  type: "vs_pinn_channel_flow"
+  
+  nu: 5.0e-5
+  rho: 1.0
+  
+  channel_flow:
+    Re_tau: 1000.0
+    u_tau: 1.0
+    pressure_gradient: 0.0025
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    periodic_z: true
+    pressure_driven: true
+  
+  # VS-PINN 各向異性縮放因子
+  vs_pinn:
+    enabled: true
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
+    
+    loss_compensation: true
+    compensation_factor: 0.00694
+
+# 損失函數權重
+losses:
+  data_weight: 10.0
+  boundary_weight: 10.0
+  
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
+  
+  wall_constraint_weight: 5.0
+  periodicity_weight: 2.0
+  pressure_gradient_weight: 1.0
+  
+  prior_weight: 0.3
+  source_l1: 1.0e-6
+  gradient_penalty: 1.0e-4
+  
+  adaptive_weighting: true
+  weighting_method: "gradnorm"
+  weight_update_freq: 100
+  grad_norm_alpha: 0.12
+  
+  causal_weighting: false
+
+# ===================================================
+# 訓練設定 - CosineAnnealingWarmRestarts
+# ===================================================
+training:
+  # 優化器設定
+  optimizer:
+    type: "adam"
+    lr: 1.0e-3          # 初始學習率（重啟時也用此值）
+    weight_decay: 1.0e-5
+  
+  # ✅ 使用 CosineAnnealingWarmRestarts 調度器
+  scheduler:
+    type: cosine_warm_restarts
+    T_0: 100            # 第一個週期長度（100 epochs）
+    T_mult: 1           # 週期長度倍增因子（1 = 固定 100 epochs/週期）
+    eta_min: 1.0e-6     # 每個週期的最小學習率
+  
+  epochs: 500           # 測試 5 個完整週期
+  max_epochs: 500
+  batch_size: 2048
+  validation_freq: 25
+  checkpoint_freq: 50
+  
+  early_stopping:
+    enabled: false      # 禁用 Early Stopping 觀察完整週期行為
+    
+  sampling:
+    pde_points: 4096
+    boundary_points: 512
+    wall_clustering: 0.7
+    
+  # 禁用課程學習（單純測試調度器）
+  curriculum:
+    enabled: false
+
+# Ensemble 與不確定性量化
+ensemble:
+  enable: false
+
+# 評估設定
+evaluation:
+  grid_resolution: [128, 256, 128]
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "velocity_profile"
+    - "energy_spectrum"
+    - "reynolds_stress"
+    - "turbulent_statistics"
+    
+  thresholds:
+    l2_error: 0.15
+    wall_shear_error: 0.10
+    
+  vs_pinn_validation:
+    check_scaling_consistency: true
+    verify_gradient_balance: true
+    monitor_condition_number: true
+
+# 日誌與儲存
+logging:
+  level: "info"
+  log_freq: 25
+  save_predictions: true
+  save_checkpoints: true
+  
+  save_velocity_profiles: true
+  save_wall_quantities: true
+  save_turbulence_fields: true
+  
+  vs_pinn_monitoring:
+    log_scaling_factors: true
+    log_gradient_norms: true
+    log_loss_components: true
+  
+  wandb:
+    project: "vs-pinn-cosine-restarts"
+    entity: null
+    tags: ["vs-pinn", "cosine-warm-restarts", "scheduler-test", "periodic-restart"]
+
+# 重現性設定
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 2
+
+# 效能優化設定
+performance:
+  mixed_precision: false
+  gradient_checkpointing: false
+  vectorized_operations: true
+  parallel_sampling: false
+  max_gpu_memory_fraction: 0.8
+  clear_cache_freq: 100
+
+# 測試模式專用
+test_mode:
+  enabled: false
+  skip_data_download: true
+  minimal_logging: false
+  fast_dev_run: false

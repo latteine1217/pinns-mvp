@@ -1,0 +1,317 @@
+# VS-PINN Channel Flow Re1000 配置檔案（恢復訓練）
+# 從 Epoch 500 恢復至 Epoch 1000
+# Bug Fix: Early Stopping 監控正確指標
+
+# 基本實驗設定
+experiment:
+  name: "vs_pinn_channel_flow_re1000_1k_resumed"
+  version: "v1.1-task10-resumed-from-500"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Task-10 Resumed Training: From Epoch 500 to 1000 (Early Stopping Bug Fixed)"
+  
+  # 🔄 恢復訓練設定
+  resume_from_checkpoint: "checkpoints/vs_pinn_channel_flow_re1000_1k_epoch_500.pth"
+  resume_epoch: 500  # 從 Epoch 500 繼續
+
+# 資料相關設定 - JHTDB Channel Flow Re1000
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000)"
+    domain:
+      x: [0, 25.13]     # 流向 (周期性)
+      y: [-1.0, 1.0]    # 壁法向
+      z: [0, 9.42]      # 展向 (周期性)
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+  noise_sigma: 0.02
+  dropout_prob: 0.10
+  
+  slice_config:
+    plane: "xyz"        # 3D 全域訓練
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# 感測點配置
+sensors:
+  K: 50               # 目標感測點數（研究門檻）
+  selection_method: "qr_pivot"
+  sensor_file: "sensors_K50_qr_pivot_3d.npz"
+  spatial_coverage: "wall_biased"
+  wall_enhancement: true
+  wall_region_ratio: 0.4
+  log_layer_coverage: true
+  
+  physics_guided:
+    boundary_layer_focus: true
+    shear_stress_regions: true
+    turbulence_intensity_regions: true
+
+# 模型架構設定
+model:
+  type: "fourier_mlp"
+  in_dim: 3           # (x, y, z) 3D 通道流
+  out_dim: 4          # (u, v, w, p)
+  width: 200
+  depth: 8
+  activation: "sine"  # VS-PINN 推薦使用 sine
+  
+  fourier_m: 64       # 增加 Fourier 特徵以捕捉高頻
+  fourier_sigma: 5.0
+  
+  scaling:
+    learnable: false  # VS-PINN 使用固定物理縮放
+    input_norm: "vs_pinn"
+    output_norm: "friction_velocity"
+
+# 物理設定 - VS-PINN 核心
+physics:
+  type: "vs_pinn_channel_flow"  # 使用 VS-PINN 物理模組
+  
+  # 基本物理參數
+  nu: 5.0e-5          # JHTDB channel 運動黏度
+  rho: 1.0
+  
+  channel_flow:
+    Re_tau: 1000.0
+    u_tau: 1.0
+    pressure_gradient: 0.0025  # dP/dx (驅動壓降)
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]  # 壁面無滑移
+    wall_location: [-1.0, 1.0]      # y = ±1
+    periodic_x: true                 # 流向周期
+    periodic_z: true                 # 展向周期
+    pressure_driven: true
+  
+  # 🔑 VS-PINN 各向異性縮放因子
+  vs_pinn:
+    enabled: true
+    scaling_factors:
+      N_x: 2.0        # 流向縮放（周期性，較小梯度）
+      N_y: 12.0       # 壁法向縮放（最剛性方向）
+      N_z: 2.0        # 展向縮放（周期性）
+    
+    # Loss 權重補償（抵消縮放系數影響）
+    loss_compensation: true
+    compensation_factor: 0.00694  # 1 / N_max² = 1 / 144
+
+# 損失函數權重 - VS-PINN 優化
+losses:
+  # 基本損失權重
+  data_weight: 10.0
+  boundary_weight: 10.0
+  
+  # PDE 殘差權重（已由 VS-PINN 自動平衡）
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
+  
+  # Channel Flow 特有約束
+  wall_constraint_weight: 5.0
+  periodicity_weight: 2.0
+  pressure_gradient_weight: 1.0
+  
+  # 新增物理約束（Task-10 - 基於 Physicist 審查建議）
+  bulk_velocity_weight: 0.2       # 流量守恆約束
+  centerline_dudy_weight: 0.1     # 中心線對稱：∂u/∂y|_{y=0} = 0
+  centerline_v_weight: 0.1        # 中心線對稱：v|_{y=0} = 0
+  pressure_reference_weight: 0.01 # 壓力參考點（低優先級）
+  
+  # 物理先驗與正則化
+  prior_weight: 0.3         # 低保真場軟先驗
+  source_l1: 1.0e-6
+  gradient_penalty: 1.0e-4
+  
+  # 動態權重設定（與 VS-PINN 兼容）
+  adaptive_weighting: true
+  weighting_method: "gradnorm"
+  weight_update_freq: 500
+  grad_norm_alpha: 0.12
+  
+  # 時間因果權重（3D 穩態流場不使用）
+  causal_weighting: false
+
+# 訓練設定
+training:
+  # 兩階段訓練策略
+  stage1:
+    optimizer: "adam"
+    lr: 1.0e-3
+    epochs: 800
+    focus: "boundary_and_data"
+    
+  stage2:
+    optimizer: "lbfgs"
+    lr: 1.0
+    max_iter: 200
+    focus: "physics_refinement"
+  
+  weight_decay: 1.0e-5
+  lr_scheduler: "cosine"
+  
+  max_epochs: 1000
+  batch_size: 2048        # VS-PINN 可使用較大 batch（梯度更穩定）
+  validation_freq: 50
+  checkpoint_freq: 100
+  
+  # 🔧 Early Stopping 修復（禁用以確保訓練完成）
+  early_stopping:
+    enabled: false        # ← 修改：禁用 Early Stopping
+    patience: 200         # ← 縮短 patience（原 500 太大）
+    monitor: "total_loss" # ← 修復：監控 total_loss 而非 continuity_loss
+    min_delta: 1.0e-6
+    
+  sampling:
+    pde_points: 8192      # VS-PINN 建議增加 PDE 點數
+    boundary_points: 1024
+    wall_clustering: 0.5  # 增加壁面區域採樣
+    
+  # VS-PINN 專用課程學習
+  curriculum:
+    enabled: true
+    schedule: "vs_pinn_gradual"
+    stages:
+      - epochs: 100
+        active_losses: ["boundary", "wall_constraint"]
+        sampling_focus: "wall"
+        description: "Stage 1: 壁面邊界條件"
+        
+      - epochs: 300
+        active_losses: ["boundary", "wall_constraint", "data"]
+        sampling_focus: "boundary_layer"
+        description: "Stage 2: 數據擬合 + 邊界層"
+        
+      - epochs: 600
+        active_losses: ["all"]
+        sampling_focus: "full_domain"
+        description: "Stage 3: 全物理場聯合訓練"
+
+# Ensemble 與不確定性量化
+ensemble:
+  enable: false
+  n_models: 5
+  seeds: [42, 123, 456, 789, 101112]
+  uncertainty_quantification: true
+  confidence_level: 0.95
+
+# 評估設定
+evaluation:
+  grid_resolution: [128, 256, 128]  # (x, y, z) 評估網格
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "velocity_profile"
+    - "turbulence_statistics"
+    - "pressure_drop"
+    - "k_error_curve"           # K 點數誤差曲線
+    - "uncertainty_corr"
+    
+  thresholds:
+    l2_error: 0.15              # VS-PINN 目標誤差
+    wall_shear_error: 0.10
+    velocity_profile_error: 0.12
+    rmse_improvement: 0.30      # 相對低保真改善
+    uq_correlation: 0.6
+    min_k_points: 50            # 最少感測點數
+    
+  channel_flow_validation:
+    log_law_region: [30, 300]
+    von_karman_constant: 0.41
+    wake_parameter: 0.55
+    
+  # VS-PINN 專用驗證
+  vs_pinn_validation:
+    check_scaling_consistency: true
+    verify_gradient_balance: true
+    monitor_condition_number: true
+
+# 日誌與儲存
+logging:
+  level: "info"
+  log_freq: 50
+  save_predictions: true
+  save_checkpoints: true
+  
+  save_velocity_profiles: true
+  save_wall_quantities: true
+  save_turbulence_fields: true
+  
+  # VS-PINN 專用監控
+  vs_pinn_monitoring:
+    log_scaling_factors: true
+    log_gradient_norms: true
+    log_loss_components: true
+  
+  wandb:
+    project: "vs-pinn-channel-flow"
+    entity: null
+    tags: ["vs-pinn", "inverse", "channel_flow", "re1000", "jhtdb", "resumed", "early_stopping_fix"]
+
+# 重現性設定
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# Channel Flow Re1000 專用驗證設定
+validation:
+  dns_benchmark: true
+  dns_data_path: "./data/jhtdb/channel_flow_re1000/dns_reference"
+  
+  turbulence_statistics:
+    reynolds_stress: true
+    turbulent_kinetic_energy: true
+    dissipation_rate: true
+    
+  wall_quantities:
+    skin_friction: true
+    heat_transfer: false
+    pressure_fluctuation: true
+
+# 效能優化設定
+performance:
+  mixed_precision: true
+  gradient_checkpointing: false
+  vectorized_operations: true
+  parallel_sampling: true
+  max_gpu_memory_fraction: 0.9
+  clear_cache_freq: 500
+
+# VS-PINN 理論參考
+reference:
+  paper: "Krishnapriyan et al. 2021 - Characterizing possible failure modes in physics-informed neural networks"
+  method: "Variable Scaling to balance gradient magnitudes across different PDE terms"
+  key_insight: "Anisotropic scaling factors address directional stiffness in high-Re flows"
+  implementation: "pinnx/physics/vs_pinn_channel_flow.py"
+
+# 🔧 Task-10 Debug 備註
+task10_debug:
+  issue: "Early Stopping 在 Epoch 501 錯誤觸發"
+  root_cause: "監控 continuity_loss 而非配置的 val_loss"
+  fix_applied:
+    - "修改 scripts/train.py L2105-2125 的監控邏輯"
+    - "禁用 Early Stopping 以確保訓練完成至 1000 epochs"
+    - "從 Epoch 500 checkpoint 恢復訓練"
+  expected_outcome: "順利訓練至 Epoch 1000，保持損失連續性"

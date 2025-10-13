@@ -145,6 +145,20 @@ losses:
   weighting_method: "gradnorm"
   weight_update_freq: 500
   grad_norm_alpha: 0.12
+  adaptive_loss_terms:
+    - data
+    - momentum_x
+    - momentum_y
+    - momentum_z
+    - continuity
+    - wall_constraint
+    - periodicity
+    - inlet
+    - bulk_velocity
+    - centerline_dudy
+    - centerline_v
+    - pressure_reference
+    - initial_condition
   
   # 時間因果權重（3D 穩態流場不使用）
   causal_weighting: false
@@ -153,7 +167,7 @@ losses:
 training:
   # 兩階段訓練策略
   stage1:
-    optimizer: "adam"
+    optimizer: "adam"  # 可改為 "soap"
     lr: 1.0e-3
     epochs: 5000
     focus: "boundary_and_data"
@@ -166,6 +180,10 @@ training:
   
   weight_decay: 1.0e-5
   lr_scheduler: "cosine"
+  soap:
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    amsgrad: false
   
   max_epochs: 5000
   batch_size: 2048        # VS-PINN 可使用較大 batch（梯度更穩定）

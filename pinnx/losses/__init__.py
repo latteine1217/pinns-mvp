@@ -313,8 +313,46 @@ class CompleteLossManager:
         
         # 4. 初始條件損失
         if 'initial' in self.loss_terms and 'initial_data' in batch:
-            # TODO: 實現初始條件損失
-            losses['initial'] = torch.tensor(0.0, device=device)
+            ic_batch = batch['initial_data']
+            coords = ic_batch.get('coords', ic_batch.get('points'))
+            values = ic_batch.get('values')
+            if coords is None or values is None:
+                logger.warning("初始條件資料缺少 'coords' 或 'values'，跳過初始條件損失計算")
+                losses['initial'] = torch.tensor(0.0, device=device)
+            else:
+                coords = coords.to(device)
+                values = values.to(device)
+                
+                time_points = ic_batch.get('time')
+                if time_points is not None:
+                    time_points = time_points.to(device)
+                    model_inputs = torch.cat([time_points, coords], dim=-1)
+                else:
+                    model_inputs = coords
+                
+                predictions = self.model(model_inputs)
+                
+                weight_cfg = ic_batch.get('weights')
+                if isinstance(weight_cfg, dict):
+                    ic_weights: Dict[str, float] = {}
+                    for key, val in weight_cfg.items():
+                        if torch.is_tensor(val):
+                            ic_weights[key] = float(val.item())
+                        else:
+                            ic_weights[key] = float(val)
+                else:
+                    ic_weights = None
+                
+                ic_losses = self.initial_loss(
+                    initial_coords=model_inputs,
+                    initial_predictions=predictions,
+                    initial_data=values,
+                    weights=ic_weights
+                )
+                losses['initial'] = ic_losses['total_ic']
+                if return_components:
+                    losses['initial_velocity'] = ic_losses['ic_velocity']
+                    losses['initial_pressure'] = ic_losses['ic_pressure']
         
         # 5. 先驗約束損失
         if 'prior' in self.loss_terms:

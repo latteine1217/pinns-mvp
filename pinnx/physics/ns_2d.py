@@ -466,24 +466,113 @@ def compute_pressure_poisson(coords: torch.Tensor,
                            velocity: torch.Tensor,
                            nu: float) -> torch.Tensor:
     """
-    根據速度場計算壓力泊松方程
-    ∇²p = -∇·(u·∇u) - ∇·(v·∇v)
-    
-    用於壓力場的物理一致性檢查
+    根據速度場計算壓力泊松方程右手邊項：
+        ∇²p = -∂/∂x (u ∂u/∂x + v ∂u/∂y) - ∂/∂y (u ∂v/∂x + v ∂v/∂y)
+
+    此函數返回右手邊的值，可與預測壓力的 Laplacian 做一致性比對。
+
+    Args:
+        coords: 空間座標 [N, 2] = [x, y]，需設定 requires_grad=True
+        velocity: 速度場 [N, 2] = [u, v]（應為模型輸出，對 coords 可微）
+        nu: 動力黏度（目前未使用，保留接口）
+
+    Returns:
+        poisson_rhs: [N, 1] 壓力泊松方程右手邊值
     """
-    # TODO: 實現壓力泊松方程求解
-    # 暫時返回零張量作為占位符
-    return torch.zeros(coords.shape[0], 1, device=coords.device, dtype=coords.dtype)
+    if coords.requires_grad is False:
+        coords = coords.clone().detach().requires_grad_(True)
+
+    u = velocity[:, 0:1]
+    v = velocity[:, 1:2]
+
+    grad_outputs = torch.ones_like(u)
+    grads_u = torch.autograd.grad(u, coords, grad_outputs=grad_outputs,
+                                  create_graph=True, retain_graph=True)[0]
+    du_dx = grads_u[:, 0:1]
+    du_dy = grads_u[:, 1:2]
+
+    grad_outputs = torch.ones_like(v)
+    grads_v = torch.autograd.grad(v, coords, grad_outputs=grad_outputs,
+                                  create_graph=True, retain_graph=True)[0]
+    dv_dx = grads_v[:, 0:1]
+    dv_dy = grads_v[:, 1:2]
+
+    conv_x = u * du_dx + v * du_dy
+    conv_y = u * dv_dx + v * dv_dy
+
+    grad_conv_x = torch.autograd.grad(conv_x, coords, grad_outputs=torch.ones_like(conv_x),
+                                      create_graph=True, retain_graph=True)[0]
+    dconv_x_dx = grad_conv_x[:, 0:1]
+
+    grad_conv_y = torch.autograd.grad(conv_y, coords, grad_outputs=torch.ones_like(conv_y),
+                                      create_graph=True, retain_graph=True)[0]
+    dconv_y_dy = grad_conv_y[:, 1:2]
+
+    poisson_rhs = -(dconv_x_dx + dconv_y_dy)
+
+    return poisson_rhs
 
 def compute_streamfunction(coords: torch.Tensor,
                           velocity: torch.Tensor) -> torch.Tensor:
     """
-    根據速度場計算流函數 (2D不可壓縮流場)
-    u = ∂ψ/∂y, v = -∂ψ/∂x
+    根據速度場重建 2D 流函數 ψ，使得 u = ∂ψ/∂y, v = -∂ψ/∂x。
+
+    目前實作假設資料位於規則網格上（唯一的 x 值與 y 值組成 Cartesian grid）。
+    若無法判定為規則網格，將拋出 ValueError。
+
+    Args:
+        coords: 空間座標 [N, 2] = [x, y]
+        velocity: 速度場 [N, 2] = [u, v]
+
+    Returns:
+        streamfunction: ψ 值 [N, 1]，與 coords 對應
     """
-    # TODO: 實現流函數計算
-    # 暫時返回零張量作為占位符
-    return torch.zeros(coords.shape[0], 1, device=coords.device, dtype=coords.dtype)
+    device = coords.device
+    dtype = coords.dtype
+    tol = 1e-6
+
+    x_rounded = torch.round(coords[:, 0] / tol) * tol
+    y_rounded = torch.round(coords[:, 1] / tol) * tol
+    x_vals_rounded, x_idx = torch.unique(x_rounded, sorted=True, return_inverse=True)
+    y_vals_rounded, y_idx = torch.unique(y_rounded, sorted=True, return_inverse=True)
+
+    nx = x_vals_rounded.numel()
+    ny = y_vals_rounded.numel()
+    if nx * ny != coords.shape[0]:
+        raise ValueError("compute_streamfunction 目前僅支援規則網格資料 (unique x * unique y == N)")
+
+    x_vals = torch.zeros(nx, device=device, dtype=dtype)
+    y_vals = torch.zeros(ny, device=device, dtype=dtype)
+    counts_x = torch.zeros(nx, device=device, dtype=dtype)
+    counts_y = torch.zeros(ny, device=device, dtype=dtype)
+
+    x_vals.index_add_(0, x_idx, coords[:, 0])
+    counts_x.index_add_(0, x_idx, torch.ones_like(coords[:, 0]))
+    x_vals = x_vals / counts_x
+
+    y_vals.index_add_(0, y_idx, coords[:, 1])
+    counts_y.index_add_(0, y_idx, torch.ones_like(coords[:, 1]))
+    y_vals = y_vals / counts_y
+
+    u_grid = torch.zeros(ny, nx, device=device, dtype=dtype)
+    v_grid = torch.zeros(ny, nx, device=device, dtype=dtype)
+    u_grid[y_idx, x_idx] = velocity[:, 0]
+    v_grid[y_idx, x_idx] = velocity[:, 1]
+
+    psi = torch.zeros(ny, nx, device=device, dtype=dtype)
+
+    # 沿 y 方向積分（固定第一列 x）
+    for j in range(1, ny):
+        dy = y_vals[j] - y_vals[j - 1]
+        psi[j, 0] = psi[j - 1, 0] + 0.5 * (u_grid[j - 1, 0] + u_grid[j, 0]) * dy
+
+    # 沿 x 方向積分（對每個 y 列）
+    for i in range(1, nx):
+        dx = x_vals[i] - x_vals[i - 1]
+        psi[:, i] = psi[:, i - 1] - 0.5 * (v_grid[:, i] + v_grid[:, i - 1]) * dx
+
+    streamfunction = psi[y_idx, x_idx].unsqueeze(1)
+    return streamfunction
 
 
 class NSEquations2D:

@@ -11,11 +11,14 @@ Channel Flow Re1000 JHTDB 資料擷取腳本
 3. QR-pivot 感測點選擇與噪聲模擬
 4. 低保真 RANS 資料生成作為軟先驗
 5. 資料格式標準化與快取管理
+6. 3D cutout 快取與切片 CLI（支援 --use_mock）
 
 使用範例：
   python fetch_channel_flow.py --config configs/channel_flow_re1000.yml
   python fetch_channel_flow.py --cutout_mode --resolution 128 64
   python fetch_channel_flow.py --sensor_only --K 8 --method qr_pivot
+  python fetch_channel_flow.py --cutout3d_mode --resolution3d 128 128 32 --use_mock --log_level info
+  python fetch_channel_flow.py --extract_slice --plane xy --position 4.71 --slice_res 128 64 --log_level info
 """
 
 import argparse
@@ -30,6 +33,8 @@ import numpy as np
 import yaml
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
+import json
+import hashlib
 
 # 添加專案根目錄到 Python 路徑
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -88,20 +93,172 @@ class ChannelFlowConfig:
 class ChannelFlowDataFetcher:
     """Channel Flow Re1000 資料擷取器"""
     
-    def __init__(self, config: ChannelFlowConfig, cache_dir: str = "./data/jhtdb/channel_flow_re1000"):
+    def __init__(self, config: ChannelFlowConfig, cache_dir: str = "./data/jhtdb/channel_flow_re1000", use_mock: bool = False):
         self.config = config
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        (self.cache_dir / "slices").mkdir(parents=True, exist_ok=True)
+        (self.cache_dir / "reports").mkdir(parents=True, exist_ok=True)
+        (self.cache_dir / "raw").mkdir(parents=True, exist_ok=True)
         
         # 初始化 JHTDB 管理器
         self.jhtdb_manager = JHTDBManager(
             cache_dir=str(self.cache_dir / "raw"),
-            use_mock=False  # 移除 Mock 模式，使用真實 JHTDB 資料
+            use_mock=use_mock
         )
         
         # 日誌設定
         self.logger = logging.getLogger(__name__)
+    
+    # ---------------- 3D cutout 與檢查 ----------------
+    def fetch_cutout3d_data(self,
+                            resolution3d: Tuple[int, int, int] = (128, 128, 32),
+                            variables: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
+        """
+        擷取 3D cutout 並保存為 npz（含 metadata 與 checksum），同時輸出物理檢查報告
+        """
+        if variables is None:
+            variables = ['u', 'v', 'w', 'p']
+        self.logger.info(f"擷取 3D cutout，解析度: {resolution3d}, 變數: {variables}")
         
+        # 範圍覆蓋全域（或配置域），此處使用配置域
+        # 安全取得域範圍（允許 None，回退到預設區間）
+        domain_x = self.config.domain_x or [0.0, 8 * np.pi]
+        domain_y = self.config.domain_y or [-1.0, 1.0]
+        domain_z = self.config.domain_z or [0.0, 3 * np.pi]
+        start = [float(domain_x[0]), float(domain_y[0]), float(domain_z[0])]
+        end = [float(domain_x[1]), float(domain_y[1]), float(domain_z[1])]
+        
+        result = self.jhtdb_manager.fetch_cutout(
+            dataset=self.config.dataset,
+            start=start,
+            end=end,
+            resolution=list(resolution3d),  # 僅 mock 使用
+            variables=variables,
+            timestep=0
+        )
+        data3d = result.get('data', {})
+        if not data3d:
+            raise RuntimeError("JHTDB cutout 回傳空資料或格式不符（缺少 'data' 欄位）")
+        
+        # 合成等距座標
+        nx, ny, nz = resolution3d
+        x = np.linspace(start[0], end[0], nx, dtype=np.float32)
+        y = np.linspace(start[1], end[1], ny, dtype=np.float32)
+        z = np.linspace(start[2], end[2], nz, dtype=np.float32)
+        
+        # 轉為 float32 並組裝保存字典
+        save_dict: Dict[str, Any] = {
+            'x': x, 'y': y, 'z': z
+        }
+        for var in variables:
+            if var in data3d:
+                save_dict[var] = np.asarray(data3d[var], dtype=np.float32)
+        
+        # metadata 與 checksum
+        metadata = {
+            'dataset': self.config.dataset,
+            'created_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'resolution3d': list(resolution3d),
+            'domain': {'x': self.config.domain_x, 'y': self.config.domain_y, 'z': self.config.domain_z},
+            'from_cache': bool(result.get('from_cache', False))
+        }
+        checksum = self._compute_checksum(save_dict)
+        metadata['checksum'] = checksum
+        
+        # 保存 npz
+        npz_path = self.cache_dir / f"cutout3d_{nx}x{ny}x{nz}.npz"
+        np.savez_compressed(npz_path, **save_dict)
+        self.logger.info(f"3D cutout 已保存: {npz_path}")
+        
+        # 保存 metadata.json
+        meta_path = self.cache_dir / f"cutout3d_{nx}x{ny}x{nz}.metadata.json"
+        with open(meta_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        # 生成檢查報告
+        report = self._generate_physics_report_3d(save_dict)
+        report['metadata'] = metadata
+        report_path = self.cache_dir / "reports" / f"cutout3d_{nx}x{ny}x{nz}_report.json"
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        self.logger.info(f"檢查報告已保存: {report_path}")
+        
+        return save_dict
+    
+    def _compute_checksum(self, arrays: Dict[str, np.ndarray]) -> str:
+        """計算 sha256 校驗和（基於所有陣列按鍵排序串接）"""
+        h = hashlib.sha256()
+        for k in sorted(arrays.keys()):
+            arr = arrays[k]
+            if isinstance(arr, np.ndarray):
+                h.update(k.encode('utf-8'))
+                h.update(arr.tobytes(order='C'))
+        return h.hexdigest()
+    
+    def _generate_physics_report_3d(self, data: Dict[str, np.ndarray]) -> Dict[str, Any]:
+        """生成基礎物理檢查報告（NaN/Inf、散度）"""
+        report: Dict[str, Any] = {
+            'nan_inf': {},
+            'divergence': {}
+        }
+        keys = [k for k in ['u', 'v', 'w', 'p'] if k in data]
+        for k in keys:
+            arr = data[k]
+            report['nan_inf'][k] = {
+                'shape': list(arr.shape),
+                'nan_count': int(np.isnan(arr).sum()),
+                'inf_count': int(np.isinf(arr).sum()),
+                'min': float(np.nanmin(arr)),
+                'max': float(np.nanmax(arr)),
+                'mean': float(np.nanmean(arr)),
+                'std': float(np.nanstd(arr)),
+            }
+        # 散度檢查（中心差分）
+        if all(k in data for k in ['u', 'v', 'w']):
+            u, v, w = data['u'], data['v'], data['w']
+            x, y, z = data['x'], data['y'], data['z']
+            dx = float(x[1] - x[0]) if len(x) > 1 else 1.0
+            dy = float(y[1] - y[0]) if len(y) > 1 else 1.0
+            dz = float(z[1] - z[0]) if len(z) > 1 else 1.0
+            div = self._compute_divergence(u, v, w, dx, dy, dz)
+            abs_div = np.abs(div)
+            report['divergence'] = {
+                'mean_abs': float(abs_div.mean()),
+                'p99_abs': float(np.quantile(abs_div, 0.99)),
+                'max_abs': float(abs_div.max()),
+                'thresholds': {
+                    'mean_abs_max': float(1e-2),
+                    'p99_abs_max': float(5e-2)
+                },
+                'pass': bool((abs_div.mean() <= 1e-2) and (np.quantile(abs_div, 0.99) <= 5e-2))
+            }
+        else:
+            report['divergence'] = {'error': '缺少速度分量以計算散度'}
+        return report
+    
+    @staticmethod
+    def _compute_divergence(u: np.ndarray, v: np.ndarray, w: np.ndarray, dx: float, dy: float, dz: float) -> np.ndarray:
+        """以中心差分計算散度，邊界採用一階差分"""
+        dudx = np.zeros_like(u, dtype=np.float32)
+        dvdy = np.zeros_like(v, dtype=np.float32)
+        dwdz = np.zeros_like(w, dtype=np.float32)
+        
+        # x 方向
+        dudx[1:-1, :, :] = (u[2:, :, :] - u[:-2, :, :]) / (2.0 * dx)
+        dudx[0, :, :] = (u[1, :, :] - u[0, :, :]) / dx
+        dudx[-1, :, :] = (u[-1, :, :] - u[-2, :, :]) / dx
+        # y 方向
+        dvdy[:, 1:-1, :] = (v[:, 2:, :] - v[:, :-2, :]) / (2.0 * dy)
+        dvdy[:, 0, :] = (v[:, 1, :] - v[:, 0, :]) / dy
+        dvdy[:, -1, :] = (v[:, -1, :] - v[:, -2, :]) / dy
+        # z 方向
+        dwdz[:, :, 1:-1] = (w[:, :, 2:] - w[:, :, :-2]) / (2.0 * dz)
+        dwdz[:, :, 0] = (w[:, :, 1] - w[:, :, 0]) / dz
+        dwdz[:, :, -1] = (w[:, :, -1] - w[:, :, -2]) / dz
+        return dudx + dvdy + dwdz
+
+    # ---------------- 既有 2D 切片流程 ----------------
     def fetch_cutout_data(self, 
                          resolution: Tuple[int, int] = (128, 64),
                          variables: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
@@ -137,7 +294,7 @@ class ChannelFlowDataFetcher:
         cutout_resolution = [resolution[0], resolution[1], 16]
         
         # 從 JHTDB 獲取資料
-        cutout_data = self.jhtdb_manager.fetch_cutout(
+        cutout_result = self.jhtdb_manager.fetch_cutout(
             dataset=self.config.dataset,
             start=cutout_start,
             end=cutout_end,
@@ -146,8 +303,18 @@ class ChannelFlowDataFetcher:
             timestep=0  # 使用瞬時資料，後續進行時間平均
         )
         
-        # 提取 2D 切片
-        slice_data = self._extract_2d_slice(cutout_data, resolution)
+        # 取出實際 3D 資料陣列
+        data_3d = cutout_result.get('data', {})
+        if not data_3d:
+            raise RuntimeError("JHTDB cutout 回傳空資料或格式不符（缺少 'data' 欄位）")
+        
+        # 提取 2D 切片（若無座標，合成 x,y,z）
+        slice_data = self._extract_2d_slice(
+            data_3d,
+            resolution,
+            cutout_start=cutout_start,
+            cutout_end=cutout_end
+        )
         
         # 快取結果
         cache_file = self.cache_dir / f"cutout_{resolution[0]}x{resolution[1]}.npz"
@@ -156,40 +323,75 @@ class ChannelFlowDataFetcher:
         
         return slice_data
     
-    def _extract_2d_slice(self, cutout_data: Dict[str, np.ndarray], 
-                         target_resolution: Tuple[int, int]) -> Dict[str, np.ndarray]:
-        """從 3D cutout 資料提取 2D 切片"""
+    def _extract_2d_slice(self,
+                         cutout_data: Dict[str, np.ndarray],
+                         target_resolution: Tuple[int, int],
+                         cutout_start: Optional[List[float]] = None,
+                         cutout_end: Optional[List[float]] = None) -> Dict[str, np.ndarray]:
+        """從 3D cutout 資料提取 2D 切片
         
-        # 提取座標
-        coordinates = cutout_data['coordinates']
-        x = coordinates['x']
-        y = coordinates['y']
-        z = coordinates['z']
+        - 若 cutout_data 中未提供座標，則根據 cutout_start/cutout_end 與資料形狀合成 x, y, z 座標。
+        - 於 z 方向選擇最接近 config.slice_position 的切片，並視情況插值到 target_resolution。
+        """
+        
+        # 取得一個示例變數以判斷 3D 形狀
+        sample_var = None
+        for key in ['u', 'v', 'w', 'p']:
+            if key in cutout_data:
+                sample_var = key
+                break
+        if sample_var is None:
+            raise ValueError("cutout_data 中沒有可用變數（u/v/w/p）")
+        nx3d, ny3d, nz3d = cutout_data[sample_var].shape
+        
+        # 構造/取得座標
+        if 'coordinates' in cutout_data and isinstance(cutout_data['coordinates'], dict):
+            coords = cutout_data['coordinates']
+            x = np.asarray(coords['x'])
+            y = np.asarray(coords['y'])
+            z = np.asarray(coords['z'])
+        else:
+            # 若未提供，合成等距座標
+            if cutout_start is None or cutout_end is None:
+                # 回退使用全域 domain 區間
+                x0, x1 = (self.config.domain_x or [0.0, 8*np.pi])
+                y0, y1 = (self.config.domain_y or [-1.0, 1.0])
+                z0, z1 = (self.config.domain_z or [0.0, 3*np.pi])
+            else:
+                x0, y0, z0 = cutout_start
+                x1, y1, z1 = cutout_end
+            x = np.linspace(x0, x1, nx3d)
+            y = np.linspace(y0, y1, ny3d)
+            z = np.linspace(z0, z1, nz3d)
         
         # 找到最接近目標切片位置的 z 索引
-        z_idx = np.argmin(np.abs(z - self.config.slice_position))
+        z_idx = int(np.argmin(np.abs(z - self.config.slice_position)))
         self.logger.info(f"選擇 z 切片位置: {z[z_idx]:.3f} (目標: {self.config.slice_position:.3f})")
         
         # 提取 2D 場
-        slice_data = {}
-        slice_data['coordinates'] = {
-            'x': x,
-            'y': y
-        }
+        slice_data: Dict[str, Any] = {}
+        # 內存結構保留 coordinates dict 以便下游使用；同時平鋪 x,y 便於 npz 讀回
+        slice_data['coordinates'] = {'x': x, 'y': y}
+        slice_data['x'] = x
+        slice_data['y'] = y
         
         for var in ['u', 'v', 'w', 'p']:
             if var in cutout_data:
-                # 提取 z 切片: field[x, y, z] -> field_2d[x, y]
                 field_3d = cutout_data[var]
+                if field_3d.ndim != 3:
+                    raise ValueError(f"期望 3D 場，但 {var} 維度為 {field_3d.ndim}")
                 field_2d = field_3d[:, :, z_idx]
                 
                 # 調整到目標解析度 (如果需要)
-                if field_2d.shape != target_resolution:
-                    field_2d = self._interpolate_to_resolution(
-                        field_2d, x, y, target_resolution
-                    )
-                
+                if field_2d.shape != tuple(target_resolution):
+                    field_2d = self._interpolate_to_resolution(field_2d, x, y, target_resolution)
                 slice_data[var] = field_2d
+        
+        # 附上實際切片位置與誤差
+        slice_data['slice_plane'] = 'xy'
+        slice_data['slice_position'] = float(z[z_idx])
+        slice_data['slice_position_target'] = float(self.config.slice_position)
+        slice_data['slice_position_error'] = float(abs(z[z_idx] - self.config.slice_position))
         
         return slice_data
     
@@ -217,7 +419,82 @@ class ChannelFlowDataFetcher:
         field_new = interpolator(points_new).reshape(target_resolution)
         
         return field_new
-    
+
+    def extract_and_save_slice(self,
+                               resolution3d: Tuple[int, int, int],
+                               plane: str = 'xy',
+                               position: float = 0.0,
+                               slice_res: Tuple[int, int] = (128, 64)) -> Path:
+        """從 3D 快取提取特定平面的 2D 切片並保存"""
+        nx, ny, nz = resolution3d
+        npz_path = self.cache_dir / f"cutout3d_{nx}x{ny}x{nz}.npz"
+        if not npz_path.exists():
+            raise FileNotFoundError(f"未找到 3D 快取: {npz_path}")
+        data = dict(np.load(npz_path, allow_pickle=True))
+        x = data['x']; y = data['y']; z = data['z']
+        
+        # 選擇平面與索引
+        if plane == 'xy':
+            axis_coords = z
+            idx = int(np.argmin(np.abs(axis_coords - position)))
+            fields_2d = {}
+            for var in ['u', 'v', 'w', 'p']:
+                if var in data:
+                    fields_2d[var] = data[var][:, :, idx]
+            coord_x, coord_y = x, y
+        elif plane == 'xz':
+            axis_coords = y
+            idx = int(np.argmin(np.abs(axis_coords - position)))
+            fields_2d = {}
+            for var in ['u', 'v', 'w', 'p']:
+                if var in data:
+                    fields_2d[var] = data[var][:, idx, :]
+            coord_x, coord_y = x, z
+        elif plane == 'yz':
+            axis_coords = x
+            idx = int(np.argmin(np.abs(axis_coords - position)))
+            fields_2d = {}
+            for var in ['u', 'v', 'w', 'p']:
+                if var in data:
+                    fields_2d[var] = data[var][idx, :, :]
+            coord_x, coord_y = y, z
+        else:
+            raise ValueError("plane 必須為 {xy|xz|yz}")
+        
+        # 插值到指定解析度
+        slice_save: Dict[str, Any] = {
+            'x': np.linspace(coord_x[0], coord_x[-1], slice_res[0]).astype(np.float32),
+            'y': np.linspace(coord_y[0], coord_y[-1], slice_res[1]).astype(np.float32),
+            'slice_plane': plane,
+            'slice_position': float(axis_coords[idx]),
+            'slice_position_target': float(position),
+            'slice_position_error': float(abs(axis_coords[idx] - position))
+        }
+        for var, f2d in fields_2d.items():
+            slice_save[var] = self._interpolate_to_resolution(
+                f2d, coord_x, coord_y, slice_res
+            ).astype(np.float32)
+        
+        # 保存
+        out_path = self.cache_dir / "slices" / f"{plane}_pos{axis_coords[idx]:.3f}_{slice_res[0]}x{slice_res[1]}.npz"
+        np.savez_compressed(out_path, **slice_save)
+        self.logger.info(f"2D 切片已保存: {out_path}")
+        
+        # 報告
+        report = {
+            'plane': plane,
+            'target_position': float(position),
+            'actual_position': float(axis_coords[idx]),
+            'position_error': float(abs(axis_coords[idx] - position)),
+            'shape': {k: (slice_save[k].shape if isinstance(slice_save[k], np.ndarray) else None)
+                      for k in slice_save.keys() if k in ['u','v','w','p']}
+        }
+        rep_path = self.cache_dir / "reports" / f"slice_{plane}_pos{axis_coords[idx]:.3f}_{slice_res[0]}x{slice_res[1]}.json"
+        with open(rep_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        return out_path
+
+    # ---------------- 感測點與先驗 ----------------
     def generate_sensor_points(self, 
                               field_data: Dict[str, np.ndarray],
                               K: int = 8,
@@ -239,9 +516,26 @@ class ChannelFlowDataFetcher:
         """
         self.logger.info(f"生成 {K} 個感測點，方法: {method}")
         
-        coordinates = field_data['coordinates']
-        x = coordinates['x']
-        y = coordinates['y']
+        # 兼容性處理：優先使用平鋪的 x/y，否則從 coordinates 還原
+        if 'x' in field_data and 'y' in field_data:
+            x = np.asarray(field_data['x'])
+            y = np.asarray(field_data['y'])
+        else:
+            coordinates = field_data.get('coordinates')
+            if coordinates is None:
+                raise KeyError("field_data 缺少 x/y 與 coordinates")
+            if isinstance(coordinates, dict):
+                coord_dict = coordinates
+            elif isinstance(coordinates, np.ndarray):
+                # np.load(..., allow_pickle=True) 讀回的 dict 可能被包成 0-d ndarray(object)
+                try:
+                    coord_dict = coordinates.item()
+                except Exception as e:
+                    raise TypeError(f"無法從 coordinates 還原字典，型別: {type(coordinates)}") from e
+            else:
+                raise TypeError(f"不支援的 coordinates 型別: {type(coordinates)}")
+            x = np.asarray(coord_dict['x'])
+            y = np.asarray(coord_dict['y'])
         
         # 建立完整網格
         X, Y = np.meshgrid(x, y, indexing='ij')
@@ -492,18 +786,30 @@ def main():
     parser.add_argument('--log_level', type=str, default='info',
                        choices=['debug', 'info', 'warning', 'error'],
                        help='日誌等級')
+    parser.add_argument('--use_mock', action='store_true', help='使用模擬 JHTDB 資料來源')
     
     # 運行模式
     parser.add_argument('--cutout_mode', action='store_true',
-                       help='只下載 cutout 資料')
+                       help='只下載 2D cutout（舊流程）')
     parser.add_argument('--sensor_only', action='store_true', 
                        help='只生成感測點資料')
     parser.add_argument('--complete_dataset', action='store_true',
                        help='建立完整資料集 (預設)')
+    parser.add_argument('--cutout3d_mode', action='store_true', help='下載並快取 3D cutout')
+    parser.add_argument('--extract_slice', action='store_true', help='從 3D 快取提取 2D 切片')
     
-    # 參數設定
+    # 2D 參數設定
     parser.add_argument('--resolution', type=int, nargs=2, default=[128, 64],
                        help='2D 切片解析度 [nx, ny]')
+    # 3D 參數設定
+    parser.add_argument('--resolution3d', type=int, nargs=3, default=[128, 128, 32],
+                       help='3D cutout 解析度 [nx, ny, nz]（mock 有效）')
+    parser.add_argument('--plane', type=str, default='xy', choices=['xy','xz','yz'],
+                       help='切片平面')
+    parser.add_argument('--position', type=float, default=4.71, help='切片位置（依平面軸）')
+    parser.add_argument('--slice_res', type=int, nargs=2, default=[128, 64], help='切片輸出解析度 [nx, ny]')
+    
+    # 感測點
     parser.add_argument('--K', type=int, default=8,
                        help='感測點數量')
     parser.add_argument('--sensor_method', type=str, default='qr_pivot',
@@ -539,15 +845,25 @@ def main():
         logger.info(f"載入配置檔案: {args.config}")
         
         # 建立資料擷取器
-        fetcher = ChannelFlowDataFetcher(config, args.cache_dir)
+        fetcher = ChannelFlowDataFetcher(config, args.cache_dir, use_mock=args.use_mock)
         resolution = tuple(args.resolution)
+        res3d = tuple(args.resolution3d)
         
         # 執行對應模式
-        if args.cutout_mode:
-            logger.info("執行 cutout 模式")
+        if args.cutout3d_mode:
+            logger.info("執行 3D cutout 模式")
+            fetcher.fetch_cutout3d_data(resolution3d=res3d)
+        elif args.extract_slice:
+            logger.info("從 3D 快取提取 2D 切片")
+            out_path = fetcher.extract_and_save_slice(resolution3d=res3d,
+                                                      plane=args.plane,
+                                                      position=args.position,
+                                                      slice_res=tuple(args.slice_res))
+            logger.info(f"切片已輸出: {out_path}")
+        elif args.cutout_mode:
+            logger.info("執行 2D cutout 模式（舊流程）")
             hifi_data = fetcher.fetch_cutout_data(resolution)
-            logger.info(f"完成 cutout 資料下載，形狀: {hifi_data['u'].shape}")
-            
+            logger.info(f"完成 cutout 資料下載，形狀: {hifi_data['u'].shape if 'u' in hifi_data else 'N/A'}")
         elif args.sensor_only:
             logger.info("執行感測點生成模式")
             # 需要先載入現有的高保真資料
@@ -562,7 +878,6 @@ def main():
             else:
                 logger.error(f"未找到高保真資料快取: {cache_file}")
                 return 1
-                
         else:
             # 預設：建立完整資料集
             logger.info("執行完整資料集建立模式")

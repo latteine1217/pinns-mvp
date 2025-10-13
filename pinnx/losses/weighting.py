@@ -45,7 +45,9 @@ class GradNormWeighter:
                  initial_weights: Optional[Dict[str, float]] = None,
                  target_gradient_ratio: float = 1.0,
                  target_ratios: Optional[List[float]] = None,
-                 device: Optional[str] = None):
+                 device: Optional[str] = None,
+                 min_weight: float = 0.1,
+                 max_weight: float = 10.0):
         """
         Args:
             model: PINN 模型
@@ -63,6 +65,8 @@ class GradNormWeighter:
         self.update_frequency = update_frequency
         self.target_gradient_ratio = target_gradient_ratio
         self.target_ratios = target_ratios  # 存儲目標比例（用於相容性）
+        self.min_weight = float(min_weight)
+        self.max_weight = float(max_weight)
         
         # 自動檢測設備
         if device is None:
@@ -74,8 +78,9 @@ class GradNormWeighter:
         if initial_weights is None:
             initial_weights = {name: 1.0 for name in loss_names}
         
-        self.weights = {name: torch.tensor(initial_weights.get(name, 1.0), 
+        self.weights = {name: torch.clamp(torch.tensor(initial_weights.get(name, 1.0), 
                                          device=device, requires_grad=False)
+                       , min=self.min_weight, max=self.max_weight)
                        for name in loss_names}
         
         # 記錄梯度歷史用於穩定化
@@ -98,24 +103,35 @@ class GradNormWeighter:
         for name, loss in losses.items():
             if name not in self.loss_names:
                 continue
+            
+            # 檢查損失是否需要梯度和是否為非零
+            if not loss.requires_grad or loss.item() == 0.0:
+                gradients[name] = torch.tensor(1e-12, device=self.device)
+                continue
                 
-            # 計算該損失項對模型參數的梯度
-            grads = torch.autograd.grad(
-                outputs=loss,
-                inputs=list(self.model.parameters()),
-                grad_outputs=torch.ones_like(loss),
-                retain_graph=True,
-                create_graph=False,
-                allow_unused=True
-            )
-            
-            # 計算梯度範數
-            grad_norm = 0.0
-            for grad in grads:
-                if grad is not None:
-                    grad_norm += (grad.detach() ** 2).sum()
-            
-            gradients[name] = torch.sqrt(grad_norm + 1e-12)
+            try:
+                # 計算該損失項對模型參數的梯度
+                grads = torch.autograd.grad(
+                    outputs=loss,
+                    inputs=list(self.model.parameters()),
+                    grad_outputs=torch.ones_like(loss),
+                    retain_graph=True,
+                    create_graph=False,
+                    allow_unused=True
+                )
+                
+                # 計算梯度範數
+                grad_norm = 0.0
+                for grad in grads:
+                    if grad is not None:
+                        grad_norm += (grad.detach() ** 2).sum()
+                
+                gradients[name] = torch.sqrt(grad_norm + 1e-12)
+                
+            except Exception as e:
+                # 如果梯度計算失敗，使用小值
+                gradients[name] = torch.tensor(1e-12, device=self.device)
+                print(f"Warning: Gradient computation failed for {name}: {e}")
             
         return gradients
     
@@ -182,11 +198,14 @@ class GradNormWeighter:
             else:
                 adjustment_factor = gradient_ratio
             
-            # 使用指數移動平均更新權重
-            new_weight = self.weights[name] * (adjustment_factor ** (-self.alpha))
+            # 使用指數移動平均更新權重，但限制調整幅度
+            weight_adjustment = adjustment_factor ** (-self.alpha)
+            # 限制單次調整幅度，避免權重爆炸
+            weight_adjustment = torch.clamp(weight_adjustment, 0.5, 2.0)
+            new_weight = self.weights[name] * weight_adjustment
             
-            # 限制權重範圍避免數值不穩定
-            new_weight = torch.clamp(new_weight, 0.01, 100.0)
+            # 限制權重範圍避免數值不穩定 - 更保守的範圍
+            new_weight = torch.clamp(new_weight, self.min_weight, self.max_weight)
             self.weights[name] = new_weight
             
             # 記錄梯度歷史
@@ -203,7 +222,11 @@ class GradNormWeighter:
     def reset_weights(self):
         """重置權重為初始值"""
         for name in self.loss_names:
-            self.weights[name] = torch.tensor(1.0, device=self.device)
+            self.weights[name] = torch.clamp(
+                torch.tensor(1.0, device=self.device),
+                min=self.min_weight,
+                max=self.max_weight
+            )
         self.step_count = 0
         self.initial_losses = None
         self.gradient_history.clear()
@@ -595,6 +618,15 @@ class AdaptiveWeightScheduler:
         
         # 如果無法計算適應性權重，返回基礎權重
         return base_weights
+    
+    def get_weights(self) -> Dict[str, float]:
+        """
+        獲取當前權重（預設均等權重）
+        
+        Returns:
+            當前權重字典
+        """
+        return {name: 1.0 for name in self.loss_names}
     
     def combine_weights(self,
                        phase_weights: Dict[str, float],

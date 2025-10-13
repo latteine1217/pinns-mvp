@@ -25,18 +25,21 @@ def compute_derivatives_3d_temporal(f: torch.Tensor, x: torch.Tensor,
     計算3D時間依賴函數的偏微分
     
     Args:
-        f: 待微分的標量場 [batch_size, 1]
-        x: 座標變數 [batch_size, 4] = [t, x, y, z] 
+        f: 待微分的標量場 [batch_size, 1]（需要在計算圖中或為葉子節點且 requires_grad=True）
+        x: 座標變數 [batch_size, 4] = [t, x, y, z]（需要 requires_grad=True）
         order: 微分階數 (1 或 2)
         component: 指定微分變數 (0=t, 1=x, 2=y, 3=z)，None表示全部
         
     Returns:
         偏微分結果 [batch_size, 4] (一階) 或指定分量 [batch_size, 1]
+        
+    Note:
+        調用此函數前，確保輸入張量已正確設置梯度追蹤：
+        - f: 通常是模型輸出，自動在計算圖中
+        - x: 需要在創建時設置 requires_grad=True
     """
-    if not f.requires_grad:
-        f.requires_grad_(True)
-    if not x.requires_grad:
-        x.requires_grad_(True)
+    # 不再原地修改 requires_grad，因為這會破壞已存在的計算圖
+    # 如果張量未追蹤梯度，應在調用前修正，而非在此處強制修改
         
     # 計算一階偏微分
     grad_outputs = torch.ones_like(f)

@@ -83,12 +83,12 @@ def rmse_metrics(pred: torch.Tensor, ref: torch.Tensor) -> Dict[str, float]:
     
     metrics = {
         'rmse_total': rmse.item(),
-        'rmse_u': var_rmse[0].item() if var_rmse.numel() > 0 else 0.0,
-        'rmse_v': var_rmse[1].item() if var_rmse.numel() > 1 else 0.0,
-        'rmse_p': var_rmse[2].item() if var_rmse.numel() > 2 else 0.0,
-        'relative_rmse_u': relative_rmse[0].item() if relative_rmse.numel() > 0 else 0.0,
-        'relative_rmse_v': relative_rmse[1].item() if relative_rmse.numel() > 1 else 0.0,
-        'relative_rmse_p': relative_rmse[2].item() if relative_rmse.numel() > 2 else 0.0,
+        'rmse_u': var_rmse[0].item() if var_rmse.numel() > 0 and var_rmse.dim() > 0 else (var_rmse.item() if var_rmse.numel() == 1 else 0.0),
+        'rmse_v': var_rmse[1].item() if var_rmse.numel() > 1 and var_rmse.dim() > 0 else 0.0,
+        'rmse_p': var_rmse[2].item() if var_rmse.numel() > 2 and var_rmse.dim() > 0 else 0.0,
+        'relative_rmse_u': relative_rmse[0].item() if relative_rmse.numel() > 0 and relative_rmse.dim() > 0 else (relative_rmse.item() if relative_rmse.numel() == 1 else 0.0),
+        'relative_rmse_v': relative_rmse[1].item() if relative_rmse.numel() > 1 and relative_rmse.dim() > 0 else 0.0,
+        'relative_rmse_p': relative_rmse[2].item() if relative_rmse.numel() > 2 and relative_rmse.dim() > 0 else 0.0,
     }
     
     return metrics
@@ -139,24 +139,39 @@ def conservation_error(u: torch.Tensor, v: torch.Tensor,
     Args:
         u: x方向速度 [N]
         v: y方向速度 [N]
-        coords: 座標 [N, 3] (t, x, y)
+        coords: 座標 [N, 2] (x, y) 或 [N, 3] (t, x, y)
         eps: 數值穩定性常數
         
     Returns:
         平均質量守恆誤差
     """
-    if not u.requires_grad:
-        u = u.detach().requires_grad_(True)
-    if not v.requires_grad:
-        v = v.detach().requires_grad_(True)
+    # 確保 coords 需要梯度
+    if not coords.requires_grad:
+        coords.requires_grad_(True)
+    
+    # 確保 u, v 需要梯度且通過 coords 計算
+    # 如果 u, v 沒有 grad_fn，需要重新計算它們與 coords 的關係
+    if u.grad_fn is None or v.grad_fn is None:
+        warnings.warn("u or v not connected to coords in computation graph, conservation error may be inaccurate")
     
     try:
         # 計算梯度
-        u_grad = torch.autograd.grad(u.sum(), coords, create_graph=True)[0]
-        v_grad = torch.autograd.grad(v.sum(), coords, create_graph=True)[0]
+        u_grad = torch.autograd.grad(u.sum(), coords, create_graph=True, allow_unused=True)[0]
+        v_grad = torch.autograd.grad(v.sum(), coords, create_graph=True, allow_unused=True)[0]
+        
+        if u_grad is None or v_grad is None:
+            warnings.warn("Cannot compute gradients: u/v not connected to coords")
+            return float('inf')
         
         # 質量守恆: ∂u/∂x + ∂v/∂y = 0
-        div_u = u_grad[:, 1] + v_grad[:, 2]  # ∂u/∂x + ∂v/∂y
+        # 根據座標維度確定空間索引
+        if coords.shape[1] == 2:  # [x, y]
+            div_u = u_grad[:, 0] + v_grad[:, 1]  # ∂u/∂x + ∂v/∂y
+        elif coords.shape[1] == 3:  # [t, x, y] 或 [x, y, z]
+            # 假設前導維度是時間，空間從索引1開始
+            div_u = u_grad[:, 1] + v_grad[:, 2]  # ∂u/∂x + ∂v/∂y
+        else:
+            raise ValueError(f"Unsupported coords shape: {coords.shape}")
         
         # 計算RMS誤差
         conservation_error = torch.sqrt(torch.mean(div_u**2))
@@ -289,7 +304,7 @@ def wall_shear_stress(u: torch.Tensor, v: torch.Tensor, coords: torch.Tensor,
         壁面剪應力統計
     """
     if not u.requires_grad:
-        u = u.detach().requires_grad_(True)
+        u.requires_grad_(True)
     
     try:
         # 計算速度梯度
@@ -336,9 +351,9 @@ def vorticity_field(u: torch.Tensor, v: torch.Tensor, coords: torch.Tensor) -> t
         渦量場 [N]
     """
     if not u.requires_grad:
-        u = u.detach().requires_grad_(True)
+        u.requires_grad_(True)
     if not v.requires_grad:
-        v = v.detach().requires_grad_(True)
+        v.requires_grad_(True)
     
     try:
         u_grad = torch.autograd.grad(u.sum(), coords, create_graph=True)[0]

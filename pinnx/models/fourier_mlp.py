@@ -1,48 +1,108 @@
 """
-Fourier 特徵 MLP 網路架構模組
+Fourier 特徵 MLP 網路架構模組 (統一版)
 
-實現支援 Fourier 特徵編碼、可變深度/寬度、多輸出的神經網路架構，
-專為 PINNs 設計，支援 VS-PINN 變數尺度化與自動微分。
+整合標準與增強功能，透過參數選項控制網路複雜度。
 
 核心特色：
-- Fourier Random Features 提升高頻擬合能力  
-- 可配置的網路深度與寬度
-- 支援多種激活函數 (tanh, swish, gelu)
+- Fourier Random Features (標準/多尺度)
+- Random Weight Factorization (RWF) 可選
+- 可配置的網路深度與寬度  
+- 支援多種激活函數 (tanh, swish, gelu, sine)
+- 殘差連接與層歸一化 (可選)
 - 針對 PINNs 自動微分優化的權重初始化
-- 梯度友善的網路設計
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from typing import Optional, Union, List, Callable
+from typing import Optional, Union, List, Callable, Dict, Any
 import numpy as np
+
+
+class RWFLinear(nn.Module):
+    """
+    Random Weight Factorization 線性層
+    
+    基於 arXiv 2308.08468 論文的權重分解技術：
+    W^(l) = diag(exp(s^(l))) · V^(l)
+    
+    優勢：
+    1. 改善訓練穩定性 - 防止權重爆炸/消失
+    2. 更好的梯度流動 - 指數縮放提供自適應學習率
+    3. 隱式正則化 - 對數空間的平滑性約束
+    """
+    
+    def __init__(self, 
+                 in_features: int, 
+                 out_features: int, 
+                 bias: bool = True,
+                 scale_std: float = 0.1):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.scale_std = scale_std
+        
+        # V^(l): 標準權重矩陣
+        self.V = nn.Parameter(torch.empty(out_features, in_features))
+        # s^(l): 對數尺度因子
+        self.s = nn.Parameter(torch.empty(out_features))
+        
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features))
+        else:
+            self.register_parameter('bias', None)
+        
+        self.reset_parameters()
+    
+    def reset_parameters(self) -> None:
+        nn.init.xavier_uniform_(self.V)
+        nn.init.normal_(self.s, mean=0.0, std=self.scale_std)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+    
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        scale_factors = torch.exp(self.s).unsqueeze(1)
+        W = scale_factors * self.V
+        return F.linear(input, W, self.bias)
+    
+    def extra_repr(self) -> str:
+        return f'in_features={self.in_features}, out_features={self.out_features}, ' \
+               f'bias={self.bias is not None}, scale_std={self.scale_std}'
 
 
 class FourierFeatures(nn.Module):
     """
     Fourier Random Features 編碼層
     
-    將輸入座標 (t,x,y) 透過隨機 Fourier 特徵映射到高維空間，
+    將輸入座標透過隨機 Fourier 特徵映射到高維空間，
     提升神經網路對高頻函數的擬合能力。
     
     Args:
         in_dim: 輸入維度 (例如 3 代表 t,x,y)
         m: Fourier 特徵數量 (輸出維度為 2m)
         sigma: Fourier 頻率尺度參數
+        multiscale: 是否使用多尺度頻率
         trainable: 是否讓 Fourier 係數可訓練
     """
     
-    def __init__(self, in_dim: int, m: int = 32, sigma: float = 5.0, trainable: bool = False):
+    def __init__(self, in_dim: int, m: int = 32, sigma: float = 5.0, 
+                 multiscale: bool = False, trainable: bool = False):
         super().__init__()
         self.in_dim = in_dim
         self.m = m
         self.sigma = sigma
+        self.multiscale = multiscale
         self.out_dim = 2 * m
         
-        # 隨機 Fourier 係數矩陣 B ~ N(0, sigma^2)
-        B = torch.randn(in_dim, m) * sigma
+        # 生成 Fourier 係數矩陣
+        if multiscale:
+            # 多尺度：從低頻到高頻的對數間距
+            sigmas = torch.logspace(-1, math.log10(sigma), m // 4).repeat(4)[:m]
+            B = torch.randn(in_dim, m) * sigmas.unsqueeze(0)
+        else:
+            # 單一尺度
+            B = torch.randn(in_dim, m) * sigma
         
         if trainable:
             self.B = nn.Parameter(B)
@@ -54,76 +114,134 @@ class FourierFeatures(nn.Module):
         Args:
             x: [batch_size, in_dim] 輸入座標
         Returns:
-            [batch_size, 2*m] Fourier 特徵
+            [batch_size, 2*m] Fourier 特徵 [cos(z), sin(z)]
         """
-        # z = 2π * x @ B
         z = 2.0 * math.pi * x @ self.B
-        # 回傳 [cos(z), sin(z)]
         return torch.cat([torch.cos(z), torch.sin(z)], dim=-1)
     
     def extra_repr(self) -> str:
-        return f'in_dim={self.in_dim}, m={self.m}, sigma={self.sigma:.2f}, out_dim={self.out_dim}'
+        return f'in_dim={self.in_dim}, m={self.m}, sigma={self.sigma:.2f}, ' \
+               f'multiscale={self.multiscale}, out_dim={self.out_dim}'
+
+
+class SineActivation(nn.Module):
+    """
+    Sine 激活函數 - 適合高頻特徵捕捉
+    
+    基於 SIREN (Implicit Neural Representations with Periodic Activation Functions)
+    使用周期性激活函數可以更好地表示高頻細節與導數。
+    
+    Args:
+        omega_0: 頻率參數，控制 sine 函數的週期性 (預設 1.0，較保守)
+    
+    注意：與 Fourier 特徵結合時使用較小的 omega_0 以避免訓練不穩定
+    """
+    def __init__(self, omega_0: float = 1.0):
+        super().__init__()
+        self.omega_0 = omega_0
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sin(self.omega_0 * x)
 
 
 class DenseLayer(nn.Module):
     """
-    密集連接層，支援多種激活函數與殘差連接
+    密集連接層，支援多種激活函數、殘差連接與層歸一化
     """
     
     def __init__(self, in_features: int, out_features: int, 
-                 activation: str = 'tanh', use_residual: bool = False,
-                 dropout: float = 0.0):
+                 activation: str = 'tanh', 
+                 use_residual: bool = False,
+                 use_layer_norm: bool = False,
+                 dropout: float = 0.0,
+                 use_rwf: bool = False,
+                 rwf_scale_std: float = 0.1,
+                 sine_omega_0: float = 30.0):
         super().__init__()
-        self.linear = nn.Linear(in_features, out_features)
+        
+        # 選擇線性層類型
+        if use_rwf:
+            self.linear = RWFLinear(in_features, out_features, bias=True, scale_std=rwf_scale_std)
+        else:
+            self.linear = nn.Linear(in_features, out_features)
+        
         self.use_residual = use_residual and (in_features == out_features)
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else None
+        self.use_layer_norm = use_layer_norm
+        self.use_rwf = use_rwf
+        
+        # 層歸一化
+        if use_layer_norm:
+            self.layer_norm = nn.LayerNorm(out_features)
         
         # 激活函數選擇
         if activation == 'tanh':
             self.activation = nn.Tanh()
         elif activation == 'swish':
-            self.activation = nn.SiLU()  # SiLU = Swish
+            self.activation = nn.SiLU()
         elif activation == 'gelu':
             self.activation = nn.GELU()
         elif activation == 'relu':
             self.activation = nn.ReLU()
         elif activation == 'elu':
             self.activation = nn.ELU()
+        elif activation == 'sine':
+            self.activation = SineActivation(omega_0=sine_omega_0)
         else:
             raise ValueError(f"不支援的激活函數: {activation}")
         
-        # Xavier/Glorot 權重初始化，針對 tanh 優化
-        if activation == 'tanh':
-            nn.init.xavier_normal_(self.linear.weight)
-        else:
-            nn.init.kaiming_normal_(self.linear.weight, nonlinearity='relu')
-        nn.init.zeros_(self.linear.bias)
+        # Dropout
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else None
+        
+        # 權重初始化 (僅對標準線性層)
+        if not use_rwf and isinstance(self.linear, nn.Linear):
+            if activation in ['swish', 'relu', 'elu']:
+                nn.init.kaiming_normal_(self.linear.weight, nonlinearity='relu')
+            elif activation == 'sine':
+                # 🎯 SIREN 專用初始化（論文標準）
+                # 隱藏層：U(-sqrt(6/n_in)/omega_0, +sqrt(6/n_in)/omega_0)
+                # 注意：第一層初始化由 PINNNet 處理
+                if isinstance(self.activation, SineActivation):
+                    import numpy as np
+                    n_in = self.linear.weight.shape[1]
+                    omega_0 = self.activation.omega_0
+                    bound = np.sqrt(6 / n_in) / omega_0
+                    nn.init.uniform_(self.linear.weight, -bound, bound)
+                else:
+                    nn.init.xavier_normal_(self.linear.weight, gain=0.5)
+                nn.init.zeros_(self.linear.bias)
+            else:
+                nn.init.xavier_normal_(self.linear.weight)
+            nn.init.zeros_(self.linear.bias)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x if self.use_residual else None
+        
         out = self.linear(x)
+        
+        if self.use_layer_norm:
+            out = self.layer_norm(out)
+        
         out = self.activation(out)
         
         if self.dropout is not None:
             out = self.dropout(out)
         
-        if self.use_residual:
-            out = out + x
+        if residual is not None:
+            out = out + residual
             
         return out
 
 
 class PINNNet(nn.Module):
     """
-    基於 Fourier 特徵的 PINN 神經網路
+    基於 Fourier 特徵的 PINN 神經網路 (統一版)
+    
+    整合標準與增強功能，透過參數控制網路複雜度：
+    - 標準模式：較淺較窄，tanh 激活，無殘差/歸一化
+    - 增強模式：較深較寬，swish 激活，啟用殘差/歸一化/RWF
     
     網路架構：
-    輸入 -> Fourier 特徵 -> 多層 Dense -> 輸出
-    
-    專為 PINNs 設計的特性：
-    - 支援自動微分的權重初始化
-    - 可變網路深度與寬度
-    - Fourier 特徵提升高頻擬合
-    - 多輸出支援 (u,v,p,source等)
+    輸入 -> Fourier 特徵 -> [投影層] -> 多層 Dense -> 輸出
     """
     
     def __init__(self,
@@ -133,46 +251,82 @@ class PINNNet(nn.Module):
                  depth: int = 5,            # 網路深度
                  fourier_m: int = 32,       # Fourier 特徵數
                  fourier_sigma: float = 5.0, # Fourier 頻率尺度
+                 fourier_multiscale: bool = False, # 多尺度 Fourier
                  activation: str = 'tanh',   # 激活函數
                  use_fourier: bool = True,   # 是否使用 Fourier 特徵
                  trainable_fourier: bool = False, # Fourier 係數是否可訓練
                  use_residual: bool = False, # 是否使用殘差連接
-                 dropout: float = 0.0):     # Dropout 比率
+                 use_layer_norm: bool = False, # 是否使用層歸一化
+                 use_input_projection: bool = False, # 是否使用輸入投影層
+                 dropout: float = 0.0,      # Dropout 比率
+                 use_rwf: bool = False,     # 是否使用 RWF
+                 rwf_scale_std: float = 0.1, # RWF 尺度標準差
+                 sine_omega_0: float = 1.0, # Sine 激活函數頻率參數 (較保守以配合 Fourier 特徵)
+                 fourier_normalize_input: bool = False, # 🔧 是否在 Fourier 前標準化輸入（修復 VS-PINN 縮放問題）
+                 input_scale_factors: Optional[torch.Tensor] = None): # 🔧 輸入縮放因子 [N_x, N_y, N_z]（用於 VS-PINN）
         
         super().__init__()
         
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.use_fourier = use_fourier
+        self.use_input_projection = use_input_projection
+        self.fourier_normalize_input = fourier_normalize_input
+        
+        # 🔧 註冊輸入縮放因子（用於 VS-PINN 的標準化補償）
+        if input_scale_factors is not None:
+            self.register_buffer('input_scale_factors', input_scale_factors)
+        else:
+            self.input_scale_factors = None
         
         # Fourier 特徵編碼
         if use_fourier:
-            self.fourier = FourierFeatures(in_dim, fourier_m, fourier_sigma, trainable_fourier)
+            self.fourier = FourierFeatures(
+                in_dim, fourier_m, fourier_sigma, 
+                multiscale=fourier_multiscale,
+                trainable=trainable_fourier
+            )
             input_features = self.fourier.out_dim
         else:
             self.fourier = None
             input_features = in_dim
         
+        # 可選的輸入投影層
+        if use_input_projection:
+            self.input_projection = nn.Linear(input_features, width)
+            nn.init.xavier_normal_(self.input_projection.weight)
+            nn.init.zeros_(self.input_projection.bias)
+            current_dim = width
+        else:
+            self.input_projection = None
+            current_dim = input_features
+        
         # 隱藏層
         layers = []
-        current_dim = input_features
-        
         for i in range(depth):
+            # 第一層的輸入維度可能與後續層不同
+            layer_in_dim = current_dim if i == 0 else width
+            
             layers.append(DenseLayer(
-                current_dim, width, 
+                layer_in_dim, width, 
                 activation=activation,
                 use_residual=use_residual and i > 0,  # 第一層不用殘差
-                dropout=dropout
+                use_layer_norm=use_layer_norm,
+                dropout=dropout,
+                use_rwf=use_rwf,
+                rwf_scale_std=rwf_scale_std,
+                sine_omega_0=sine_omega_0
             ))
             current_dim = width
         
         self.hidden_layers = nn.ModuleList(layers)
         
         # 輸出層 (線性，無激活函數)
-        self.output_layer = nn.Linear(current_dim, out_dim)
+        self.output_layer = nn.Linear(width, out_dim)
         
         # 輸出層特殊初始化：較小的權重，有助於訓練穩定
-        nn.init.xavier_normal_(self.output_layer.weight, gain=0.1)
+        output_gain = 0.01 if use_residual else 0.1
+        nn.init.xavier_normal_(self.output_layer.weight, gain=output_gain)
         nn.init.zeros_(self.output_layer.bias)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -180,15 +334,40 @@ class PINNNet(nn.Module):
         前向傳播
         
         Args:
-            x: [batch_size, in_dim] 輸入座標
+            x: [batch_size, in_dim] 輸入座標（可能是物理座標或 VS-PINN 縮放座標）
         Returns:
             [batch_size, out_dim] 網路輸出
         """
-        # Fourier 特徵編碼
-        if self.use_fourier:
-            h = self.fourier(x)
+        # 🔧 修復：若啟用標準化且輸入已被 VS-PINN 縮放，先還原到 [-1, 1] 範圍
+        if self.use_fourier and self.fourier is not None:
+            if self.fourier_normalize_input:
+                # 方法 1: 使用顯式縮放因子（若提供）
+                if self.input_scale_factors is not None:
+                    x_normalized = x / self.input_scale_factors
+                else:
+                    # 方法 2: 自動檢測（啟發式）
+                    # 假設物理座標在 [-1, 1] 或 [0, 1] 範圍，若超出則需標準化
+                    x_abs_max = x.abs().max()
+                    if x_abs_max > 2.0:  # 檢測到異常範圍（VS-PINN 縮放的跡象）
+                        # 使用實際範圍標準化到 [-1, 1]
+                        x_min = x.min(dim=0, keepdim=True).values
+                        x_max = x.max(dim=0, keepdim=True).values
+                        x_range = x_max - x_min
+                        x_normalized = 2.0 * (x - x_min) / (x_range + 1e-8) - 1.0
+                    else:
+                        x_normalized = x
+                
+                h = self.fourier(x_normalized)
+            else:
+                # 不標準化，直接使用原始輸入（可能導致 VS-PINN 問題）
+                h = self.fourier(x)
         else:
             h = x
+        
+        # 可選的輸入投影
+        if self.use_input_projection and self.input_projection is not None:
+            h = self.input_projection(h)
+            h = F.silu(h)  # Swish activation
         
         # 隱藏層前向傳播
         for layer in self.hidden_layers:
@@ -203,12 +382,38 @@ class PINNNet(nn.Module):
         """返回模型參數總數"""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
     
+    def get_model_summary(self) -> Dict[str, Any]:
+        """返回模型結構摘要"""
+        width = 0
+        if self.hidden_layers:
+            layer = self.hidden_layers[0]
+            if isinstance(layer.linear, nn.Linear):
+                width = layer.linear.out_features
+            elif isinstance(layer.linear, RWFLinear):
+                width = layer.linear.out_features
+        
+        fourier_features = 0
+        if self.use_fourier and self.fourier is not None:
+            fourier_features = self.fourier.m
+        
+        return {
+            'input_dim': self.in_dim,
+            'output_dim': self.out_dim,
+            'depth': len(self.hidden_layers),
+            'width': width,
+            'total_params': self.get_num_params(),
+            'fourier_features': fourier_features,
+            'use_residual': self.hidden_layers[0].use_residual if self.hidden_layers else False,
+            'use_layer_norm': self.hidden_layers[0].use_layer_norm if self.hidden_layers else False,
+            'use_rwf': self.hidden_layers[0].use_rwf if self.hidden_layers else False
+        }
+    
     def extra_repr(self) -> str:
-        fourier_info = f", fourier_m={self.fourier.m}" if self.use_fourier else ""
-        return (f'in_dim={self.in_dim}, out_dim={self.out_dim}, '
-                f'width={self.hidden_layers[0].linear.out_features}, '
-                f'depth={len(self.hidden_layers)}{fourier_info}, '
-                f'params={self.get_num_params():,}')
+        summary = self.get_model_summary()
+        fourier_info = f", fourier_m={summary['fourier_features']}" if self.use_fourier else ""
+        return (f"in_dim={summary['input_dim']}, out_dim={summary['output_dim']}, "
+                f"width={summary['width']}, depth={summary['depth']}{fourier_info}, "
+                f"params={summary['total_params']:,}")
 
 
 class MultiScalePINNNet(nn.Module):
@@ -275,19 +480,27 @@ class MultiScalePINNNet(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-# 便捷函數：根據配置建立模型
+# ========== 便捷工廠函數 ==========
+
 def create_pinn_model(config: dict) -> nn.Module:
     """
     根據配置字典建立 PINN 模型
     
     Args:
-        config: 模型配置字典，包含網路參數
+        config: 模型配置字典
     Returns:
         建立好的 PINN 模型
     """
     model_type = config.get('type', 'standard')
     
-    if model_type == 'standard':
+    if model_type == 'standard' or model_type == 'enhanced_fourier_mlp':
+        # 🔧 處理 VS-PINN 縮放因子（如果提供）
+        input_scale_factors = None
+        if 'input_scale_factors' in config:
+            scale_list = config['input_scale_factors']
+            if isinstance(scale_list, (list, tuple)):
+                input_scale_factors = torch.tensor(scale_list, dtype=torch.float32)
+        
         return PINNNet(
             in_dim=config.get('in_dim', 3),
             out_dim=config.get('out_dim', 4),
@@ -295,11 +508,19 @@ def create_pinn_model(config: dict) -> nn.Module:
             depth=config.get('depth', 5),
             fourier_m=config.get('fourier_m', 32),
             fourier_sigma=config.get('fourier_sigma', 5.0),
+            fourier_multiscale=config.get('fourier_multiscale', False),
             activation=config.get('activation', 'tanh'),
             use_fourier=config.get('use_fourier', True),
             trainable_fourier=config.get('trainable_fourier', False),
             use_residual=config.get('use_residual', False),
-            dropout=config.get('dropout', 0.0)
+            use_layer_norm=config.get('use_layer_norm', False),
+            use_input_projection=config.get('use_input_projection', False),
+            dropout=config.get('dropout', 0.0),
+            use_rwf=config.get('use_rwf', False),
+            rwf_scale_std=config.get('rwf_scale_std', 0.1),
+            sine_omega_0=config.get('sine_omega_0', 1.0),  # 預設值改為 1.0
+            fourier_normalize_input=config.get('fourier_normalize_input', False),  # 🔧 新參數
+            input_scale_factors=input_scale_factors  # 🔧 新參數
         )
     
     elif model_type == 'multiscale':
@@ -319,7 +540,42 @@ def create_pinn_model(config: dict) -> nn.Module:
         raise ValueError(f"不支援的模型類型: {model_type}")
 
 
-# 模型工廠函數
+def create_standard_pinn(**kwargs) -> PINNNet:
+    """建立標準 PINN 模型 (輕量級配置)"""
+    defaults = {
+        'width': 128,
+        'depth': 4,
+        'fourier_m': 32,
+        'activation': 'tanh',
+        'use_residual': False,
+        'use_layer_norm': False,
+        'dropout': 0.0,
+        'use_rwf': False
+    }
+    defaults.update(kwargs)
+    return PINNNet(**defaults)
+
+
+def create_enhanced_pinn(**kwargs) -> PINNNet:
+    """建立增強 PINN 模型 (高容量配置)"""
+    defaults = {
+        'width': 256,
+        'depth': 8,
+        'fourier_m': 64,
+        'fourier_multiscale': True,
+        'activation': 'swish',
+        'use_residual': True,
+        'use_layer_norm': True,
+        'use_input_projection': True,
+        'dropout': 0.1,
+        'use_rwf': False,
+        'rwf_scale_std': 0.1
+    }
+    defaults.update(kwargs)
+    return PINNNet(**defaults)
+
+
+# 向後相容的別名
 def fourier_pinn(in_dim: int = 3, out_dim: int = 4, **kwargs) -> PINNNet:
     """快速建立標準 Fourier PINN 模型"""
     return PINNNet(in_dim=in_dim, out_dim=out_dim, **kwargs)
@@ -330,35 +586,79 @@ def multiscale_pinn(in_dim: int = 3, out_dim: int = 4, **kwargs) -> MultiScalePI
     return MultiScalePINNNet(in_dim=in_dim, out_dim=out_dim, **kwargs)
 
 
+def init_siren_weights(model: PINNNet) -> None:
+    """
+    對使用 Sine 激活的模型應用 SIREN 權重初始化
+    
+    參考: Sitzmann et al., "Implicit Neural Representations with Periodic Activation Functions"
+    
+    初始化規則：
+    - 第一層：U(-1/n_in, +1/n_in)
+    - 隱藏層：U(-sqrt(6/n_in)/omega_0, +sqrt(6/n_in)/omega_0)
+    - 輸出層：保持原始初始化（小權重）
+    
+    Args:
+        model: PINNNet 模型實例（必須使用 sine 激活）
+    """
+    import numpy as np
+    
+    # 檢查第一層
+    if len(model.hidden_layers) > 0:
+        first_layer = model.hidden_layers[0]  # type: ignore
+        if isinstance(first_layer, DenseLayer) and isinstance(first_layer.activation, SineActivation):
+            # 第一層特殊初始化
+            first_linear = first_layer.linear
+            n_in = first_linear.weight.shape[1]  # type: ignore
+            bound = float(1.0 / n_in)  # type: ignore
+            with torch.no_grad():
+                nn.init.uniform_(first_linear.weight, -bound, bound)  # type: ignore
+                nn.init.zeros_(first_linear.bias)  # type: ignore
+            
+            # 後續層已經在 DenseLayer.__init__ 中處理
+            print(f"✅ SIREN 初始化完成：第一層 bound=±{bound:.6f}")
+        else:
+            print("⚠️  模型未使用 Sine 激活，跳過 SIREN 初始化")
+
+
+# 向後相容：EnhancedPINNNet 別名
+EnhancedPINNNet = create_enhanced_pinn
+
+
 if __name__ == "__main__":
     # 測試程式碼
-    import torch
+    print("=== 標準 PINNNet 測試 ===")
     
-    print("=== PINNNet 測試 ===")
+    # 建立標準模型
+    model_std = create_standard_pinn(in_dim=3, out_dim=4)
+    print(f"標準模型: {model_std}")
+    print(f"參數總數: {model_std.get_num_params():,}")
     
-    # 建立模型
-    model = PINNNet(in_dim=3, out_dim=4, width=128, depth=3, fourier_m=16)
-    print(f"模型架構: {model}")
-    print(f"參數總數: {model.get_num_params():,}")
+    # 建立增強模型
+    model_enh = create_enhanced_pinn(in_dim=2, out_dim=3)
+    print(f"\n增強模型: {model_enh}")
+    print(f"參數總數: {model_enh.get_num_params():,}")
     
     # 測試前向傳播
-    x = torch.randn(100, 3)  # [batch, (t,x,y)]
+    x = torch.randn(100, 3)
     with torch.no_grad():
-        y = model(x)
-    print(f"輸入形狀: {x.shape}")
-    print(f"輸出形狀: {y.shape}")
+        y_std = model_std(x)
+    print(f"\n標準模型輸出形狀: {y_std.shape}")
     
-    # 測試梯度計算（PINN 核心）
+    x2 = torch.randn(100, 2)
+    with torch.no_grad():
+        y_enh = model_enh(x2)
+    print(f"增強模型輸出形狀: {y_enh.shape}")
+    
+    # 測試梯度計算
     x.requires_grad_(True)
-    y = model(x)
-    u = y[:, 0]  # 第一個輸出變數
-    
-    # 計算 ∂u/∂x
+    y = model_std(x)
+    u = y[:, 0]
     du_dx = torch.autograd.grad(u.sum(), x, create_graph=True)[0][:, 1]
-    print(f"梯度計算成功: ∂u/∂x 形狀 = {du_dx.shape}")
+    print(f"\n梯度計算成功: ∂u/∂x 形狀 = {du_dx.shape}")
     
+    # 測試多尺度模型
     print("\n=== MultiScalePINNNet 測試 ===")
-    ms_model = MultiScalePINNNet(in_dim=3, out_dim=4, num_scales=2)
+    ms_model = multiscale_pinn(in_dim=3, out_dim=4, num_scales=2)
     print(f"多尺度模型參數: {ms_model.get_num_params():,}")
     
     with torch.no_grad():

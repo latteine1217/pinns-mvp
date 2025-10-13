@@ -82,7 +82,8 @@ class JHTDBConfig:
     }
     
     # 預設連接參數
-    DEFAULT_AUTH_TOKEN = None  # 需要在 JHTDB 註冊獲取
+    # ⚠️ 安全性：從環境變數讀取 auth token，避免硬編碼
+    DEFAULT_AUTH_TOKEN = None  # 從環境變數 JHTDB_AUTH_TOKEN 載入
     DEFAULT_CACHE_DIR = "data/jhtdb"
     DEFAULT_TIMEOUT = 300  # 5 分鐘
     MAX_RETRY = 3
@@ -328,7 +329,17 @@ class BaseJHTDBClient(ABC):
                  auth_token: Optional[str] = None,
                  cache_dir: str = None,
                  timeout: int = None):
-        self.auth_token = auth_token or JHTDBConfig.DEFAULT_AUTH_TOKEN
+        # 優先順序：傳入參數 > 環境變數 > DEFAULT_AUTH_TOKEN
+        import os
+        self.auth_token = (
+            auth_token or 
+            os.getenv('JHTDB_AUTH_TOKEN') or 
+            JHTDBConfig.DEFAULT_AUTH_TOKEN
+        )
+        
+        # 不強制要求 token（允許 Mock 客戶端運行）
+        # 實際的 token 驗證由子類負責
+        
         self.timeout = timeout or JHTDBConfig.DEFAULT_TIMEOUT
         self.cache_manager = CacheManager(cache_dir or JHTDBConfig.DEFAULT_CACHE_DIR)
         self.validator = DataValidator()
@@ -804,19 +815,19 @@ class HTTPJHTDBClient(BaseJHTDBClient):
         
         # JHTDB Web Services 配置
         self.base_url = "https://turbulence.pha.jhu.edu/service/turbulence.asmx"
-        self.test_token = "edu.jhu.pha.turbulence.testing-201406"  # 更新的測試用 token
+        self.test_token = "edu.jhu.pha.turbulence.testing-201406"  # 測試用 token (fallback)
         
-        # 使用提供的 token 或預設測試 token
-        self.auth_token = self.auth_token or self.test_token
+        # 優先級：傳入參數 > DEFAULT_AUTH_TOKEN（正式 token） > test_token
+        # 父類已經處理了：self.auth_token = auth_token or DEFAULT_AUTH_TOKEN
+        # 這裡只需確保有 token 即可
+        if not self.auth_token:
+            logger.warning("未提供 JHTDB 認證令牌，將使用測試令牌")
+            self.auth_token = self.test_token
         
         # Mock fallback 客戶端 (當token失效時使用)
         self.mock_client = None
         self.token_verified = False
         self.use_mock_fallback = False
-        
-        if not self.auth_token:
-            logger.warning("未提供 JHTDB 認證令牌，將嘗試使用測試令牌")
-            self.auth_token = self.test_token
             
         logger.info(f"HTTPJHTDBClient 已初始化，使用 token: {self.auth_token[:20]}...")
         logger.info("📡 基於最新診斷結果：使用 GetAnyCutoutWeb API + 1-based 索引")

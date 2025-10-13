@@ -1,0 +1,142 @@
+curriculum:
+  enable: true
+  stages:
+  - Re_tau: 100.0
+    epoch_range:
+    - 0
+    - 10
+    lr: 0.001
+    name: Stage1_Test
+    nu: 0.01
+    pressure_gradient: -0.1
+    sampling:
+      boundary_points: 200
+      pde_points: 512
+    weights:
+      continuity: 2.0
+      data: 1.0
+      momentum_x: 1.0
+      momentum_y: 1.0
+      periodicity: 20.0
+      prior: 0.0
+      wall_constraint: 50.0
+  - Re_tau: 300.0
+    epoch_range:
+    - 10
+    - 20
+    lr: 0.0005
+    name: Stage2_Test
+    nu: 0.00333
+    pressure_gradient: -0.333
+    sampling:
+      boundary_points: 200
+      pde_points: 512
+    weights:
+      continuity: 5.0
+      data: 1.0
+      momentum_x: 2.0
+      momentum_y: 2.0
+      periodicity: 10.0
+      prior: 0.0
+      wall_constraint: 30.0
+data:
+  source: mock
+experiment:
+  device: cpu
+  name: curriculum_test_short
+  precision: float32
+  seed: 42
+logging:
+  level: info
+  log_freq: 5
+  save_stage_checkpoints: true
+  stage_checkpoint_dir: ./checkpoints/curriculum_test
+losses:
+  adaptive_weighting: false
+  causal_weighting: false
+  continuity_weight: 2.0
+  data_weight: 10.0
+  grad_norm_alpha: 0.15
+  gradient_penalty: 0.0001
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  periodicity_weight: 20.0
+  prior_weight: 0.0
+  source_l1: 1.0e-06
+  wall_constraint_weight: 50.0
+  weight_update_freq: 50
+model:
+  activation: sine
+  depth: 3
+  fourier_m: 16
+  fourier_sigma: 1.0
+  in_dim: 2
+  out_dim: 3
+  scaling:
+    input_norm:
+      x:
+      - 0.0
+      - 25.13
+      y:
+      - -1.0
+      - 1.0
+    learnable: false
+    output_norm:
+      p:
+      - -85.0
+      - 3.0
+      u:
+      - 0.0
+      - 16.5
+      v:
+      - -0.6
+      - 0.6
+  type: fourier_mlp
+  width: 64
+physics:
+  boundary_conditions:
+    mean_pressure_gradient: -1.0
+    periodic_x: true
+    pressure_driven: true
+    wall_location:
+    - -1.0
+    - 1.0
+    wall_velocity:
+    - 0.0
+    - 0.0
+  channel_flow:
+    Re_tau: 1000.0
+    pressure_gradient: -1.0
+  domain:
+    x_range:
+    - 0.0
+    - 25.13
+    y_range:
+    - -1.0
+    - 1.0
+  nu: 0.001
+  rho: 1.0
+reproducibility:
+  benchmark: false
+  deterministic: true
+sensors:
+  K: 50
+  selection_method: wall_balanced
+  sensor_file: sensors_test.npz
+training:
+  batch_size: 256
+  checkpoint_freq: 1000
+  early_stopping: false
+  lr: 0.001
+  lr_scheduler: none
+  max_epochs: 20
+  optimizer: adam
+  patience: 100
+  sampling:
+    boundary_points: 200
+    center_enhancement: 0.4
+    high_velocity_sampling: 0.3
+    pde_points: 512
+    wall_clustering: 0.1
+  validation_freq: 100
+  weight_decay: 0.0

@@ -25,13 +25,13 @@ data:
   
 # 感測點配置
 sensors:
-  K: 12  # 感測點數量 (≤8-16)
+  K: 20  # 感測點數量 - 標準化為20個點
   selection_method: "qr_pivot"  # qr_pivot, random, uniform, adaptive
   spatial_coverage: "optimal"  # optimal, uniform, clustered
   
 # 模型架構設定
 model:
-  type: "fourier_mlp"
+  type: "enhanced_fourier_mlp"  # enhanced_fourier_mlp, fourier_mlp
   
   # 網路結構
   in_dim: 3  # [t, x, y] 或 [x, y] (定常)
@@ -44,9 +44,13 @@ model:
   fourier_m: 32  # Fourier 模態數
   fourier_sigma: 5.0  # 頻率分佈參數
   
-  # VS-PINN 變數尺度化
+  # Random Weight Factorization (RWF)
+  use_rwf: true  # 啟用 RWF 技術
+  rwf_scale_std: 0.1  # RWF 尺度化標準差
+  
+  # VS-PINN 變數尺度化 (暫時禁用)
   scaling:
-    learnable: true  # 是否可學習尺度參數
+    learnable: false  # 是否可學習尺度參數 - 暫時禁用避免整合複雜性
     input_norm: "standard"  # standard, minmax, none
     output_norm: "standard"
     
@@ -85,6 +89,20 @@ losses:
   adaptive_weighting: true
   weight_update_freq: 1000
   grad_norm_alpha: 0.9  # GradNorm 動量係數
+  adaptive_loss_terms:
+    - data
+    - momentum_x
+    - momentum_y
+    - momentum_z
+    - continuity
+    - wall_constraint
+    - periodicity
+    - inlet
+    - bulk_velocity
+    - centerline_dudy
+    - centerline_v
+    - pressure_reference
+    - initial_condition
   
   # 時間因果權重
   causal_weighting: true
@@ -93,10 +111,16 @@ losses:
 # 訓練設定
 training:
   # 最佳化器
-  optimizer: "adam"
+  optimizer: "adam"          # 可選: adam, soap
   lr: 1.0e-3
   weight_decay: 1.0e-6
   lr_scheduler: "cosine"  # cosine, step, exponential
+
+  # SOAP 優化器專屬參數（僅在 optimizer=soap 時生效）
+  soap:
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    amsgrad: false
   
   # 訓練參數
   max_epochs: 200000
@@ -106,9 +130,9 @@ training:
   early_stopping: false
   patience: 10000
   
-  # 取樣策略
+   # 取樣策略
   sampling:
-    pde_points: 10000    # PDE 殘差計算點數
+    pde_points: 4096    # PDE 殘差計算點數 - 標準化為4096個點
     boundary_points: 1000 # 邊界點數
     initial_points: 1000  # 初始條件點數 (非定常)
     
@@ -162,3 +186,9 @@ reproducibility:
   deterministic: true
   benchmark: false  # CUDA benchmark 模式
   num_workers: 4    # 資料載入器工作程序數
+
+# Channel Flow 專用設定 (載入器配置)
+channel_flow:
+  enabled: true  # 啟用 Channel Flow 資料載入器
+  strategy: "qr_pivot"  # QR-pivot 感測點選擇策略
+  target_fields: ["u", "v", "p"]  # 目標場變數

@@ -154,7 +154,8 @@ class ChannelFlowLoader:
                         strategy: str = 'qr_pivot',
                         K: int = 8,
                         noise_sigma: Optional[float] = None,
-                        dropout_prob: Optional[float] = None) -> ChannelFlowData:
+                        dropout_prob: Optional[float] = None,
+                        sensor_file: Optional[str] = None) -> ChannelFlowData:
         """
         載入感測點資料
         
@@ -163,12 +164,16 @@ class ChannelFlowLoader:
             K: 感測點數量
             noise_sigma: 噪聲水平 (可選)
             dropout_prob: 丟失概率 (可選)
+            sensor_file: 自定義感測點文件名 (可選，優先於自動構建)
             
         Returns:
             Channel Flow 資料容器
         """
-        # 構建快取檔案名
-        cache_filename = f"sensors_K{K}_{strategy}.npz"
+        # 構建快取檔案名（允許自定義覆蓋）
+        if sensor_file is not None:
+            cache_filename = sensor_file
+        else:
+            cache_filename = f"sensors_K{K}_{strategy}.npz"
         cache_path = self.cache_dir / cache_filename
         
         if not cache_path.exists():
@@ -229,6 +234,9 @@ class ChannelFlowLoader:
         domain_config = self._extract_domain_config()
         coordinate_info = self._extract_coordinate_info(data)
         
+        # 計算統計資訊（用於 VS-PINN 與自動輸出範圍）
+        statistics = self._compute_statistics(sensor_data, sensor_points)
+        
         # 創建資料容器
         channel_data = ChannelFlowData(
             sensor_points=sensor_points,
@@ -237,6 +245,7 @@ class ChannelFlowLoader:
             selection_info=selection_info,
             domain_config=domain_config,
             coordinate_info=coordinate_info,
+            statistics=statistics,  # 添加統計資訊
             metadata={
                 'source': str(cache_path),
                 'config_file': str(self.config_path),
@@ -246,12 +255,13 @@ class ChannelFlowLoader:
         )
         
         logger.info(f"Loaded {len(sensor_points)} sensor points using {strategy} strategy")
+        logger.info(f"Computed statistics for fields: {list(statistics.keys())}")
         return channel_data
     
     def load_full_field_data(self, 
                            noise_sigma: Optional[float] = None) -> ChannelFlowData:
         """
-        載入完整流場數據（所有8×8×8=512個網格點）
+        載入完整流場數據（2D網格數據用於評估）
         
         Args:
             noise_sigma: 噪聲水平 (可選)
@@ -259,58 +269,61 @@ class ChannelFlowLoader:
         Returns:
             包含完整流場的 Channel Flow 資料容器
         """
-        # 確定HDF5文件路徑
-        # 首先尋找物理一致的數據文件
-        physics_consistent_file = self.cache_dir.parent / "physics_consistent_8x8x8.h5"
+        # 尋找2D切片數據文件（與訓練數據一致）
+        cutout_file = self.cache_dir / "cutout_128x64.npz"
         
-        if physics_consistent_file.exists():
-            hdf5_path = physics_consistent_file
+        if not cutout_file.exists():
+            raise FileNotFoundError(
+                f"No 2D cutout data found: {cutout_file}\n"
+                f"Please run scripts/fetch_channel_flow.py to generate 2D data"
+            )
+        
+        logger.info(f"Loading full field data from {cutout_file}")
+        
+        # 載入2D NPZ數據
+        data = np.load(cutout_file, allow_pickle=True)
+        
+        # 提取場數據 (128, 64)
+        u = data['u']  # (128, 64)
+        v = data['v']  # (128, 64)
+        p = data['p']  # (128, 64)
+        
+        # 提取或重建座標
+        if 'coordinates' in data:
+            # 從檔案中載入座標
+            coordinates_obj = data['coordinates'].item()
+            if isinstance(coordinates_obj, dict):
+                # 新格式：座標是字典，可能有不同的鍵名
+                if 'X' in coordinates_obj and 'Y' in coordinates_obj:
+                    X = coordinates_obj['X']
+                    Y = coordinates_obj['Y']
+                elif 'x' in coordinates_obj and 'y' in coordinates_obj:
+                    # 處理另一種格式：座標向量而非網格
+                    x_vec = coordinates_obj['x']
+                    y_vec = coordinates_obj['y']
+                    X, Y = np.meshgrid(x_vec, y_vec, indexing='ij')
+                else:
+                    raise KeyError(f"Unknown coordinate format in dict: {list(coordinates_obj.keys())}")
+            else:
+                # 舊格式：座標是直接的陣列
+                X, Y = coordinates_obj
         else:
-            # 尋找其他HDF5文件
-            hdf5_files = list(self.cache_dir.parent.glob("*.h5"))
+            # 重建座標網格
+            domain_config = self._extract_domain_config()
+            x_range = domain_config.get('x_range', [0.0, 25.13])
+            y_range = domain_config.get('y_range', [-1.0, 1.0])
             
-            if not hdf5_files:
-                raise FileNotFoundError(
-                    f"No HDF5 full field data found in {self.cache_dir.parent}\n"
-                    f"Please ensure the HDF5 file exists and was generated from JHTDB data"
-                )
-            
-            # 使用第一個找到的HDF5文件
-            hdf5_path = hdf5_files[0]
-        logger.info(f"Loading full field data from {hdf5_path}")
+            x = np.linspace(x_range[0], x_range[1], 128)
+            y = np.linspace(y_range[0], y_range[1], 64)
+            X, Y = np.meshgrid(x, y, indexing='ij')
         
-        # 載入HDF5數據
-        import h5py
-        
-        with h5py.File(hdf5_path, 'r') as f:
-            # 載入所有場數據
-            u = np.array(f['u'])  # (8,8,8)
-            v = np.array(f['v'])  # (8,8,8)
-            w = np.array(f['w'])  # (8,8,8)
-            p = np.array(f['p'])  # (8,8,8)
-        
-        # 創建3D網格座標
-        # 假設域範圍來自配置文件
-        domain_config = self._extract_domain_config()
-        x_range = domain_config.get('x_range', [0.0, 25.13])
-        y_range = domain_config.get('y_range', [-1.0, 1.0])
-        z_range = domain_config.get('z_range', [0.0, 9.42])
-        
-        # 創建均勻網格
-        x = np.linspace(x_range[0], x_range[1], 8)
-        y = np.linspace(y_range[0], y_range[1], 8)
-        z = np.linspace(z_range[0], z_range[1], 8)
-        
-        X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-        
-        # 將3D座標展平為 [N, 3] 格式
-        coordinates = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
+        # 將2D座標展平為 [N, 2] 格式（匹配2D模型）
+        coordinates = np.stack([X.flatten(), Y.flatten()], axis=1)
         
         # 將場數據展平為 [N] 格式
         sensor_data = {
             'u': u.flatten(),
-            'v': v.flatten(),
-            'w': w.flatten(),
+            'v': v.flatten(), 
             'p': p.flatten()
         }
         
@@ -323,24 +336,29 @@ class ChannelFlowLoader:
         
         # 選擇資訊
         selection_info = {
-            'method': 'full_field',
+            'method': 'full_field_2d',
             'n_sensors': len(coordinates),
-            'grid_shape': (8, 8, 8),
+            'grid_shape': (128, 64),
             'total_points': len(coordinates)
         }
         
         if noise_sigma is not None:
             selection_info['noise_sigma'] = noise_sigma
         
+        # 提取域配置
+        domain_config = self._extract_domain_config()
+        
         # 提取座標系統資訊
         coordinate_info = {
-            'type': '3D_cartesian',
-            'x_range': x_range,
-            'y_range': y_range, 
-            'z_range': z_range,
-            'grid_dimensions': (8, 8, 8),
-            'coordinate_order': ['x', 'y', 'z']
+            'type': '2D_cartesian',
+            'x_range': domain_config.get('x_range', [0.0, 25.13]),
+            'y_range': domain_config.get('y_range', [-1.0, 1.0]),
+            'grid_dimensions': (128, 64),
+            'coordinate_order': ['x', 'y']
         }
+        
+        # 計算統計資訊（用於 VS-PINN 與自動輸出範圍）
+        statistics = self._compute_statistics(sensor_data, coordinates)
         
         # 創建資料容器
         channel_data = ChannelFlowData(
@@ -350,16 +368,18 @@ class ChannelFlowLoader:
             selection_info=selection_info,
             domain_config=domain_config,
             coordinate_info=coordinate_info,
+            statistics=statistics,  # 添加統計資訊
             metadata={
-                'source': str(hdf5_path),
+                'source': str(cutout_file),
                 'config_file': str(self.config_path),
                 'loader_version': '1.0',
                 'loaded_timestamp': str(np.datetime64('now')),
-                'data_type': 'full_field'
+                'data_type': 'full_field_2d'
             }
         )
         
-        logger.info(f"Loaded {len(coordinates)} full field points from 8×8×8 grid")
+        logger.info(f"Loaded {len(coordinates)} full field points from 128×64 2D grid")
+        logger.info(f"Computed statistics for fields: {list(statistics.keys())}")
         return channel_data
     
     def add_lowfi_prior(self, 
@@ -371,7 +391,7 @@ class ChannelFlowLoader:
         
         Args:
             channel_data: 現有的 Channel Flow 資料
-            prior_type: 先驗類型 ('rans', 'none')
+            prior_type: 先驗類型 ('rans', 'mock', 'none')
             interpolate_to_sensors: 是否插值到感測點
             
         Returns:
@@ -385,26 +405,27 @@ class ChannelFlowLoader:
             if prior_type == 'rans':
                 # 載入真實 RANS 資料 (如果可用)
                 lowfi_data = self._load_rans_prior()
+            elif prior_type == 'mock':
+                # 使用簡化的 mock 先驗 (基於層流解或統計量)
+                lowfi_data = self._create_mock_prior(channel_data)
             else:
-                raise ValueError(f"Unknown prior type: {prior_type}. Only 'rans' and 'none' are supported.")
+                raise ValueError(f"Unknown prior type: {prior_type}. Supported: 'rans', 'mock', 'none'.")
             
             # 插值到感測點 (如果需要)
-            if interpolate_to_sensors:
+            # 對於 mock prior，已經在感測點計算，不需要插值
+            if interpolate_to_sensors and prior_type != 'mock':
                 prior_fields = self.interpolator.interpolate_to_points(
                     lowfi_data, 
                     channel_data.sensor_points
                 )
             else:
-                # 使用全場資料
+                # 使用全場資料或 mock prior 已計算的感測點值
                 prior_fields = lowfi_data.fields
-            
-            # 計算統計資訊 (VS-PINN 用)
-            statistics = self.lowfi_loader.get_statistics(lowfi_data)
             
             # 更新資料容器
             channel_data.lowfi_prior = prior_fields
             channel_data.lowfi_metadata = lowfi_data.metadata
-            channel_data.statistics = statistics
+            # 不覆蓋 statistics - 保留 load_sensor_data() 中計算的真實資料統計
             
             logger.info(f"Added {prior_type} low-fidelity prior with {len(prior_fields)} fields")
             
@@ -413,7 +434,7 @@ class ChannelFlowLoader:
             # 創建空的先驗資料
             channel_data.lowfi_prior = {}
             channel_data.lowfi_metadata = {'type': 'none', 'error': str(e)}
-            channel_data.statistics = {}
+            # 不覆蓋 statistics - 保留原有的統計資訊
         
         return channel_data
     
@@ -563,6 +584,68 @@ class ChannelFlowLoader:
         
         return coord_info
     
+    def _compute_statistics(self, 
+                          sensor_data: Dict[str, np.ndarray],
+                          sensor_points: np.ndarray) -> Dict[str, Dict[str, float]]:
+        """
+        計算場資料的統計資訊（用於 VS-PINN 與自動輸出範圍）
+        
+        Args:
+            sensor_data: 感測器場資料字典 {'u': array, 'v': array, 'p': array}
+            sensor_points: 感測點座標 (K, 2)
+            
+        Returns:
+            統計資訊字典，格式：
+            {
+                'u': {'min': float, 'max': float, 'mean': float, 'std': float, 'range': (min, max)},
+                'v': {...},
+                'p': {...},
+                'x': {'min': float, 'max': float, 'range': (min, max)},
+                'y': {...}
+            }
+        """
+        statistics = {}
+        
+        # 計算場變量的統計資訊
+        for field_name, field_values in sensor_data.items():
+            field_values = np.asarray(field_values).flatten()
+            
+            # 基本統計量
+            field_min = float(np.min(field_values))
+            field_max = float(np.max(field_values))
+            field_mean = float(np.mean(field_values))
+            field_std = float(np.std(field_values))
+            
+            # 添加安全邊界（±10% 範圍，避免邊界值被截斷）
+            margin = 0.1 * (field_max - field_min)
+            safe_min = field_min - margin
+            safe_max = field_max + margin
+            
+            statistics[field_name] = {
+                'min': field_min,
+                'max': field_max,
+                'mean': field_mean,
+                'std': field_std,
+                'range': (safe_min, safe_max),  # 帶安全邊界的範圍
+                'raw_range': (field_min, field_max)  # 原始範圍
+            }
+        
+        # 計算座標的統計資訊（自動檢測維度）
+        if sensor_points.size > 0:
+            coord_names = ['x', 'y', 'z'][:sensor_points.shape[1]]  # 根據實際維度
+            for i, coord_name in enumerate(coord_names):
+                coord_values = sensor_points[:, i]
+                coord_min = float(np.min(coord_values))
+                coord_max = float(np.max(coord_values))
+                
+                statistics[coord_name] = {
+                    'min': coord_min,
+                    'max': coord_max,
+                    'range': (coord_min, coord_max)
+                }
+        
+        logger.debug(f"Computed statistics: {statistics}")
+        return statistics
 
 
     def _load_rans_prior(self) -> LowFiData:
@@ -581,6 +664,69 @@ class ChannelFlowLoader:
             f"No RANS prior data found in {self.cache_dir}. "
             f"Searched for: {rans_patterns}. "
             f"Mock fallback has been removed for this system."
+        )
+    
+    def _create_mock_prior(self, channel_data: ChannelFlowData) -> LowFiData:
+        """
+        創建簡化的 mock 先驗資料 (基於層流解或統計量估計)
+        用於測試或缺少真實 RANS 時的暫時替代方案
+        
+        Args:
+            channel_data: 現有的 Channel Flow 資料 (用於提取幾何資訊)
+            
+        Returns:
+            Mock 低保真資料容器
+        """
+        import numpy as np
+        from pinnx.dataio.lowfi_loader import LowFiData
+        
+        logger.info("Creating mock low-fidelity prior based on laminar solution")
+        
+        # 提取幾何資訊
+        y_range = channel_data.domain_config.get('y_range', [-1.0, 1.0])
+        
+        # 從感測點座標創建場
+        coords = channel_data.sensor_points  # (K, 2)
+        x_coords = coords[:, 0]
+        y_coords = coords[:, 1]
+        
+        # 層流通道流解析解: u = U_max * (1 - (y/h)^2), v = 0, p 線性分佈
+        h = (y_range[1] - y_range[0]) / 2.0  # 半高度
+        y_center = (y_range[1] + y_range[0]) / 2.0
+        y_norm = (y_coords - y_center) / h  # 標準化到 [-1, 1]
+        
+        # 基於 Poiseuille 流的速度分佈
+        u_max = 1.5  # 平均速度的1.5倍（層流拋物線型最大值）
+        u_laminar = u_max * (1.0 - y_norm**2)
+        v_laminar = np.zeros_like(u_laminar)
+        
+        # 簡化的壓力場（線性下降）
+        p_gradient = -1.0  # 從配置讀取
+        p_laminar = p_gradient * x_coords
+        
+        # 創建 LowFiData 容器 (coordinates 需要字典格式)
+        mock_coords = {
+            'x': x_coords,
+            'y': y_coords
+        }
+        
+        mock_fields = {
+            'u': u_laminar,
+            'v': v_laminar,
+            'p': p_laminar
+        }
+        
+        mock_metadata = {
+            'type': 'mock_laminar',
+            'description': 'Analytical laminar channel flow solution',
+            'u_max': u_max,
+            'pressure_gradient': p_gradient
+        }
+        
+        return LowFiData(
+            coordinates=mock_coords,
+            fields=mock_fields,
+            metadata=mock_metadata
         )
     
     def get_available_datasets(self) -> List[str]:
@@ -676,7 +822,8 @@ def load_channel_flow_data(strategy: str = 'qr_pivot',
 def prepare_training_data(strategy: str = 'qr_pivot',
                          K: int = 8, 
                          config_path: Optional[Union[str, Path]] = None,
-                         target_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+                         target_fields: Optional[List[str]] = None,
+                         sensor_file: Optional[str] = None) -> Dict[str, Any]:
     """
     便利函數：準備 PINNs 訓練資料
     
@@ -685,6 +832,7 @@ def prepare_training_data(strategy: str = 'qr_pivot',
         K: 感測點數量
         config_path: 配置檔案路徑  
         target_fields: 目標場列表
+        sensor_file: 自定義感測點文件名 (可選)
         
     Returns:
         PINNs 訓練資料字典
@@ -692,7 +840,7 @@ def prepare_training_data(strategy: str = 'qr_pivot',
     loader = ChannelFlowLoader(config_path=config_path)
     
     # 載入完整資料
-    channel_data = loader.load_sensor_data(strategy=strategy, K=K)
+    channel_data = loader.load_sensor_data(strategy=strategy, K=K, sensor_file=sensor_file)
     channel_data = loader.add_lowfi_prior(channel_data, prior_type='mock')
     
     # 準備訓練格式

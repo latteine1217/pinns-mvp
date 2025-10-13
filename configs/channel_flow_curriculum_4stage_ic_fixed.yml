@@ -1,0 +1,371 @@
+# Channel Flow Curriculum Training - 4-Stage FIXED VERSION
+# 🎯 修復目標：解決 Data Loss 被壓制的問題
+# 📊 診斷結果：原版 Data Loss 增加 986%，從 1.39 → 15.14
+# 🔧 主要修復：
+#   1. Data Loss 權重: 1.0 → 10.0 (提升 10 倍)
+#   2. IC/BC 權重: 大幅降低 (300→50, 200→50)
+#   3. V 速度範圍: [-0.6, 0.6] → [-0.5, 0.6] (匹配真實數據)
+#   4. 訓練時長: 4000 → 6000 epochs (更平滑過渡)
+
+# 基本實驗設定
+experiment:
+  name: "pinnx_channel_flow_curriculum_ic_fixed"
+  version: "v2.0_data_loss_priority"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "🔥 修復版：Data Loss 優先，平衡權重策略"
+
+# 🆕 Initial Condition 配置（降低權重）
+initial_condition:
+  enabled: true
+  use_data: true
+  n_points: 256
+  time: 0.0
+
+# 🆕 Inlet 邊界條件配置
+inlet:
+  enabled: true
+  n_points: 64
+  x_position: -1.0
+
+# 資料相關設定 - JHTDB Channel Flow
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000)"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+  noise_sigma: 0.02
+  dropout_prob: 0.10
+  
+  slice_config:
+    plane: "xy"
+    z_position: 4.71
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# 感測點配置
+sensors:
+  K: 80
+  selection_method: "wall_balanced"
+  sensor_file: "sensors_K80_wall_balanced.npz"
+  
+  spatial_coverage: "proportional_layering"
+  layer_allocation: [8, 24, 15, 24, 9]
+  sampling_method: "u_quantile"
+
+# 模型架構設定
+model:
+  type: "fourier_mlp"
+  in_dim: 2
+  out_dim: 3
+  width: 256
+  depth: 6
+  activation: "sine"
+  
+  fourier_m: 48
+  fourier_sigma: 3.0
+  
+  scaling:
+    learnable: false
+    input_norm:
+      x: [0.0, 25.13]
+      y: [-1.0, 1.0]
+    output_norm:
+      u: [0.0, 16.5]
+      v: [-0.5, 0.6]      # 🔥 修復：從 [-0.6, 0.6] → [-0.5, 0.6]
+      p: [-85.0, 3.0]
+
+# 物理設定
+physics:
+  nu: 1.0e-3
+  rho: 1.0
+  
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 41980.0
+    u_tau: 1.0
+    pressure_gradient: -1.0
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    pressure_driven: true
+    mean_pressure_gradient: -1.0
+
+# 🚀🚀🚀 課程訓練核心配置（修復版）
+curriculum:
+  enable: true
+  mode: "staged"
+  total_epochs: 6000    # 🔥 延長訓練：4000 → 6000
+  
+  # 四階段配置（延長 + 平滑過渡）
+  stages:
+    - name: "Stage1_Laminar"
+      epoch_range: [0, 1500]    # 🔥 延長：1000 → 1500
+      description: "近似層流 Re_tau=100，建立基礎速度剖面"
+      
+      Re_tau: 100.0
+      nu: 1.0e-2
+      pressure_gradient: -0.1
+      
+      # 🔥 核心修復：大幅提升 Data 權重，降低 IC/BC 權重
+      weights:
+        data: 10.0                    # 🔥 1.0 → 10.0 (提升 10 倍)
+        wall_constraint: 50.0         # 🔥 200 → 50 (降低 4 倍)
+        periodicity: 25.0             # 🔥 100 → 25 (降低 4 倍)
+        inlet: 50.0                   # 🔥 200 → 50 (降低 4 倍)
+        initial_condition: 50.0       # 🔥 300 → 50 (降低 6 倍)
+        momentum_x: 5.0               # 🔥 2 → 5 (提升物理方程)
+        momentum_y: 5.0               # 🔥 2 → 5
+        continuity: 10.0              # 🔥 5 → 10
+        prior: 0.0
+      
+      inlet:
+        profile_type: 'parabolic'
+        u_max: 6.0
+      
+      sampling:
+        pde_points: 2048
+        boundary_points: 3000
+      
+      lr: 1.0e-3
+      
+    - name: "Stage2_Transition"
+      epoch_range: [1500, 3000]    # 🔥 延長：1000-2000 → 1500-3000
+      description: "過渡湍流 Re_tau=300，對數律初現"
+      
+      Re_tau: 300.0
+      nu: 3.33e-3
+      pressure_gradient: -0.333
+      
+      # 🔥 繼續優先 Data Loss
+      weights:
+        data: 10.0                    # 🔥 保持高權重
+        wall_constraint: 40.0         # 🔥 100 → 40 (平滑降低)
+        periodicity: 20.0             # 🔥 50 → 20
+        inlet: 40.0                   # 🔥 100 → 40
+        initial_condition: 40.0       # 🔥 150 → 40 (顯著降低)
+        momentum_x: 8.0               # 🔥 5 → 8 (逐步提升)
+        momentum_y: 8.0
+        continuity: 15.0              # 🔥 10 → 15
+        prior: 0.0
+      
+      inlet:
+        profile_type: 'log_law'
+        u_max: 10.0
+      
+      sampling:
+        pde_points: 3072
+        boundary_points: 2500
+      
+      lr: 8.0e-4
+      
+    - name: "Stage3_Turbulent"
+      epoch_range: [3000, 4500]    # 🔥 延長：2000-3000 → 3000-4500
+      description: "充分發展湍流 Re_tau=550，壁面律明確"
+      
+      Re_tau: 550.0
+      nu: 1.82e-3
+      pressure_gradient: -0.55
+      
+      # 🔥 Data Loss 仍為主導
+      weights:
+        data: 10.0                    # 🔥 保持最高權重
+        wall_constraint: 30.0         # 🔥 50 → 30
+        periodicity: 15.0             # 🔥 25 → 15
+        inlet: 30.0                   # 🔥 50 → 30
+        initial_condition: 30.0       # 🔥 50 → 30 (進一步降低)
+        momentum_x: 10.0              # 🔥 保持
+        momentum_y: 10.0
+        continuity: 20.0              # 🔥 保持
+        prior: 0.0
+      
+      inlet:
+        profile_type: 'log_law'
+        u_max: 13.5
+      
+      sampling:
+        pde_points: 4096
+        boundary_points: 2000
+      
+      lr: 5.0e-4
+      
+    - name: "Stage4_HighRe"
+      epoch_range: [4500, 6000]    # 🔥 延長：3000-4000 → 4500-6000
+      description: "目標高雷諾數 Re_tau=1000，完整湍流"
+      
+      Re_tau: 1000.0
+      nu: 1.0e-3
+      pressure_gradient: -1.0
+      
+      # 🔥 最終階段：Data Loss 與物理平衡
+      weights:
+        data: 10.0                    # 🔥 1.0 → 10.0 (保持高優先級)
+        wall_constraint: 30.0         # 🔥 100 → 30 (顯著降低)
+        periodicity: 15.0             # 🔥 50 → 15
+        inlet: 30.0                   # 🔥 100 → 30
+        initial_condition: 30.0       # 🔥 100 → 30 (大幅降低)
+        momentum_x: 10.0              # 🔥 保持
+        momentum_y: 10.0
+        continuity: 20.0
+        prior: 0.0
+      
+      inlet:
+        profile_type: 'turbulent'
+        u_max: 16.5
+      
+      sampling:
+        pde_points: 4096
+        boundary_points: 2000
+      
+      lr: 3.0e-4
+
+# 損失函數基礎配置
+losses:
+  data_weight: 10.0                        # 🔥 1.0 → 10.0
+  wall_constraint_weight: 30.0             # 🔥 100 → 30
+  periodicity_weight: 15.0                 # 🔥 50 → 15
+  inlet_weight: 30.0                       # 🔥 100 → 30
+  initial_condition_weight: 30.0           # 🔥 100 → 30
+  momentum_x_weight: 10.0
+  momentum_y_weight: 10.0
+  continuity_weight: 20.0
+  prior_weight: 0.0
+  
+  source_l1: 1.0e-6
+  gradient_penalty: 1.0e-4
+  
+  adaptive_weighting: true
+  weight_update_freq: 50
+  grad_norm_alpha: 0.15
+  
+  causal_weighting: false
+
+# 訓練設定
+training:
+  optimizer: "adam"
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  lr_scheduler: "cosine"
+  
+  max_epochs: 6000              # 🔥 4000 → 6000
+  batch_size: 1024
+  validation_freq: 100
+  checkpoint_freq: 100
+  early_stopping: false
+  patience: 500
+  
+  sampling:
+    pde_points: 4096
+    boundary_points: 2000
+    wall_clustering: 0.1
+    center_enhancement: 0.4
+    high_velocity_sampling: 0.3
+
+# Ensemble 與不確定性量化
+ensemble:
+  enable: false
+  n_models: 8
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7]
+  uncertainty_quantification: true
+  confidence_level: 0.95
+
+# 評估設定
+evaluation:
+  grid_resolution: [256, 128]
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "velocity_profile"
+    - "friction_coefficient"
+    - "turbulence_statistics"
+    - "pressure_drop"
+    - "mass_conservation"
+    
+  thresholds:
+    l2_error: 0.15
+    wall_shear_error: 0.10
+    velocity_profile_error: 0.08
+    rmse_improvement: 0.30
+    mass_conservation_error: 0.1
+    
+  channel_flow_validation:
+    log_law_region: [30, 300]
+    von_karman_constant: 0.41
+    wake_parameter: 0.55
+
+# 日誌與儲存
+logging:
+  level: "info"
+  log_freq: 50
+  save_predictions: true
+  save_checkpoints: true
+  
+  save_velocity_profiles: true
+  save_wall_quantities: true
+  save_turbulence_fields: true
+  
+  monitor_conservation: true
+  conservation_check_freq: 25
+  
+  save_stage_checkpoints: true
+  stage_checkpoint_dir: "./checkpoints/curriculum"
+  
+  wandb:
+    project: "pinnx-channel-flow-curriculum-fixed"
+    entity: null
+    tags: ["pinns", "curriculum", "channel_flow", "data_loss_fix", "v2.0"]
+
+# 重現性設定
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# Channel Flow Re1000 專用驗證設定
+validation:
+  dns_benchmark: true
+  dns_data_path: "./data/jhtdb/channel_flow_re1000/dns_reference"
+  
+  turbulence_statistics:
+    reynolds_stress: true
+    turbulent_kinetic_energy: true
+    dissipation_rate: true
+    
+  wall_quantities:
+    skin_friction: true
+    heat_transfer: false
+    pressure_fluctuation: true
+
+# 效能優化設定
+performance:
+  mixed_precision: false
+  gradient_checkpointing: false
+  vectorized_operations: true
+  parallel_sampling: true
+  max_gpu_memory_fraction: 0.9
+  clear_cache_freq: 1000

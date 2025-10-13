@@ -86,6 +86,7 @@ class VSPINNChannelFlow(nn.Module):
         scaling_factors: Optional[Dict[str, float]] = None,
         physics_params: Optional[Dict[str, float]] = None,
         domain_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        loss_config: Optional[Dict[str, Any]] = None,  # 🔴 新增：接收損失配置
     ):
         super().__init__()
         
@@ -123,7 +124,8 @@ class VSPINNChannelFlow(nn.Module):
         # === 損失歸一化參數 ===
         self.loss_normalizers: Dict[str, float] = {}  # 存儲每個損失項的參考值
         self.normalize_losses = True  # 損失歸一化開關（可通過配置控制）
-        self.warmup_epochs = 5  # Warmup 階段：收集損失統計
+        # 🔴 修正：從配置讀取 warmup_epochs，默認 5
+        self.warmup_epochs = (loss_config or {}).get('warmup_epochs', 5)
         self.normalizer_momentum = 0.9  # 滑動平均動量（平滑更新）
         
         # 验证配置
@@ -191,58 +193,65 @@ class VSPINNChannelFlow(nn.Module):
         self, 
         field: torch.Tensor, 
         coords: torch.Tensor, 
-        order: int = 1
+        order: int = 1,
+        scaled_coords: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        計算物理場對原始坐標的梯度
-        
-        注意：當前實現直接對原始坐標求導（標準 PINN 方式）
-        因為模型本身在原始空間 coords 訓練，而非縮放空間。
-        
-        TODO: 未來實現真正的 VS-PINN 需要在模型輸入階段預縮放坐標：
-            scaled_coords = self.scale_coordinates(coords)
-            predictions = model(scaled_coords)  # 模型在縮放空間訓練
-            # 此時梯度自動包含鏈式法則縮放
+        計算物理場對物理座標的梯度，支援 VS-PINN 的變數尺度化。
         
         Args:
             field: 標量場 [batch, 1]（如 u, v, w, p）
-            coords: 原始物理坐標 [batch, 3] = [x, y, z]（需要 requires_grad=True）
+            coords: 原始物理坐標 [batch, 3] = [x, y, z]
             order: 微分階數 (1 或 2)
+            scaled_coords: 若提供，視為模型輸入的縮放座標 (X, Y, Z)，
+                           將自動套用鏈式法則回推至物理座標。
             
         Returns:
-            梯度字典 {'x': ∂f/∂x, 'y': ∂f/∂y, 'z': ∂f/∂z, ...}
+            梯度字典：
+                order=1 → {'x': ∂f/∂x, 'y': ∂f/∂y, 'z': ∂f/∂z}
+                order=2 → {'xx': ∂²f/∂x², ...}
         """
+        base_coords = scaled_coords if scaled_coords is not None else coords
+        
         if order == 1:
-            # 一階偏導數：直接對原始坐標求導
-            grad_x = compute_gradient_3d(field, coords, component=0)
-            grad_y = compute_gradient_3d(field, coords, component=1)
-            grad_z = compute_gradient_3d(field, coords, component=2)
+            grad_x_base = compute_gradient_3d(field, base_coords, component=0)
+            grad_y_base = compute_gradient_3d(field, base_coords, component=1)
+            grad_z_base = compute_gradient_3d(field, base_coords, component=2)
             
-            return {
-                'x': grad_x, 'y': grad_y, 'z': grad_z,
-            }
+            if scaled_coords is not None:
+                grad_x = grad_x_base * self.N_x  # type: ignore[operator]
+                grad_y = grad_y_base * self.N_y  # type: ignore[operator]
+                grad_z = grad_z_base * self.N_z  # type: ignore[operator]
+            else:
+                grad_x, grad_y, grad_z = grad_x_base, grad_y_base, grad_z_base
+            
+            return {'x': grad_x, 'y': grad_y, 'z': grad_z}
         
-        elif order == 2:
-            # 二階偏導數：∂²f/∂x², ∂²f/∂y², ∂²f/∂z²
-            grad_x = compute_gradient_3d(field, coords, component=0)
-            grad_y = compute_gradient_3d(field, coords, component=1)
-            grad_z = compute_gradient_3d(field, coords, component=2)
+        if order == 2:
+            grad_x_base = compute_gradient_3d(field, base_coords, component=0)
+            grad_y_base = compute_gradient_3d(field, base_coords, component=1)
+            grad_z_base = compute_gradient_3d(field, base_coords, component=2)
             
-            grad_xx = compute_gradient_3d(grad_x, coords, component=0)
-            grad_yy = compute_gradient_3d(grad_y, coords, component=1)
-            grad_zz = compute_gradient_3d(grad_z, coords, component=2)
+            grad_xx_base = compute_gradient_3d(grad_x_base, base_coords, component=0)
+            grad_yy_base = compute_gradient_3d(grad_y_base, base_coords, component=1)
+            grad_zz_base = compute_gradient_3d(grad_z_base, base_coords, component=2)
             
-            return {
-                'xx': grad_xx, 'yy': grad_yy, 'zz': grad_zz,
-            }
+            if scaled_coords is not None:
+                grad_xx = grad_xx_base * (self.N_x ** 2)  # type: ignore[operator]
+                grad_yy = grad_yy_base * (self.N_y ** 2)  # type: ignore[operator]
+                grad_zz = grad_zz_base * (self.N_z ** 2)  # type: ignore[operator]
+            else:
+                grad_xx, grad_yy, grad_zz = grad_xx_base, grad_yy_base, grad_zz_base
+            
+            return {'xx': grad_xx, 'yy': grad_yy, 'zz': grad_zz}
         
-        else:
-            raise ValueError(f"不支持的微分階數: {order}")
+        raise ValueError(f"不支持的微分階數: {order}")
     
     def compute_laplacian(
         self, 
         field: torch.Tensor, 
-        coords: torch.Tensor
+        coords: torch.Tensor,
+        scaled_coords: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         计算 Laplacian: ∇²f = ∂²f/∂x² + ∂²f/∂y² + ∂²f/∂z²
@@ -254,7 +263,7 @@ class VSPINNChannelFlow(nn.Module):
         Returns:
             laplacian: [batch, 1]
         """
-        second_derivs = self.compute_gradients(field, coords, order=2)
+        second_derivs = self.compute_gradients(field, coords, order=2, scaled_coords=scaled_coords)
         laplacian = second_derivs['xx'] + second_derivs['yy'] + second_derivs['zz']
         
         return laplacian
@@ -262,7 +271,8 @@ class VSPINNChannelFlow(nn.Module):
     def compute_momentum_residuals(
         self, 
         coords: torch.Tensor, 
-        predictions: torch.Tensor
+        predictions: torch.Tensor,
+        scaled_coords: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
         计算 3D 不可压缩 NS 方程的动量残差（稳态版本）
@@ -273,23 +283,26 @@ class VSPINNChannelFlow(nn.Module):
             u∂w/∂x + v∂w/∂y + w∂w/∂z = -∂p/∂z + ν∇²w
         
         Args:
-            coords: [batch, 3] = [x, y, z] 物理坐标（需要已設置 requires_grad=True）
+            coords: [batch, 3] = [x, y, z] 物理坐标
             predictions: [batch, 4] = [u, v, w, p] 预测值（模型輸出，自動追蹤梯度）
+            scaled_coords: 模型輸入使用的縮放座標 (X, Y, Z)，若為 None 則視為未縮放
             
         Returns:
             残差字典 {'momentum_x', 'momentum_y', 'momentum_z'}
         """
-        # 提取场变量
+        if scaled_coords is None:
+            scaled_coords = self.scale_coordinates(coords)
+        
         u = predictions[:, 0:1]
         v = predictions[:, 1:2]
         w = predictions[:, 2:3]
         p = predictions[:, 3:4]
         
         # === 计算一阶导数（对流项 + 压力项） ===
-        u_grads = self.compute_gradients(u, coords, order=1)
-        v_grads = self.compute_gradients(v, coords, order=1)
-        w_grads = self.compute_gradients(w, coords, order=1)
-        p_grads = self.compute_gradients(p, coords, order=1)
+        u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
+        v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
+        w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
+        p_grads = self.compute_gradients(p, coords, order=1, scaled_coords=scaled_coords)
         
         # 对流项
         conv_u = u * u_grads['x'] + v * u_grads['y'] + w * u_grads['z']
@@ -302,9 +315,9 @@ class VSPINNChannelFlow(nn.Module):
         pressure_z = p_grads['z'] / self.rho  # type: ignore[operator]
         
         # === 计算二阶导数（黏性项） ===
-        laplacian_u = self.compute_laplacian(u, coords)
-        laplacian_v = self.compute_laplacian(v, coords)
-        laplacian_w = self.compute_laplacian(w, coords)
+        laplacian_u = self.compute_laplacian(u, coords, scaled_coords=scaled_coords)
+        laplacian_v = self.compute_laplacian(v, coords, scaled_coords=scaled_coords)
+        laplacian_w = self.compute_laplacian(w, coords, scaled_coords=scaled_coords)
         
         viscous_u = self.nu * laplacian_u  # type: ignore[operator]
         viscous_v = self.nu * laplacian_v  # type: ignore[operator]
@@ -329,7 +342,8 @@ class VSPINNChannelFlow(nn.Module):
     def compute_continuity_residual(
         self, 
         coords: torch.Tensor, 
-        predictions: torch.Tensor
+        predictions: torch.Tensor,
+        scaled_coords: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         计算连续方程残差（不可压缩条件）
@@ -338,21 +352,24 @@ class VSPINNChannelFlow(nn.Module):
             ∂u/∂x + ∂v/∂y + ∂w/∂z = 0
         
         Args:
-            coords: [batch, 3] = [x, y, z]（需要已設置 requires_grad=True）
+            coords: [batch, 3] = [x, y, z] 物理座標
             predictions: [batch, 4] = [u, v, w, p]（模型輸出，自動追蹤梯度）
+            scaled_coords: 模型輸入使用的縮放座標 (X, Y, Z)，若為 None 則視為未縮放
             
         Returns:
             continuity_residual: [batch, 1]
         """
-        # 提取速度分量
+        if scaled_coords is None:
+            scaled_coords = self.scale_coordinates(coords)
+        
         u = predictions[:, 0:1]
         v = predictions[:, 1:2]
         w = predictions[:, 2:3]
         
         # 计算散度
-        u_grads = self.compute_gradients(u, coords, order=1)
-        v_grads = self.compute_gradients(v, coords, order=1)
-        w_grads = self.compute_gradients(w, coords, order=1)
+        u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
+        v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
+        w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
         
         divergence = u_grads['x'] + v_grads['y'] + w_grads['z']
         
@@ -421,14 +438,16 @@ class VSPINNChannelFlow(nn.Module):
     def compute_wall_shear_stress(
         self, 
         coords: torch.Tensor, 
-        predictions: torch.Tensor
+        predictions: torch.Tensor,
+        scaled_coords: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
         计算壁面剪应力 τ_w = μ (∂u/∂y)|_{y=±1}
         
         Args:
-            coords: [batch, 3] = [x, y, z]（需要 requires_grad=True）
+            coords: [batch, 3] = [x, y, z]
             predictions: [batch, 4] = [u, v, w, p]
+            scaled_coords: 模型輸入的縮放座標（可選）
             
         Returns:
             壁面剪应力 {'tau_w_lower', 'tau_w_upper'}
@@ -436,7 +455,10 @@ class VSPINNChannelFlow(nn.Module):
         u = predictions[:, 0:1]
         
         # 计算 ∂u/∂y
-        u_grads = self.compute_gradients(u, coords, order=1)
+        if scaled_coords is None:
+            scaled_coords = self.scale_coordinates(coords)
+        
+        u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
         du_dy = u_grads['y']
         
         # 壁面位置（使用容差比較避免浮點數精度問題）
@@ -512,6 +534,7 @@ class VSPINNChannelFlow(nn.Module):
         coords: torch.Tensor,
         predictions: torch.Tensor,
         bandwidth: float = 1e-3,
+        scaled_coords: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         计算中心线对称约束：L_sym = (∂u/∂y|_{y=0})² + v²|_{y=0}
@@ -530,9 +553,10 @@ class VSPINNChannelFlow(nn.Module):
         2. L_sym_v: v²|_{y=0} → 强制法向速度为零
         
         Args:
-            coords: [batch, 3] = [x, y, z] 物理坐标（需要 requires_grad=True）
+            coords: [batch, 3] = [x, y, z] 物理坐标
             predictions: [batch, 4] = [u, v, w, p] 预测值
             bandwidth: 中心线带宽 ε，|y| < ε 的点视为中心线区域（默认 1e-3）
+            scaled_coords: 模型輸入的縮放座標（若啟用 VS-PINN）
             
         Returns:
             Dict 包含两项损失:
@@ -560,7 +584,10 @@ class VSPINNChannelFlow(nn.Module):
         
         # === 约束 1: ∂u/∂y|_{y≈0} = 0 ===
         # 计算 u 对 y 的偏导数
-        u_grads = self.compute_gradients(u, coords, order=1)
+        if scaled_coords is None:
+            scaled_coords = self.scale_coordinates(coords)
+        
+        u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
         du_dy = u_grads['y']  # [batch, 1]
         
         # 提取中心线区域的梯度
@@ -709,12 +736,21 @@ class VSPINNChannelFlow(nn.Module):
         normalized = {}
         for key, loss in loss_dict.items():
             normalizer = self.loss_normalizers.get(key, 1.0)
-            
-            # 確保 normalizer 不為零（避免除零錯誤）
             if normalizer < 1e-12:
                 normalizer = 1.0
-            
-            normalized[key] = loss / normalizer
+
+            normalized_loss = loss / normalizer
+
+            if key in {
+                'momentum_x',
+                'momentum_y',
+                'momentum_z',
+                'continuity',
+                'periodicity'
+            }:
+                normalized_loss = normalized_loss / self.N_max_sq
+
+            normalized[key] = normalized_loss
         
         return normalized
     

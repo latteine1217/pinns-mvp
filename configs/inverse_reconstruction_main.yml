@@ -1,0 +1,877 @@
+# ============================================================================
+# PINNs 逆重建主配置檔案
+# 少量資料 × 物理先驗：基於公開湍流資料庫的PINNs逆重建
+# ============================================================================
+# 研究目標：
+# 從 K（≤30-80）個空間點與/或短時間序列出發，在低保真場（RANS/粗LES/下採樣DNS）
+# 作為軟先驗下，重建瞬時或統計穩態的速度與壓力場
+# 
+# 資料來源：JHTDB Channel Flow Re_tau=1000
+# 成功門檻：
+#   1. 速度/壓力場相對 L2 error ≤ 10-15%
+#   2. 統計/能譜/壁面剪應力 RMSE 下降 ≥ 30%（相較低保真）
+#   3. 量測噪聲 σ=1-3%、遺失 10% 下，K ≤ 50 達標
+#   4. VS-PINN + 動態權重使收斂 epoch 下降 ≥ 30%
+#   5. UQ 方差與真實誤差相關 r ≥ 0.6
+# ============================================================================
+
+# ============================================================================
+# 1. 實驗基本設定
+# ============================================================================
+experiment:
+  name: "pinnx_inverse_reconstruction"
+  version: "v2.0"
+  description: "Sparse-Data, Physics-Informed Inversion on Public Turbulence Benchmarks"
+  seed: 42
+  device: "auto"  # auto: CUDA > MPS > CPU
+  precision: "float32"
+  
+  # 實驗階段標記
+  phase: "training"  # training, validation, production
+  
+  # 研究重點標記
+  research_focus:
+    - "sparse_reconstruction"     # 稀疏重建
+    - "lowfi_prior_fusion"        # 低保真先驗融合
+    - "source_term_inversion"     # 源項逆重建
+    - "uncertainty_quantification" # 不確定性量化
+
+# ============================================================================
+# 2. 資料配置 - JHTDB Channel Flow Re1000
+# ============================================================================
+data:
+  # 高保真資料來源
+  source: "jhtdb"
+  dataset: "channel"
+  
+  # JHTDB Channel Flow Re_tau=1000 配置
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "Channel Flow Re_tau=1000 from JHTDB"
+    
+    # 完整域範圍（基於摩擦速度 u_tau 標準化）
+    domain:
+      x: [0, 25.13]      # x ∈ [0, 8π] 流向（週期）
+      y: [-1.0, 1.0]     # y ∈ [-1, 1] 壁法向
+      z: [0, 9.42]       # z ∈ [0, 3π] 展向（週期）
+    
+    # DNS 解析度
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    
+    # 時間範圍
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    
+    # 物理量
+    variables: ['u', 'v', 'w', 'p']
+    
+  # 2D 切片配置（初始驗證用）
+  slice_config:
+    plane: "xy"              # x-y 平面（流向-壁法向）
+    z_position: 4.71         # z = 3π/2 中間切片
+    steady_state: true       # 使用時間平均場
+    time_average_window: [20.0, 26.0]  # 統計穩態窗口
+  
+  # 資料預處理
+  normalize: true
+  normalization_method: "friction_velocity"  # 基於摩擦速度標準化
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+  
+  # 真實環境模擬：噪聲與遺失
+  noise_sigma: 0.02        # 2% 高斯噪聲（σ=1-3% 範圍內）
+  dropout_prob: 0.10       # 10% 隨機遺失
+  
+  # 資料增強（可選）
+  augmentation:
+    enabled: false
+    methods: []  # spatial_jitter, temporal_shift
+
+# ============================================================================
+# 3. 稀疏感測點配置 - 核心研究重點
+# ============================================================================
+# 策略說明：
+# - 監督點（sensors/data points）：固定為主，小幅追加為輔
+# - 殘差點（collocation points）：週期性重選/增補
+# ============================================================================
+sensors:
+  # -------------------------
+  # 3.1 監督點（Sensor/Data Points）配置
+  # -------------------------
+  # 用途：少量真值監督 PINN 輸出（u, v, w, p）
+  # 策略：離線一次初始化 + 可選少量追加
+  
+  # 初始監督點數量 - 目標 K ≤ 30-80
+  K: 50  # 基準設定：50 個錨點（全程保留）
+  
+  # QR-pivot 最適感測配置（離線初始化）
+  selection_method: "qr_pivot"  # qr_pivot, random, uniform, adaptive, greedy
+  
+  # 感測點佈局策略
+  spatial_coverage: "physics_guided"  # optimal, uniform, wall_biased, physics_guided
+  
+  # Channel Flow 物理引導感測策略
+  physics_guided:
+    # 壁面增強策略
+    wall_enhancement: true
+    wall_region_ratio: 0.4       # 40% 點配置在 y+ < 30 近壁區
+    
+    # 多尺度覆蓋
+    boundary_layer_focus: true   # 邊界層重點覆蓋
+    log_layer_coverage: true     # 對數律層覆蓋
+    wake_region_coverage: true   # 尾流區覆蓋
+    
+    # 湍流結構引導
+    shear_stress_regions: true   # 高剪應力區域
+    turbulence_intensity_regions: true  # 高湍流強度區域
+    vorticity_regions: false     # 高渦量區域（可選）
+  
+  # QR-pivot 參數（用於初始化監督點）
+  qr_pivot:
+    basis_source: "lowfi"        # lowfi（低保真快照）, history, random
+    snapshot_ensemble_size: 100  # 用於構建 QR 分解的快照數
+    column_pivoting: true        # 帶列主元選取
+    tolerance: 1.0e-10           # 奇異值容忍度
+    svd_rank_ratio: 1.2          # K ≈ 1.2 × r（秩 r 的比例）
+  
+  # 監督點追加策略（可選，1-3 輪）
+  adaptive_augmentation:
+    enabled: false               # 是否啟用監督點追加
+    max_rounds: 3                # 最多追加輪數
+    trigger_epochs: [3000, 6000, 9000]  # 觸發檢查的 epoch
+    k_add_per_round: 5           # 每輪追加點數（~10% K）
+    
+    # 追加準則（滿足任一條件）
+    trigger_conditions:
+      validation_stagnation: true      # 驗證損失停滯
+      stagnation_window: 500           # 連續 500 epochs 改善 < 1%
+      residual_threshold: 0.1          # 殘差 95 百分位 > 0.1
+    
+    # 追加方法：基於殘差 SVD → QR
+    method: "residual_qr"        # residual_qr, greedy_residual
+    residual_snapshot_size: 50   # 殘差快照數
+    
+    # 空間約束（避免點聚集）
+    spatial_constraints:
+      min_distance: 0.05         # 最小點間距（標準化域）
+      max_per_region: 2          # 每個區域最多追加點數
+  
+  # 可識別性驗證（MPS - Minimal Point Set）
+  identifiability_test:
+    enabled: true
+    K_scan_range: [10, 20, 30, 40, 50, 60, 70, 80]  # K 掃描範圍
+    noise_levels: [0.01, 0.02, 0.03]  # 1%, 2%, 3% 噪聲
+    dropout_levels: [0.0, 0.05, 0.10] # 0%, 5%, 10% 遺失
+    plot_k_error_curve: true          # 繪製 K-誤差曲線
+
+# ============================================================================
+# 4. 低保真先驗配置 - 軟先驗融合
+# ============================================================================
+prior:
+  # 低保真類型
+  type: "rans_ke"  # rans_ke, rans_kw, coarse_les, downsampled_dns
+  
+  # 低保真網格解析度（粗於高保真）
+  mesh_resolution: [128, 64]  # [x, y] 方向
+  
+  # RANS 模型設定
+  rans_config:
+    model: "k_epsilon"  # k_epsilon, k_omega, sst
+    wall_function: true
+    yplus_first_cell: 30  # 第一層網格 y+
+  
+  # 低保真資料路徑
+  data_path: "./data/lowfi/channel_re1000_rans_ke.npz"
+  
+  # 先驗一致性策略（區域加權）
+  consistency_strategy: "region_weighted"
+  consistency_regions:
+    bulk_flow:
+      weight: 0.5        # 主流區高一致性
+      y_plus_range: [300, 1000]
+    buffer_layer:
+      weight: 0.3        # 緩衝層中等一致性
+      y_plus_range: [30, 300]
+    viscous_sublayer:
+      weight: 0.1        # 黏性子層低一致性（RANS不準）
+      y_plus_range: [0, 30]
+  
+  # 先驗融合方法
+  fusion_method: "adaptive_weighting"  # fixed, adaptive_weighting, learned_correction
+
+# ============================================================================
+# 5. 模型架構 - Fourier MLP + VS-PINN
+# ============================================================================
+model:
+  type: "fourier_mlp"
+  
+  # 網路結構
+  in_dim: 2      # [x, y] 2D 定常重建
+  out_dim: 4     # [u, v, p, S] 速度、壓力、源項
+  width: 200     # 專案規定：8 × 200 網路
+  depth: 8       # 專案規定：8 × 200 網路
+  activation: "sine"  # sine（專案建議）, tanh, gelu
+  
+  # Fourier Features 配置
+  fourier:
+    enabled: true
+    m: 64          # Fourier 模態數（捕捉多尺度）
+    sigma: 5.0     # 頻率分佈參數（適應高梯度壁面區）
+    trainable: false  # 固定 Fourier 權重
+  
+  # VS-PINN 變數尺度化
+  scaling:
+    enabled: true
+    learnable: true  # 可學習尺度參數
+    
+    # 輸入標準化（壁面座標）
+    input_norm: "channel_flow"
+    input_scales:
+      x: 25.13     # 流向長度尺度
+      y: 1.0       # 壁法向長度尺度（半通道高）
+    
+    # 輸出標準化（摩擦速度）
+    output_norm: "friction_velocity"
+    output_scales:
+      u: 1.0       # u_tau
+      v: 0.1       # ~0.1 * u_tau（估計）
+      p: 1.0       # 壓力尺度
+      S: 0.01      # 源項尺度（初始估計）
+  
+  # 初始化策略
+  initialization:
+    method: "xavier_uniform"  # xavier_uniform, kaiming_normal, siren
+    bias_init: "zeros"
+    
+    # SIREN 初始化（如使用 sine 啟動函數）
+    siren:
+      w0: 30.0     # 第一層頻率
+      w_hidden: 1.0  # 隱藏層頻率
+  
+  # 權重標準化
+  weight_norm: true  # 有助於訓練穩定性
+
+# ============================================================================
+# 6. 物理配置 - Channel Flow Re1000
+# ============================================================================
+physics:
+  # 流體參數
+  nu: 1.0e-3     # 動力黏性係數 ν = 1/Re_tau
+  rho: 1.0       # 密度（標準化）
+  
+  # Channel Flow 特定參數
+  channel_flow:
+    Re_tau: 1000.0            # 摩擦雷諾數
+    Re_bulk: 41980.0          # 體積雷諾數
+    u_tau: 1.0                # 摩擦速度（標準化）
+    pressure_gradient: -1.0   # 驅動壓力梯度
+    channel_half_height: 1.0  # 半通道高
+  
+  # 計算域
+  domain:
+    x_range: [0.0, 25.13]  # 8π 流向
+    y_range: [-1.0, 1.0]   # 壁法向
+    dimensionality: "2d"   # 2d, 3d
+  
+  # 邊界條件
+  boundary_conditions:
+    # 壁面無滑移條件
+    wall:
+      type: "no_slip"
+      locations: [-1.0, 1.0]  # y = ±1
+      velocity: [0.0, 0.0]
+    
+    # 週期性條件
+    periodic:
+      x: true   # 流向週期
+      z: false  # 2D 切片無 z 方向
+    
+    # 壓力驅動
+    pressure_driven: true
+    mean_pressure_gradient: -1.0
+
+# ============================================================================
+# 7. 損失函數配置 - 動態權重 + 因果權重
+# ============================================================================
+losses:
+  # -------------------------
+  # 7.1 基本損失項權重
+  # -------------------------
+  # 資料一致性（觀測點）
+  data_weight: 1.0  # 基準權重設為 1.0
+  
+  # PDE 殘差
+  momentum_x_weight: 1.0    # 流向動量方程
+  momentum_y_weight: 1.0    # 壁法向動量方程
+  continuity_weight: 1.0    # 連續方程
+  
+  # 邊界條件
+  boundary_weight: 1.0      # 基準權重
+  wall_constraint_weight: 1.0  # 壁面無滑移強化
+  periodicity_weight: 1.0      # 週期性邊界
+  
+  # -------------------------
+  # 7.2 先驗與正則化
+  # -------------------------
+  # 低保真一致性（軟先驗）
+  prior_weight: 0.3         # 建議範圍 0.1-0.5，避免過度綁定
+  prior_annealing: true     # 訓練過程中逐漸降低先驗權重
+  prior_annealing_schedule:
+    initial: 0.5
+    final: 0.1
+    epochs: 5000
+  
+  # 源項正則化
+  source_l1: 1.0e-6         # L1 稀疏正則
+  source_l2: 1.0e-8         # L2 平滑正則
+  source_spatial_smooth: 1.0e-7  # 空間平滑
+  
+  # 梯度懲罰
+  gradient_penalty: 1.0e-4  # 壁面梯度懲罰
+  
+  # -------------------------
+  # 7.3 動態權重機制
+  # -------------------------
+  adaptive_weighting:
+    enabled: true
+    method: "gradnorm"  # gradnorm, ntk, uncertainty
+    update_freq: 1000   # 每 1000 步更新權重
+    alpha: 0.9          # GradNorm 動量係數
+    initial_task_weights: "equal"  # equal, inverse_loss
+  
+  # -------------------------
+  # 7.4 因果權重（時間相關問題）
+  # -------------------------
+  causal_weighting:
+    enabled: false      # 2D 定常場不需要
+    epsilon: 1.0        # 因果衰減參數
+  
+  # -------------------------
+  # 7.5 權重標準化
+  # -------------------------
+  weight_normalization:
+    enabled: true       # 標準化各損失項至相同量級
+    target_magnitude: 1.0
+    running_average_window: 100
+
+# ============================================================================
+# 8. 訓練配置 - 課程學習 + 雙階段優化
+# ============================================================================
+training:
+  # -------------------------
+  # 8.1 優化器配置
+  # -------------------------
+  # 階段 1：Adam（前期快速收斂）
+  optimizer_stage1:
+    type: "adam"
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 1.0e-6
+    amsgrad: false
+  
+  # 階段 2：L-BFGS（後期精細調優）
+  optimizer_stage2:
+    type: "lbfgs"
+    lr: 0.5
+    max_iter: 20
+    max_eval: 25
+    tolerance_grad: 1.0e-7
+    tolerance_change: 1.0e-9
+    history_size: 100
+  
+  # 優化器切換策略
+  optimizer_schedule:
+    stage1_epochs: 10000  # Adam 訓練 10000 epochs
+    stage2_epochs: 5000   # L-BFGS 訓練 5000 epochs
+  
+  # -------------------------
+  # 8.2 學習率調度
+  # -------------------------
+  lr_scheduler:
+    type: "cosine_annealing"  # cosine_annealing, step, exponential, reduce_on_plateau
+    T_max: 10000
+    eta_min: 1.0e-6
+    warmup_epochs: 500
+  
+  # -------------------------
+  # 8.3 訓練參數
+  # -------------------------
+  max_epochs: 15000
+  batch_size: 1024
+  gradient_clip: 1.0    # 梯度裁剪防止爆炸
+  
+  # 驗證與儲存
+  validation_freq: 500
+  checkpoint_freq: 2000
+  log_freq: 100
+  
+  # 早停機制
+  early_stopping:
+    enabled: true
+    patience: 3000
+    min_delta: 1.0e-6
+    monitor: "val_loss"
+  
+  # -------------------------
+  # 8.4 採樣策略（監督點 vs. 殘差點）
+  # -------------------------
+  sampling:
+    # -------------------------
+    # 8.4.1 監督點（Data Points）- 固定為主
+    # -------------------------
+    # 在 sensors 區塊配置，此處僅記錄數量
+    data_points: 50  # 由 sensors.K 決定
+    
+    # -------------------------
+    # 8.4.2 殘差點（Collocation Points）- 週期性重選
+    # -------------------------
+    # 初始殘差點配置
+    pde_points: 4096          # 初始 PDE 殘差點數（專案標準化）
+    pde_sampling: "uniform"   # 初始採樣：uniform, latin_hypercube
+    
+    # 邊界條件點（固定）
+    boundary_points: 1000
+    wall_clustering: 0.3      # 30% 點集中在近壁區（y+ < 30）
+    
+    # 低保真先驗點
+    prior_points: 2000
+    
+    # -------------------------
+    # 8.4.3 殘差點自適應重選/增補策略
+    # -------------------------
+    adaptive_collocation:
+      enabled: true           # 啟用殘差點週期性重選
+      
+      # 觸發條件（滿足任一即觸發）
+      trigger:
+        method: "epoch_interval"  # epoch_interval, loss_stagnation, hybrid
+        epoch_interval: 1000      # 每 1000 epochs 檢查一次
+        
+        # 停滯觸發（可選）
+        stagnation_window: 500    # 連續 500 epochs
+        stagnation_threshold: 0.01  # 殘差下降 < 1%
+        
+        # 殘差閾值觸發（可選）
+        residual_percentile: 95   # 95 百分位殘差
+        residual_threshold: 0.1   # 閾值 > 0.1
+      
+      # 重選策略
+      resampling_strategy: "incremental_replace"  # full_replace, incremental_replace, augment
+      
+      # 增量替換參數
+      incremental_replace:
+        keep_ratio: 0.7         # 保留 70% 舊點（避免災難性遺忘）
+        replace_ratio: 0.3      # 替換 30% 點
+        k_new: 1229             # 每輪新增點數（30% × 4096）
+        
+        # 移除策略：移除低影響力點
+        removal_criterion: "leverage_score"  # leverage_score, low_residual, random
+        leverage_threshold: 0.1   # 槓桿分數 < 0.1 的點優先移除
+      
+      # 完全替換參數（不建議）
+      full_replace:
+        enabled: false
+      
+      # 純增補參數
+      augment:
+        enabled: false
+        max_total_points: 8192  # 最多增補到 8192 點
+        k_add_per_round: 512    # 每輪增補 512 點
+      
+      # -------------------------
+      # 8.4.4 殘差 SVD → QR 選點方法
+      # -------------------------
+      residual_qr:
+        enabled: true           # 使用殘差 SVD → QR 方法
+        
+        # 候選池配置
+        candidate_pool_size: 16384  # 大候選池（M）
+        candidate_sampling: "latin_hypercube"  # latin_hypercube, uniform, stratified
+        
+        # 殘差快照配置
+        snapshot_config:
+          n_snapshots: 20       # 殘差快照數（不同時間/批次）
+          snapshot_method: "batch"  # batch（不同批次）, temporal（時間窗）
+          
+          # 時間窗配置（時域問題）
+          temporal:
+            enabled: false
+            window_size: 10     # 滑動窗口大小
+            time_slabs: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        
+        # SVD 配置
+        svd:
+          energy_threshold: 0.99  # 保留 99% 能量
+          max_rank: 50            # 最大秩
+          centering: true         # 殘差去中心化
+        
+        # QR Pivoting 配置
+        qr:
+          column_pivoting: true
+          tolerance: 1.0e-10
+        
+        # 空間約束（避免點聚集）
+        spatial_constraints:
+          enabled: true
+          min_distance: 0.02    # 最小點間距（標準化域，~Δx）
+          max_distance: null    # 最大點間距（null = 無限制）
+          
+          # 區域遮罩（避免某些區域過密）
+          region_mask:
+            enabled: false
+            max_per_region: 100
+            region_size: [0.5, 0.5]  # 區域大小
+      
+      # -------------------------
+      # 8.4.5 混合策略：殘差過濾 + QR
+      # -------------------------
+      hybrid_method:
+        enabled: false          # 混合方法（先殘差過濾再 QR）
+        
+        # 第一步：高殘差過濾
+        residual_filter:
+          percentile: 80        # 保留殘差前 80% 的候選點
+          min_candidates: 8192  # 至少保留 8192 個候選
+        
+        # 第二步：QR 選點
+        use_qr: true
+      
+      # -------------------------
+      # 8.4.6 權重調整（新點強化）
+      # -------------------------
+      new_point_weighting:
+        enabled: true
+        initial_weight_multiplier: 2.5  # 新點權重 × 2.5
+        decay_epochs: 500              # 500 epochs 後衰減到 1.0
+        decay_schedule: "linear"       # linear, exponential
+  
+  # -------------------------
+  # 8.5 課程學習策略
+  # -------------------------
+  curriculum:
+    enabled: true
+    strategy: "progressive_physics"  # progressive_physics, reynolds_number, domain_expansion
+    
+    # 階段式物理約束引入
+    stages:
+      # 階段 1：邊界條件主導（Epochs 0-2000）
+      - name: "boundary_fitting"
+        epochs: 2000
+        active_losses:
+          data_weight: 1.0
+          boundary_weight: 10.0      # 強化邊界
+          wall_constraint_weight: 10.0
+          momentum_x_weight: 0.1     # 弱化 PDE
+          momentum_y_weight: 0.1
+          continuity_weight: 0.1
+        sampling_focus: "wall"       # 壁面密集採樣
+      
+      # 階段 2：加入動量方程（Epochs 2000-7000）
+      - name: "momentum_incorporation"
+        epochs: 5000
+        active_losses:
+          data_weight: 1.0
+          boundary_weight: 5.0
+          wall_constraint_weight: 5.0
+          momentum_x_weight: 1.0     # 逐步增強 PDE
+          momentum_y_weight: 1.0
+          continuity_weight: 1.0
+          prior_weight: 0.3
+        sampling_focus: "boundary_layer"
+      
+      # 階段 3：完整物理約束 + 源項（Epochs 7000-15000）
+      - name: "full_physics"
+        epochs: 8000
+        active_losses:
+          data_weight: 1.0
+          boundary_weight: 1.0
+          wall_constraint_weight: 1.0
+          momentum_x_weight: 1.0
+          momentum_y_weight: 1.0
+          continuity_weight: 1.0
+          prior_weight: 0.3
+          source_l1: 1.0e-6          # 引入源項正則
+        sampling_focus: "full_domain"
+
+# ============================================================================
+# 9. 不確定性量化 - Ensemble PINN
+# ============================================================================
+ensemble:
+  enabled: false  # 初始單模型驗證，後續開啟 UQ
+  
+  # Ensemble 配置
+  n_models: 8
+  seeds: [42, 123, 456, 789, 1011, 1213, 1415, 1617]
+  
+  # 訓練策略
+  parallel_training: true
+  shared_architecture: true
+  
+  # 不確定性量化
+  uncertainty_quantification:
+    enabled: true
+    metrics:
+      - "epistemic_uncertainty"   # 認識不確定性（模型間方差）
+      - "predictive_variance"     # 預測方差
+      - "confidence_interval"     # 置信區間
+    confidence_level: 0.95
+    
+  # UQ 評估
+  uq_validation:
+    uncertainty_error_correlation: true  # 方差 vs. 真實誤差相關性
+    calibration_curve: true              # 校準曲線
+    coverage_probability: true           # 覆蓋概率
+
+# ============================================================================
+# 10. 評估與驗證
+# ============================================================================
+evaluation:
+  # -------------------------
+  # 10.1 評估網格
+  # -------------------------
+  grid_resolution: [512, 256]  # [x, y] 高解析度評估
+  
+  # -------------------------
+  # 10.2 評估指標
+  # -------------------------
+  metrics:
+    # 基本誤差指標
+    - "relative_l2"              # 相對 L2 誤差
+    - "absolute_l2"              # 絕對 L2 誤差
+    - "pointwise_error"          # 逐點誤差
+    
+    # Channel Flow 專用指標
+    - "wall_shear_stress"        # 壁面剪應力
+    - "velocity_profile"         # 速度剖面
+    - "friction_coefficient"     # 摩擦係數
+    - "log_law_validation"       # 對數律驗證
+    
+    # 湍流統計指標
+    - "reynolds_stress"          # 雷諾應力
+    - "turbulent_kinetic_energy" # 湍動能
+    - "spectrum_rmse"            # 能譜 RMSE
+    
+    # 壓力相關
+    - "pressure_drop"            # 壓降
+    - "pressure_fluctuation"     # 壓力脈動
+    
+    # UQ 指標（Ensemble 模式）
+    - "uncertainty_corr"         # 不確定性-誤差相關性
+    - "calibration_error"        # 校準誤差
+  
+  # -------------------------
+  # 10.3 成功門檻（專案目標）
+  # -------------------------
+  thresholds:
+    # 門檻 1：流場誤差
+    l2_error_u: 0.15            # 速度 L2 ≤ 10-15%
+    l2_error_v: 0.15
+    l2_error_p: 0.15            # 壓力 L2 ≤ 10-15%
+    
+    # 門檻 2：低保真改善
+    rmse_improvement_statistics: 0.30  # 統計量 RMSE ↓ ≥ 30%
+    rmse_improvement_spectrum: 0.30    # 能譜 RMSE ↓ ≥ 30%
+    rmse_improvement_wall_shear: 0.30  # 壁面剪應力 RMSE ↓ ≥ 30%
+    
+    # 門檻 3：可識別性（K ≤ 50）
+    min_sensor_points: 50       # 最小可行點數
+    max_noise_tolerance: 0.03   # σ ≤ 3%
+    max_dropout_tolerance: 0.10 # 遺失 ≤ 10%
+    
+    # 門檻 4：效率（相較固定權重基線）
+    convergence_speedup: 0.30   # Epoch ↓ ≥ 30%
+    
+    # 門檻 5：UQ 相關性
+    uq_correlation_threshold: 0.6  # r ≥ 0.6
+  
+  # -------------------------
+  # 10.4 Channel Flow 專用驗證
+  # -------------------------
+  channel_flow_validation:
+    # 對數律區域驗證
+    log_law:
+      y_plus_range: [30, 300]
+      von_karman_constant: 0.41
+      tolerance: 0.05            # ±5% 容忍度
+    
+    # 尾流區驗證
+    wake_region:
+      y_plus_range: [300, 1000]
+      wake_parameter: 0.55
+      tolerance: 0.10
+    
+    # 壁面量驗證
+    wall_quantities:
+      skin_friction_error: 0.05  # ≤ 5%
+      pressure_fluctuation_error: 0.10
+
+  # -------------------------
+  # 10.5 對比基準
+  # -------------------------
+  benchmarks:
+    # 高保真 DNS（JHTDB）
+    dns_reference:
+      enabled: true
+      data_path: "./data/jhtdb/channel_flow_re1000/dns_reference"
+    
+    # 低保真 RANS/LES
+    lowfi_baseline:
+      enabled: true
+      data_path: "./data/lowfi/channel_re1000_rans_ke.npz"
+    
+    # 文獻基準
+    literature_benchmarks:
+      - name: "Moser1999_DNS"
+        Re_tau: 1000
+        reference: "Moser et al. (1999)"
+
+# ============================================================================
+# 11. 日誌與輸出
+# ============================================================================
+logging:
+  level: "info"  # debug, info, warning, error
+  log_freq: 100
+  
+  # 儲存選項
+  save_predictions: true
+  save_checkpoints: true
+  save_optimizer_state: true
+  
+  # Channel Flow 專用輸出
+  save_velocity_profiles: true
+  save_wall_quantities: true
+  save_turbulence_fields: true
+  save_source_term_field: true    # 源項場
+  save_reconstruction_error: true # 重建誤差分佈
+  
+  # 輸出目錄
+  output_dir: "./results"
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
+  
+  # Weights & Biases 配置
+  wandb:
+    enabled: false  # 根據需求啟用
+    project: "pinnx-inverse-reconstruction"
+    entity: null
+    tags:
+      - "pinns"
+      - "inverse_problem"
+      - "sparse_data"
+      - "channel_flow"
+      - "re1000"
+      - "jhtdb"
+    
+    # 記錄內容
+    log_gradients: false
+    log_parameters: true
+    log_frequency: 100
+
+# ============================================================================
+# 12. 重現性配置
+# ============================================================================
+reproducibility:
+  deterministic: true       # 確定性模式
+  benchmark: false          # CUDA benchmark（非確定性但更快）
+  seed_everything: true     # 所有隨機種子
+  
+  # 資料載入
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  
+  # 版本追蹤
+  track_versions:
+    python: true
+    pytorch: true
+    cuda: true
+    libraries: true
+
+# ============================================================================
+# 13. 效能優化
+# ============================================================================
+performance:
+  # GPU 記憶體優化
+  mixed_precision: true          # 混合精度訓練（FP16 + FP32）
+  gradient_checkpointing: false  # 梯度檢查點（節省記憶體但慢）
+  
+  # 計算優化
+  vectorized_operations: true
+  parallel_sampling: true
+  jit_compile: false             # JIT 編譯（PyTorch 2.0+）
+  
+  # 記憶體管理
+  max_gpu_memory_fraction: 0.9
+  clear_cache_freq: 1000
+  empty_cache_on_validation: true
+  
+  # 多 GPU（如可用）
+  distributed:
+    enabled: false
+    backend: "nccl"
+    world_size: 1
+
+# ============================================================================
+# 14. 實驗追蹤與消融研究
+# ============================================================================
+experiments:
+  # K 值掃描實驗
+  k_scan:
+    enabled: false
+    k_values: [10, 20, 30, 40, 50, 60, 70, 80]
+    repeat_per_k: 3  # 每個 K 重複 3 次
+  
+  # 噪聲穩健性實驗
+  noise_robustness:
+    enabled: false
+    noise_levels: [0.0, 0.01, 0.02, 0.03, 0.04, 0.05]
+  
+  # 先驗權重掃描
+  prior_weight_sweep:
+    enabled: false
+    weights: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0]
+  
+  # 消融研究
+  ablation:
+    enabled: false
+    components:
+      - "fourier_features"
+      - "vs_pinn_scaling"
+      - "adaptive_weighting"
+      - "curriculum_learning"
+      - "lowfi_prior"
+      - "source_term_regularization"
+
+# ============================================================================
+# 15. 資料管線驗證
+# ============================================================================
+data_validation:
+  # JHTDB 資料完整性檢查
+  check_jhtdb_data: true
+  check_lowfi_data: true
+  
+  # 統計檢查
+  check_statistics:
+    mean_velocity_profile: true
+    reynolds_stress_profile: true
+    energy_spectrum: true
+  
+  # 視覺化檢查
+  visualize_data:
+    raw_fields: true
+    sensor_locations: true
+    lowfi_comparison: true
+
+# ============================================================================
+# 註記：配置檔案版本與更新歷史
+# ============================================================================
+# v2.0 - 2025-10-08
+# - 根據專案目標重新設計主配置
+# - 整合稀疏感測（K≤30-80）、低保真先驗、源項還原三大核心
+# - 引入動態權重、課程學習、VS-PINN、雙階段優化
+# - 定義清晰的成功門檻與驗證指標
+# - 完整重現性與實驗追蹤支援

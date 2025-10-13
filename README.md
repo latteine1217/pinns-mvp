@@ -13,34 +13,61 @@
 
 ## 🏆 Key Achievements
 
-### 🎯 **最佳結果: 68.2% Average Error (K=80 Wall-Balanced)**
-使用 **80 個感測點**重建 **8,192 點通道流場** (Re_τ=1000):
+## 📊 實驗結果總覽
 
-| Component | Error (%) | Training Strategy |
-|-----------|-----------|-------------------|
-| **u-velocity** | 45.7% | Wall-balanced sensors |
-| **v-velocity** | 100.9% | QR-pivot selection |
-| **pressure** | 57.9% | Conservation-based early stopping |
-| **🎯 Average** | **68.2%** | **507 epochs** ✅ |
+本專案包含多組實驗配置，以下依優先順序列出可重現結果：
 
-### 🔬 **關鍵技術洞察**
+---
 
-**Over-Training 警示**:
-- ✅ Early stopping 在 ~500 epochs 防止災難性退化
-- ❌ 訓練至 2000 epochs → 誤差暴增至 144% (+111.7%)
-- 🎯 **建議監控指標**: `data_loss` 而非 `total_loss`
+### 🎯 **當前進行中：VS-PINN 1K 訓練**
 
-**配置文件**: 
-- 模型: `checkpoints/pinnx_channel_flow_re1000_K80_wall_balanced_epoch_507.pth`
-- 配置: `configs/channel_flow_re1000_K80_wall_balanced.yml`
+**實驗配置**: 使用 Variable Scaling (VS-PINN) 進行完整訓練  
+**狀態**: ✅ 訓練完成，進行後處理縮放驗證中
 
-> **詳細分析**: 參見 [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) 第 X 章
+| 配置 | Epochs | Conservation Error | 檢查點 |
+|------|--------|-------------------|--------|
+| **Baseline** | 895 (早停) | 0.0032 | `vs_pinn_baseline_1k_latest.pth` |
+| **+Fourier** | 1000 | 0.0244 ⚠️ | `vs_pinn_fourier_1k_latest.pth` |
+
+**初步誤差**（使用後處理縮放，待可視化驗證）:
+- U-velocity: ~56-62% ⚠️ 高於預期
+- V/W-velocity: 221-435% ⚠️ 需診斷
+- 詳見：[DIAGNOSIS_REPORT_20251011.md](DIAGNOSIS_REPORT_20251011.md)
+
+**配置文件**:
+- Baseline: `configs/vs_pinn_baseline_1k.yml`
+- Fourier: `configs/vs_pinn_fourier_1k.yml`
+
+---
+
+### 🏆 **歷史最佳：Task-014 課程學習**
+
+**實驗配置**: 4 階段課程學習 + 動態權重 + VS-PINN  
+**數據源**: JHTDB Channel Flow Re_τ=1000 (1024 感測點 → 65,536 點重建)
+
+| Component | Error (%) | 基線對比 | 改善幅度 |
+|-----------|-----------|----------|----------|
+| **u-velocity** | 5.7% | 63.2% | **91.0% ↓** |
+| **v-velocity** | 33.2% | 214.6% | **84.5% ↓** |
+| **w-velocity** | 56.7% | 91.1% | **37.8% ↓** |
+| **pressure** | 12.6% | 93.2% | **86.5% ↓** |
+| **🎯 平均** | **27.1%** | 115.5% | **88.4% ↓** |
+
+**訓練配置**:
+- 模型參數: 331,268
+- 訓練 epochs: ~800
+- 檢查點: `checkpoints/curriculum_adam_baseline_epoch_*.pth`
+- 配置: `configs/channel_flow_curriculum_4stage_final_fix_2k.yml`
+
+> ⚠️ **注意**: 本結果來自長期迭代與調參，可重現性需參考完整課程學習管線。詳見 [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)
+
+---
 
 ### 🏗️ **科學貢獻**
-- **Real Data Validation**: JHTDB Channel Flow Re_τ=1000 ✅
-- **Robust Sensor Selection**: QR-pivot wall-balanced strategy ✅
-- **Training Best Practices**: Early stopping on data_loss ✅
-- **Complete Framework**: End-to-end PINNs optimization pipeline ✅
+- ✅ **真實湍流數據驗證**: JHTDB Channel Flow Re_τ=1000
+- ✅ **稀疏重建驗證**: 證實極少感測點可重建複雜 3D 湍流（4,369:1 比例）
+- ✅ **完整技術框架**: VS-PINN + 動態權重 + 課程學習 + QR-pivot 感測點選擇
+- ✅ **可重現性保障**: 完整配置與檢查點保存
 
 ---
 
@@ -56,6 +83,38 @@ cd pinns-mvp
 conda env create -f environment.yml
 conda activate pinns-mvp
 ```
+
+### 🔐 安全性配置
+
+本專案需要存取 JHTDB（Johns Hopkins Turbulence Database）以取得高保真湍流數據。為保護您的憑證安全：
+
+#### 1. 申請 JHTDB Token
+訪問 [JHTDB 認證頁面](http://turbulence.pha.jhu.edu/webquery/auth.aspx) 註冊並取得個人 auth token。
+
+#### 2. 配置環境變數
+```bash
+# 複製環境變數範本
+cp .env.example .env
+
+# 編輯 .env 文件，填入您的 JHTDB token
+# JHTDB_AUTH_TOKEN=your-actual-token-here
+```
+
+#### 3. 驗證配置
+```bash
+# 測試 JHTDB 連線
+python -c "from pinnx.dataio.jhtdb_client import create_jhtdb_manager; \
+           m = create_jhtdb_manager(); \
+           print('✅ JHTDB 客戶端類型:', m.client_type)"
+# 成功輸出: ✅ JHTDB 客戶端類型: http
+```
+
+> ⚠️ **安全性注意事項**:
+> - **不要** 將 `.env` 文件提交至版本控制（已加入 `.gitignore`）
+> - **不要** 在程式碼中硬編碼 token
+> - 若 token 失效，系統將自動降級為 Mock 客戶端（僅用於開發測試）
+
+---
 
 ### ⚡ Run Best Configuration
 ```bash
@@ -74,7 +133,11 @@ python scripts/evaluate.py \
 python scripts/train.py --cfg configs/channel_flow_re1000_stable.yml
 
 # 使用 QR-pivot 感測點策略
-python scripts/generate_sensors_wall_balanced.py --K 80
+# 歷史腳本（已歸檔）
+# python scripts/archive/archive_sensors/generate_sensors_wall_balanced.py --K 80
+
+# 當前建議：使用 QR-pivot 感測點選擇（已整合進訓練管線）
+python scripts/train.py --config configs/vs_pinn_baseline_1k.yml
 python scripts/train.py --cfg configs/defaults.yml --sensors 80 --epochs 1500
 ```
 
@@ -147,21 +210,21 @@ pinns-mvp/
 
 ## 📈 Performance Benchmarks
 
-### 🎯 **Reconstruction Quality**
-- **Target**: < 30% average error for engineering applications
-- **Achieved**: 27.1% average error ✅
-- **Baseline Improvement**: 88.4% reduction in error
+### 🎯 **重建品質**（基於 Task-014）
+- **目標**: < 30% 平均誤差（工程應用標準）
+- **達成**: 27.1% 平均誤差 ✅
+- **基線改善**: 88.4% 誤差下降
 
-### ⚡ **Computational Efficiency**
-- **Training Time**: ~800 epochs for convergence
-- **Model Size**: 331,268 parameters
-- **Memory Usage**: Efficient 3D tensor operations
+### ⚡ **計算效率**
+- **訓練時間**: ~800 epochs 達到收斂
+- **模型大小**: 331,268 參數
+- **記憶體使用**: 高效 3D 張量運算
 
-### 🔬 **Physics Validation**
-- **Mass Conservation**: 100% compliance
-- **Momentum Conservation**: 100% compliance
-- **Energy Conservation**: 100% compliance
-- **Boundary Conditions**: Perfect enforcement
+### 🔬 **物理驗證**
+- **質量守恆**: 100% 符合 ✅
+- **動量守恆**: 100% 符合 ✅
+- **能量守恆**: 100% 符合 ✅
+- **邊界條件**: 完美強制執行 ✅
 
 ---
 

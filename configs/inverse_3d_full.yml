@@ -1,0 +1,419 @@
+# ============================================================================
+# PINNs 逆重建 - 3D 完整配置
+# ============================================================================
+# 目標：從 3D 完整域進行稀疏重建（終極目標）
+# 用途：完整 3D 湍流場重建，包含瞬時與時間平均統計
+# 資料：JHTDB Channel Flow Re_tau=1000 完整 3D+t 場
+# ============================================================================
+
+# 繼承主配置
+_base_: "inverse_reconstruction_main.yml"
+
+# ============================================================================
+# 實驗設定覆寫
+# ============================================================================
+experiment:
+  name: "inverse_3d_full"
+  description: "3D full-domain turbulent flow reconstruction from sparse sensors"
+  phase: "production"
+
+# ============================================================================
+# 資料配置 - 3D 完整域
+# ============================================================================
+data:
+  # 不使用切片，載入完整 3D 域
+  slice_config:
+    enabled: false
+  
+  # 3D 完整域配置
+  full_domain_config:
+    enabled: true
+    spatial_range:
+      x: [0.0, 25.13]    # 完整流向 8π
+      y: [-1.0, 1.0]     # 完整壁法向
+      z: [0.0, 9.42]     # 完整展向 3π
+    
+    # 時間配置
+    temporal_mode: "steady_statistical"  # steady_statistical, transient, snapshot
+    time_average_window: [20.0, 26.0]    # 統計穩態窗口
+    
+    # 瞬時場選項（如需要）
+    instantaneous_snapshots:
+      enabled: false
+      time_points: [20.0, 21.0, 22.0]
+      num_snapshots: 3
+  
+  # 資料維度
+  dimensionality: "3d"
+  
+  # 快取配置（3D 資料量大）
+  cache_dir: "./data/jhtdb/channel_flow_re1000/3d_full"
+  use_cache: true
+  cache_compression: true  # 壓縮快取節省空間
+
+# ============================================================================
+# 感測點配置 - 3D 優化
+# ============================================================================
+sensors:
+  K: 80  # 3D 需要更多感測點
+  
+  # QR-pivot 配置
+  qr_pivot:
+    basis_source: "lowfi"
+    snapshot_ensemble_size: 200  # 3D 需要更多快照
+    column_pivoting: true
+  
+  # 3D 物理引導策略
+  physics_guided:
+    wall_enhancement: true
+    wall_region_ratio: 0.35      # 35% 點在近壁區
+    boundary_layer_focus: true
+    log_layer_coverage: true
+    wake_region_coverage: true
+    
+    # 3D 特有：展向覆蓋
+    spanwise_coverage: true
+    spanwise_distribution: "uniform"  # uniform, random
+    
+    # 湍流結構引導
+    shear_stress_regions: true
+    turbulence_intensity_regions: true
+    vorticity_regions: true      # 3D 可追蹤渦結構
+    
+  # 3D 空間分佈
+  spatial_distribution:
+    streamwise_clustering: false  # 流向均勻分佈（週期性）
+    wallnormal_clustering: true   # 壁法向對數分佈
+    spanwise_clustering: false    # 展向均勻分佈（週期性）
+
+# ============================================================================
+# 模型架構 - 3D 輸入
+# ============================================================================
+model:
+  in_dim: 3      # [x, y, z] 3D 定常統計場
+  out_dim: 7     # [u, v, w, p, uu, vv, ww] 速度、壓力、雷諾應力對角分量
+  width: 256     # 3D 需要更大網路容量
+  depth: 8
+  activation: "sine"
+  
+  # Fourier Features - 3D 多尺度
+  fourier:
+    enabled: true
+    m: 96          # 更多模態捕捉 3D 結構
+    sigma: 4.0     # 調整適應 3D 多方向梯度
+    per_dimension: true  # 每個維度獨立 Fourier 編碼
+  
+  # VS-PINN 尺度化 - 3D
+  scaling:
+    enabled: true
+    learnable: true
+    input_scales:
+      x: 25.13     # 流向
+      y: 1.0       # 壁法向
+      z: 9.42      # 展向
+    output_scales:
+      u: 1.0       # 流向速度
+      v: 0.1       # 壁法向速度
+      w: 0.3       # 展向速度
+      p: 1.0       # 壓力
+      uu: 0.5      # 雷諾應力 u'u'
+      vv: 0.1      # 雷諾應力 v'v'
+      ww: 0.2      # 雷諾應力 w'w'
+
+# ============================================================================
+# 物理配置 - 3D NSE
+# ============================================================================
+physics:
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+    dimensionality: "3d"
+  
+  # 3D Navier-Stokes
+  equations: "nse_3d_steady"
+  
+  # 雷諾平均配置（RANS 形式）
+  reynolds_averaged: true
+  turbulence_closure: "data_driven"  # 從資料學習閉合項
+  
+  boundary_conditions:
+    wall:
+      type: "no_slip"
+      locations: [-1.0, 1.0]  # y 方向壁面
+      velocity: [0.0, 0.0, 0.0]
+    periodic:
+      x: true  # 流向週期
+      z: true  # 展向週期
+
+# ============================================================================
+# 損失函數 - 3D 特化
+# ============================================================================
+losses:
+  # 資料與邊界
+  data_weight: 1.0
+  boundary_weight: 1.0
+  wall_constraint_weight: 1.0
+  
+  # 3D 動量方程
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0  # 展向動量
+  continuity_weight: 1.0
+  
+  # 週期性約束（3D 重要）
+  periodicity_weight: 2.0
+  periodicity_x_weight: 1.0
+  periodicity_z_weight: 1.0
+  
+  # 雷諾應力約束
+  reynolds_stress_weight: 0.5
+  turbulence_closure_weight: 0.3
+  
+  # 先驗與正則
+  prior_weight: 0.3
+  source_l1: 1.0e-6
+  source_l2: 1.0e-8
+  gradient_penalty: 1.0e-4
+  
+  # 3D 特有：展向均勻性正則
+  spanwise_uniformity_weight: 0.1
+  
+  # 動態權重
+  adaptive_weighting:
+    enabled: true
+    method: "gradnorm"
+    update_freq: 1000
+    alpha: 0.9
+  
+  causal_weighting:
+    enabled: false
+
+# ============================================================================
+# 訓練配置 - 3D 調整
+# ============================================================================
+training:
+  # Adam 階段
+  optimizer_stage1:
+    type: "adam"
+    lr: 8.0e-4     # 3D 稍降低學習率
+    weight_decay: 1.0e-6
+  
+  # L-BFGS 階段
+  optimizer_stage2:
+    type: "lbfgs"
+    lr: 0.3        # 3D 降低 L-BFGS 步長
+    max_iter: 15
+  
+  optimizer_schedule:
+    stage1_epochs: 15000  # 3D 需要更多 epochs
+    stage2_epochs: 5000
+  
+  # 訓練參數
+  max_epochs: 20000
+  batch_size: 2048       # 3D 增加 batch size
+  validation_freq: 1000
+  checkpoint_freq: 2000
+  
+  early_stopping:
+    enabled: true
+    patience: 5000       # 3D 更大容忍度
+    min_delta: 1.0e-6
+  
+  # 3D 採樣策略
+  sampling:
+    pde_points: 8192     # 3D 需要更多配點
+    boundary_points: 2000
+    wall_clustering: 0.3
+    prior_points: 4000
+    
+    # 3D 分層採樣
+    stratified_sampling:
+      enabled: true
+      x_strata: 8
+      y_strata: 6
+      z_strata: 6
+  
+  # 課程學習 - 3D 分階段
+  curriculum:
+    enabled: true
+    strategy: "progressive_physics"
+    stages:
+      # 階段 1: 邊界與週期性 (0-3000)
+      - name: "boundary_periodicity"
+        epochs: 3000
+        active_losses:
+          data_weight: 1.0
+          boundary_weight: 10.0
+          wall_constraint_weight: 10.0
+          periodicity_weight: 5.0
+          momentum_x_weight: 0.1
+          momentum_y_weight: 0.1
+          momentum_z_weight: 0.1
+          continuity_weight: 0.1
+        sampling_focus: "boundary"
+      
+      # 階段 2: 動量方程 (3000-10000)
+      - name: "momentum_incorporation"
+        epochs: 7000
+        active_losses:
+          data_weight: 1.0
+          boundary_weight: 5.0
+          wall_constraint_weight: 5.0
+          periodicity_weight: 2.0
+          momentum_x_weight: 1.0
+          momentum_y_weight: 1.0
+          momentum_z_weight: 1.0
+          continuity_weight: 1.0
+          prior_weight: 0.3
+        sampling_focus: "full_domain"
+      
+      # 階段 3: 完整物理 + 湍流統計 (10000-20000)
+      - name: "full_physics_turbulence"
+        epochs: 10000
+        active_losses:
+          data_weight: 1.0
+          boundary_weight: 1.0
+          wall_constraint_weight: 1.0
+          periodicity_weight: 2.0
+          momentum_x_weight: 1.0
+          momentum_y_weight: 1.0
+          momentum_z_weight: 1.0
+          continuity_weight: 1.0
+          prior_weight: 0.3
+          reynolds_stress_weight: 0.5
+          turbulence_closure_weight: 0.3
+          source_l1: 1.0e-6
+          spanwise_uniformity_weight: 0.1
+        sampling_focus: "full_domain"
+
+# ============================================================================
+# Ensemble UQ - 3D 建議啟用
+# ============================================================================
+ensemble:
+  enabled: true  # 3D 複雜度高，建議使用 ensemble
+  n_models: 8
+  seeds: [42, 123, 456, 789, 1011, 1213, 1415, 1617]
+  parallel_training: true
+  
+  uncertainty_quantification:
+    enabled: true
+    metrics:
+      - "epistemic_uncertainty"
+      - "predictive_variance"
+      - "confidence_interval"
+    confidence_level: 0.95
+
+# ============================================================================
+# 評估配置 - 3D 網格
+# ============================================================================
+evaluation:
+  grid_resolution: [256, 128, 192]  # [x, y, z] 3D 網格
+  
+  metrics:
+    # 基本誤差
+    - "relative_l2"
+    - "pointwise_error"
+    
+    # 3D 流場指標
+    - "wall_shear_stress"
+    - "velocity_profile"
+    - "friction_coefficient"
+    - "log_law_validation"
+    
+    # 3D 湍流統計
+    - "reynolds_stress"
+    - "turbulent_kinetic_energy"
+    - "spectrum_rmse"
+    - "two_point_correlation"
+    
+    # 3D 特有
+    - "spanwise_homogeneity"
+    - "vorticity_statistics"
+    - "pressure_fluctuation"
+    
+    # UQ
+    - "uncertainty_corr"
+    - "calibration_error"
+  
+  thresholds:
+    l2_error_u: 0.15
+    l2_error_v: 0.15
+    l2_error_w: 0.15
+    l2_error_p: 0.15
+    rmse_improvement_statistics: 0.30
+    rmse_improvement_spectrum: 0.30
+    rmse_improvement_wall_shear: 0.30
+    uq_correlation_threshold: 0.6
+  
+  # 3D 湍流統計驗證
+  turbulence_validation:
+    reynolds_stress_profiles: true
+    energy_spectrum_3d: true
+    structure_functions: true
+    two_point_correlations: true
+
+# ============================================================================
+# 日誌與輸出
+# ============================================================================
+logging:
+  output_dir: "./results/3d_full"
+  checkpoint_dir: "./checkpoints/3d_full"
+  log_dir: "./logs/3d_full"
+  
+  # 3D 視覺化選項
+  save_3d_fields: true
+  save_slice_comparisons: true
+  save_isosurfaces: false  # 計算成本高，按需啟用
+  
+  wandb:
+    enabled: false
+    project: "pinnx-inverse-3d"
+    tags:
+      - "3d_full"
+      - "turbulence"
+      - "production"
+
+# ============================================================================
+# 低保真先驗 - 3D RANS
+# ============================================================================
+prior:
+  type: "rans_ke"
+  mesh_resolution: [64, 48, 48]  # 3D 粗網格
+  data_path: "./data/lowfi/channel_re1000_3d_rans_ke.npz"
+  
+  consistency_strategy: "region_weighted"
+  consistency_regions:
+    bulk_flow:
+      weight: 0.5
+      y_plus_range: [300, 1000]
+    buffer_layer:
+      weight: 0.3
+      y_plus_range: [30, 300]
+    viscous_sublayer:
+      weight: 0.1
+      y_plus_range: [0, 30]
+
+# ============================================================================
+# 效能優化 - 3D 特化
+# ============================================================================
+performance:
+  # GPU 記憶體優化（3D 記憶體需求大）
+  mixed_precision: true
+  gradient_checkpointing: true  # 3D 啟用以節省記憶體
+  
+  # 計算優化
+  vectorized_operations: true
+  parallel_sampling: true
+  jit_compile: false
+  
+  # 記憶體管理
+  max_gpu_memory_fraction: 0.95
+  clear_cache_freq: 500  # 更頻繁清理
+  empty_cache_on_validation: true
+  
+  # 多 GPU（3D 強烈建議）
+  distributed:
+    enabled: false  # 根據硬體啟用
+    backend: "nccl"
+    world_size: 1
