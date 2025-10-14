@@ -73,6 +73,44 @@
 
 ## 🚀 Quick Start
 
+### 📦 **新手快速開始：使用標準化模板**
+
+我們提供 4 個標準化 YAML 模板，涵蓋從快速測試到生產訓練的完整流程。
+
+#### **模板選擇**
+
+| 場景 | 模板 | 時間 | 說明 |
+|------|------|------|------|
+| **快速驗證想法** | [`2d_quick_baseline.yml`](configs/templates/2d_quick_baseline.yml) | 5-10 min | 快速測試功能、調試代碼 |
+| **特徵消融研究** | [`2d_medium_ablation.yml`](configs/templates/2d_medium_ablation.yml) | 15-30 min | 量化特徵貢獻、參數掃描 |
+| **課程式訓練** | [`3d_slab_curriculum.yml`](configs/templates/3d_slab_curriculum.yml) | 30-60 min | 多階段學習、穩健收斂 |
+| **論文級結果** | [`3d_full_production.yml`](configs/templates/3d_full_production.yml) | 2-8 hrs | 高精度重建、完整驗證 |
+
+👉 **完整模板文檔**：[`configs/templates/README.md`](configs/templates/README.md)
+
+#### **快速使用範例**
+
+```bash
+# 1. 複製模板到 configs/ 目錄
+cp configs/templates/2d_quick_baseline.yml configs/my_experiment.yml
+
+# 2. 修改實驗名稱與輸出路徑
+vim configs/my_experiment.yml
+# - experiment.name: "my_experiment"
+# - output.checkpoint_dir: "./checkpoints/my_experiment"
+# - output.results_dir: "./results/my_experiment"
+
+# 3. 執行訓練
+python scripts/train.py --cfg configs/my_experiment.yml
+
+# 4. 監控訓練進度
+tail -f log/my_experiment/training.log
+```
+
+**配置規範**：參見 [`configs/README.md`](configs/README.md)
+
+---
+
 ### 📋 Prerequisites
 ```bash
 # Clone repository

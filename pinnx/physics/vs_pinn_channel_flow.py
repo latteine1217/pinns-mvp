@@ -87,6 +87,8 @@ class VSPINNChannelFlow(nn.Module):
         physics_params: Optional[Dict[str, float]] = None,
         domain_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         loss_config: Optional[Dict[str, Any]] = None,  # 🔴 新增：接收損失配置
+        enable_rans: bool = False,  # ✅ TASK-008: RANS 啟用開關
+        rans_model: str = "k_epsilon",  # ✅ TASK-008: RANS 模型類型
     ):
         super().__init__()
         
@@ -128,6 +130,47 @@ class VSPINNChannelFlow(nn.Module):
         self.warmup_epochs = (loss_config or {}).get('warmup_epochs', 5)
         self.normalizer_momentum = 0.9  # 滑動平均動量（平滑更新）
         
+        # ⭐ TASK-ENHANCED-5K-PHYSICS-FIX: PDE 損失雙重削弱修正
+        # 禁用對 PDE/continuity 的額外 /N_max_sq 削弱（默認啟用修正）
+        # 設為 False 可回退至舊行為（相容性）
+        self.disable_extra_pde_division = (loss_config or {}).get('disable_extra_pde_division', True)
+        
+        # === ✅ RANS 湍流模型初始化（診斷用途）===
+        # ⚠️ 變更警告（2025-10-14）：
+        # RANS 計算僅用於診斷與低保真場估算，不再參與損失函數計算。
+        # 原因：RANS 統計平均場與瞬時 DNS 重建不自洽，造成尺度衝突。
+        # 若需作為軟先驗，建議將 RANS 場作為輸入特徵，而非硬約束損失。
+        self.enable_rans = enable_rans
+        self.rans_model_type = rans_model
+        
+        # 物理初始化開關（控制 k, ε 估算方式）
+        self.rans_use_physical_init = loss_config.get('rans_use_physical_init', True) if loss_config else True
+        
+        if self.enable_rans:
+            from .turbulence import RANSEquations3D
+            
+            # 湍流黏度懲罰配置（僅用於診斷報告，不參與訓練損失）
+            turbulent_viscosity_penalty = loss_config.get('turbulent_viscosity_penalty', 'log1p') if loss_config else 'log1p'
+            turbulent_viscosity_target = loss_config.get('turbulent_viscosity_target', 100.0) if loss_config else 100.0
+            turbulent_viscosity_huber_delta = loss_config.get('turbulent_viscosity_huber_delta', 100.0) if loss_config else 100.0
+            
+            self.rans_model = RANSEquations3D(
+                viscosity=self.physics_params['nu'],
+                enable_constraints=True,
+                constraint_type="softplus",
+                turbulent_viscosity_penalty=turbulent_viscosity_penalty,
+                turbulent_viscosity_target=turbulent_viscosity_target,
+                turbulent_viscosity_huber_delta=turbulent_viscosity_huber_delta
+            )
+            init_mode = "物理一致初始化" if self.rans_use_physical_init else "梯度估算"
+            penalty_info = f"懲罰={turbulent_viscosity_penalty}"
+            if turbulent_viscosity_penalty == "huber":
+                penalty_info += f" (β={turbulent_viscosity_huber_delta}ν, target={turbulent_viscosity_target}ν)"
+            print(f"✅ RANS 湍流模型已啟用: {rans_model}（診斷模式，{init_mode}，{penalty_info}）")
+            print(f"   ⚠️  注意：RANS 計算不參與損失函數，僅用於監控與診斷")
+        else:
+            self.rans_model = None
+        
         # 验证配置
         self._verify_configuration()
         
@@ -136,6 +179,7 @@ class VSPINNChannelFlow(nn.Module):
         print(f"   物理参数: ν={self.nu:.2e}, dP/dx={self.dP_dx:.4f}, ρ={self.rho:.1f}")  # type: ignore[attr-defined]
         print(f"   Loss 补偿因子: 1/N_max² = 1/{self.N_max_sq:.2f}")  # type: ignore[attr-defined]
         print(f"   損失歸一化: {'啟用' if self.normalize_losses else '禁用'} (warmup={self.warmup_epochs} epochs)")
+        print(f"   ⭐ PDE 額外除法: {'禁用 (修正後)' if self.disable_extra_pde_division else '啟用 (舊行為)'}")
     
     def _verify_configuration(self):
         """验证配置的物理合理性"""
@@ -375,13 +419,78 @@ class VSPINNChannelFlow(nn.Module):
         
         return divergence
     
+    def compute_rans_residuals(
+        self, 
+        coords: torch.Tensor, 
+        predictions: torch.Tensor,
+        scaled_coords: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        """
+        計算 RANS 湍流方程殘差（診斷模式）
+        
+        ⚠️ 變更警告（2025-10-14）：
+        此方法計算的殘差**不再參與損失函數**，僅用於監控與診斷。
+        原因：RANS 統計平均場與瞬時 DNS 重建不自洽，造成尺度衝突。
+        
+        僅在 enable_rans=True 時有效。從速度場估算 k（湍流動能）與 ε（耗散率），
+        並計算 k-ε 方程殘差作為診斷指標（例如監控湍流黏度合理性）。
+        
+        方程組（用於診斷）:
+            - 湍流動能: Dk/Dt = P - ε + ∇·[(ν + ν_t/σ_k) ∇k]
+            - 耗散率:   Dε/Dt = (C_ε1·P - C_ε2·ε)·ε/k + ∇·[(ν + ν_t/σ_ε) ∇ε]
+            - 湍流黏度: ν_t = C_μ · k²/ε
+        
+        Args:
+            coords: [batch, 3] = [x, y, z] 物理座標
+            predictions: [batch, 4] = [u, v, w, p]（模型輸出）
+            scaled_coords: 模型輸入使用的縮放座標（若為 None 則自動計算）
+            
+        Returns:
+            殘差字典（若未啟用 RANS 則返回空字典）:
+            {
+                'k_equation': [batch, 1],        # k 方程殘差（診斷用）
+                'epsilon_equation': [batch, 1],  # ε 方程殘差（診斷用）
+                'turbulent_viscosity': [batch, 1],  # ν_t 合理性約束（診斷用）
+                'physical_penalty': [batch, 1]   # k≥0, ε≥0 物理懲罰（診斷用）
+            }
+            
+        用途範例：
+            - 監控湍流黏度 ν_t/ν 比值是否合理（通道流典型值 10-100）
+            - 診斷流場是否滿足 RANS 統計假設
+            - 提供低保真場估算（例如作為輸入特徵的軟先驗）
+        """
+        if not self.enable_rans or self.rans_model is None:
+            return {}
+        
+        # 提取速度場
+        velocity = predictions[:, :3]  # [batch, 3] = [u, v, w]
+        
+        # 調用 RANSEquations3D.residual() 計算殘差
+        # 該方法內部會：
+        # 1. 從速度梯度估算 k, ε（或使用物理初始化）
+        # 2. 計算 k-ε 方程殘差
+        # 3. 驗證湍流黏度 ν_t 的合理性
+        # ✅ TASK-008 Phase 5: 傳遞物理初始化開關
+        rans_residuals = self.rans_model.residual(
+            coords, 
+            velocity, 
+            use_physical_init=self.rans_use_physical_init
+        )
+        
+        return rans_residuals
+    
     def compute_periodic_loss(
         self, 
         coords: torch.Tensor, 
-        predictions: torch.Tensor
+        predictions: torch.Tensor,
+        boundary_band_width: float = 5e-3  # ⭐ 新增：邊界帶狀寬度
     ) -> Dict[str, torch.Tensor]:
         """
         计算周期性边界约束损失
+        
+        ⭐ TASK-ENHANCED-5K-PHYSICS-FIX: 週期性採樣策略修正
+        - 舊行為：嚴格點匹配 (|x - x_boundary| < 1e-6)
+        - 新行為：帶狀掩碼 (|x - x_boundary| < boundary_band_width)
         
         对于 x 和 z 方向的周期边界:
             u(x_min, y, z) = u(x_max, y, z)
@@ -392,6 +501,7 @@ class VSPINNChannelFlow(nn.Module):
         Args:
             coords: [batch, 3] = [x, y, z]
             predictions: [batch, 4] = [u, v, w, p]
+            boundary_band_width: 邊界帶狀寬度（默認 5e-3）
             
         Returns:
             周期性损失字典 {'periodic_x', 'periodic_z'}
@@ -399,16 +509,15 @@ class VSPINNChannelFlow(nn.Module):
         # 提取边界坐标（需要外部提供成对的边界点）
         # 此处假设 coords 已经包含成对的边界点
         
-        # x 方向周期性（使用容差比較避免浮點數精度問題）
-        tol = 1e-6
+        # ⭐ 修正：邊界帶狀掩碼（從嚴格點匹配改為近邊界區域）
         x_min, x_max = self.domain_bounds['x']
-        mask_x_min = torch.abs(coords[:, 0] - x_min) < tol
-        mask_x_max = torch.abs(coords[:, 0] - x_max) < tol
+        mask_x_min = torch.abs(coords[:, 0] - x_min) < boundary_band_width
+        mask_x_max = torch.abs(coords[:, 0] - x_max) < boundary_band_width
         
         # z 方向周期性
         z_min, z_max = self.domain_bounds['z']
-        mask_z_min = torch.abs(coords[:, 2] - z_min) < tol
-        mask_z_max = torch.abs(coords[:, 2] - z_max) < tol
+        mask_z_min = torch.abs(coords[:, 2] - z_min) < boundary_band_width
+        mask_z_max = torch.abs(coords[:, 2] - z_max) < boundary_band_width
         
         # 计算周期性误差（如果边界点存在）
         periodic_x_loss = torch.tensor(0.0, device=coords.device)
@@ -439,15 +548,21 @@ class VSPINNChannelFlow(nn.Module):
         self, 
         coords: torch.Tensor, 
         predictions: torch.Tensor,
-        scaled_coords: Optional[torch.Tensor] = None
+        scaled_coords: Optional[torch.Tensor] = None,
+        boundary_band_width: float = 5e-3  # ⭐ 新增：近壁帶狀寬度
     ) -> Dict[str, torch.Tensor]:
         """
         计算壁面剪应力 τ_w = μ (∂u/∂y)|_{y=±1}
+        
+        ⭐ TASK-ENHANCED-5K-PHYSICS-FIX: 壁面採樣策略修正
+        - 舊行為：嚴格點匹配 (|y - y_wall| < 1e-6)，隨機採樣極少命中
+        - 新行為：帶狀掩碼 (|y - y_wall| < boundary_band_width)，穩健估計梯度
         
         Args:
             coords: [batch, 3] = [x, y, z]
             predictions: [batch, 4] = [u, v, w, p]
             scaled_coords: 模型輸入的縮放座標（可選）
+            boundary_band_width: 近壁帶狀寬度（默認 5e-3）
             
         Returns:
             壁面剪应力 {'tau_w_lower', 'tau_w_upper'}
@@ -461,11 +576,10 @@ class VSPINNChannelFlow(nn.Module):
         u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
         du_dy = u_grads['y']
         
-        # 壁面位置（使用容差比較避免浮點數精度問題）
-        tol = 1e-6
+        # ⭐ 修正：壁面帶狀掩碼（從嚴格點匹配改為近壁區域）
         y_lower, y_upper = self.domain_bounds['y']
-        mask_lower = torch.abs(coords[:, 1] - y_lower) < tol
-        mask_upper = torch.abs(coords[:, 1] - y_upper) < tol
+        mask_lower = torch.abs(coords[:, 1] - y_lower) < boundary_band_width
+        mask_upper = torch.abs(coords[:, 1] - y_upper) < boundary_band_width
         
         # 计算剪应力 τ = μ ∂u/∂y
         mu = self.nu * self.rho  # type: ignore[operator]
@@ -741,14 +855,18 @@ class VSPINNChannelFlow(nn.Module):
 
             normalized_loss = loss / normalizer
 
-            if key in {
-                'momentum_x',
-                'momentum_y',
-                'momentum_z',
-                'continuity',
-                'periodicity'
-            }:
-                normalized_loss = normalized_loss / self.N_max_sq
+            # ⭐ TASK-ENHANCED-5K-PHYSICS-FIX: 條件性 PDE 削弱修正
+            # 舊行為：對 PDE/continuity 額外除以 N_max_sq（可能導致權重過低）
+            # 新行為：默認跳過額外除法，讓外部權重補償機制正常運作
+            if not self.disable_extra_pde_division:  # 舊行為（向後相容）
+                if key in {
+                    'momentum_x',
+                    'momentum_y',
+                    'momentum_z',
+                    'continuity',
+                    'periodicity'
+                }:
+                    normalized_loss = normalized_loss / self.N_max_sq  # type: ignore[operator]
 
             normalized[key] = normalized_loss
         
@@ -801,6 +919,8 @@ def create_vs_pinn_channel_flow(
     nu: float = 5e-5,
     dP_dx: float = 0.0025,
     rho: float = 1.0,
+    enable_rans: bool = False,  # ✅ TASK-008: RANS 啟用開關
+    rans_model: str = "k_epsilon",  # ✅ TASK-008: RANS 模型類型
     **kwargs
 ) -> VSPINNChannelFlow:
     """
@@ -813,7 +933,9 @@ def create_vs_pinn_channel_flow(
         nu: 动力黏度
         dP_dx: 压降梯度
         rho: 密度
-        **kwargs: 其他参数（如 domain_bounds）
+        enable_rans: 啟用 RANS 湍流模型約束（默認 False）
+        rans_model: RANS 模型類型（'k_epsilon' | 'k_omega'，默認 'k_epsilon'）
+        **kwargs: 其他参数（如 domain_bounds, loss_config）
         
     Returns:
         VSPINNChannelFlow 实例
@@ -824,5 +946,7 @@ def create_vs_pinn_channel_flow(
     return VSPINNChannelFlow(
         scaling_factors=scaling_factors,
         physics_params=physics_params,
+        enable_rans=enable_rans,
+        rans_model=rans_model,
         **kwargs
     )

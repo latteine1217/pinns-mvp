@@ -21,10 +21,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Optional, Tuple, Callable, Union
+from typing import Any, Dict, List, Optional, Tuple, Callable, Union
 import numpy as np
 import math
 from collections import defaultdict
+
+_EPS = 1e-12
 
 
 class GradNormWeighter:
@@ -67,21 +69,54 @@ class GradNormWeighter:
         self.target_ratios = target_ratios  # 存儲目標比例（用於相容性）
         self.min_weight = float(min_weight)
         self.max_weight = float(max_weight)
+        self.eps = _EPS
         
         # 自動檢測設備
         if device is None:
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
-            self.device = device
+            if isinstance(device, torch.device):
+                self.device = device
+            elif isinstance(device, str):
+                self.device = torch.device(device)
+            else:
+                raise TypeError(f"Unsupported device type: {type(device)}")
         
         # 初始化權重
         if initial_weights is None:
             initial_weights = {name: 1.0 for name in loss_names}
         
-        self.weights = {name: torch.clamp(torch.tensor(initial_weights.get(name, 1.0), 
-                                         device=device, requires_grad=False)
-                       , min=self.min_weight, max=self.max_weight)
-                       for name in loss_names}
+        self.initial_weight_values = {
+            name: float(initial_weights.get(name, 1.0)) for name in loss_names
+        }
+        self.weights = {}
+        for name in loss_names:
+            base_weight = torch.tensor(
+                self.initial_weight_values[name],
+                device=self.device,
+                dtype=torch.float32,
+                requires_grad=False
+            )
+            clamped_weight = torch.clamp(base_weight, self.min_weight, self.max_weight)
+            self.weights[name] = clamped_weight
+        
+        # 預先計算目標分佈
+        if target_ratios is not None:
+            if len(target_ratios) != len(loss_names):
+                raise ValueError(
+                    "target_ratios length must match loss_names length "
+                    f"({len(target_ratios)} != {len(loss_names)})"
+                )
+            ratios = torch.as_tensor(
+                target_ratios, dtype=torch.float32, device=self.device
+            )
+            ratios = torch.clamp(ratios, min=self.eps)
+            normalized = (ratios / ratios.mean()).cpu().tolist()
+            self.target_distribution = {
+                name: float(normalized[idx]) for idx, name in enumerate(loss_names)
+            }
+        else:
+            self.target_distribution = {name: 1.0 for name in loss_names}
         
         # 記錄梯度歷史用於穩定化
         self.gradient_history = defaultdict(list)
@@ -105,32 +140,44 @@ class GradNormWeighter:
                 continue
             
             # 檢查損失是否需要梯度和是否為非零
-            if not loss.requires_grad or loss.item() == 0.0:
-                gradients[name] = torch.tensor(1e-12, device=self.device)
+            if not loss.requires_grad or abs(float(loss.detach())) < self.eps:
+                gradients[name] = torch.tensor(self.eps, device=self.device)
                 continue
                 
             try:
+                weight_tensor = self.weights.get(name, None)
+                if isinstance(weight_tensor, torch.Tensor):
+                    weight_tensor = weight_tensor.detach()
+                elif weight_tensor is None:
+                    weight_tensor = torch.tensor(1.0, device=self.device)
+                else:
+                    weight_tensor = torch.tensor(
+                        float(weight_tensor), device=self.device
+                    )
+                
+                weighted_loss = loss * weight_tensor
+                
                 # 計算該損失項對模型參數的梯度
                 grads = torch.autograd.grad(
-                    outputs=loss,
+                    outputs=weighted_loss,
                     inputs=list(self.model.parameters()),
-                    grad_outputs=torch.ones_like(loss),
+                    grad_outputs=torch.ones_like(weighted_loss),
                     retain_graph=True,
                     create_graph=False,
                     allow_unused=True
                 )
                 
                 # 計算梯度範數
-                grad_norm = 0.0
+                grad_norm = torch.tensor(0.0, device=self.device)
                 for grad in grads:
                     if grad is not None:
                         grad_norm += (grad.detach() ** 2).sum()
                 
-                gradients[name] = torch.sqrt(grad_norm + 1e-12)
+                gradients[name] = torch.sqrt(grad_norm + self.eps)
                 
             except Exception as e:
                 # 如果梯度計算失敗，使用小值
-                gradients[name] = torch.tensor(1e-12, device=self.device)
+                gradients[name] = torch.tensor(self.eps, device=self.device)
                 print(f"Warning: Gradient computation failed for {name}: {e}")
             
         return gradients
@@ -158,13 +205,20 @@ class GradNormWeighter:
         
         # 檢查是否需要更新權重
         if self.step_count % self.update_frequency != 0:
-            return {name: weight.item() for name, weight in self.weights.items()}
+            return self.get_weights()
         
         # 計算梯度範數
         gradients = self.compute_gradients(losses)
         
-        if len(gradients) < 2:  # 至少需要兩個損失項才進行平衡
-            return {name: weight.item() for name, weight in self.weights.items()}
+        usable_gradients = [
+            gradients[name] for name in self.loss_names if name in gradients
+        ]
+        if len(usable_gradients) < 2:  # 至少需要兩個損失項才進行平衡
+            return self.get_weights()
+        
+        grad_values = torch.stack(usable_gradients)
+        total_grad = grad_values.sum()
+        avg_grad = grad_values.mean()
         
         # 計算相對損失率 (相對於初始值的變化)
         relative_losses = {}
@@ -172,48 +226,57 @@ class GradNormWeighter:
             if name in losses and name in self.initial_losses:
                 current_loss = losses[name].detach().item()
                 initial_loss = self.initial_losses[name]
-                relative_losses[name] = current_loss / (initial_loss + 1e-12)
+                relative_losses[name] = current_loss / (initial_loss + self.eps)
         
         # 計算平均相對損失率
-        avg_relative_loss = np.mean(list(relative_losses.values()))
+        if relative_losses:
+            avg_relative_loss = float(np.mean(list(relative_losses.values())))
+            if not np.isfinite(avg_relative_loss) or avg_relative_loss < self.eps:
+                avg_relative_loss = 1.0
+        else:
+            avg_relative_loss = 1.0
         
         # 更新權重
-        total_grad = sum(gradients.values()) + 1e-12
-        
         for name in self.loss_names:
             if name not in gradients:
                 continue
                 
             # 計算目標梯度範數
-            target_grad = total_grad * self.target_gradient_ratio / len(self.loss_names)
+            distribution_scale = self.target_distribution.get(name, 1.0)
+            target_grad = avg_grad * distribution_scale * self.target_gradient_ratio
+            target_grad = torch.clamp(target_grad, min=self.eps)
             
             # 計算當前梯度與目標的比值
             current_grad = gradients[name]
-            gradient_ratio = current_grad / (target_grad + 1e-12)
+            gradient_ratio = current_grad / (target_grad + self.eps)
+            gradient_ratio = torch.clamp(gradient_ratio, min=self.eps)
             
             # 考慮相對損失率的影響
             if name in relative_losses:
-                loss_ratio = relative_losses[name] / (avg_relative_loss + 1e-12)
+                loss_ratio = relative_losses[name] / (avg_relative_loss + self.eps)
+                loss_ratio = max(loss_ratio, self.eps)
                 adjustment_factor = gradient_ratio * loss_ratio
             else:
                 adjustment_factor = gradient_ratio
             
             # 使用指數移動平均更新權重，但限制調整幅度
-            weight_adjustment = adjustment_factor ** (-self.alpha)
-            # 限制單次調整幅度，避免權重爆炸
-            weight_adjustment = torch.clamp(weight_adjustment, 0.5, 2.0)
-            new_weight = self.weights[name] * weight_adjustment
+            weight_adjustment = torch.clamp(
+                adjustment_factor.pow(-self.alpha), 0.5, 2.0
+            )
+            new_weight = torch.clamp(
+                self.weights[name] * weight_adjustment,
+                self.min_weight,
+                self.max_weight
+            )
             
-            # 限制權重範圍避免數值不穩定 - 更保守的範圍
-            new_weight = torch.clamp(new_weight, self.min_weight, self.max_weight)
-            self.weights[name] = new_weight
+            self.weights[name] = new_weight.detach()
             
             # 記錄梯度歷史
             self.gradient_history[name].append(current_grad.item())
             if len(self.gradient_history[name]) > 100:  # 保持歷史長度
                 self.gradient_history[name].pop(0)
         
-        return {name: weight.item() for name, weight in self.weights.items()}
+        return self.get_weights()
     
     def get_weights(self) -> Dict[str, float]:
         """獲取當前權重"""
@@ -223,7 +286,11 @@ class GradNormWeighter:
         """重置權重為初始值"""
         for name in self.loss_names:
             self.weights[name] = torch.clamp(
-                torch.tensor(1.0, device=self.device),
+                torch.tensor(
+                    self.initial_weight_values.get(name, 1.0),
+                    device=self.device,
+                    dtype=torch.float32
+                ),
                 min=self.min_weight,
                 max=self.max_weight
             )
@@ -669,7 +736,8 @@ class MultiWeightManager:
                  strategies: List[str] = ['gradnorm', 'adaptive'],
                  strategy_weights: Optional[Dict[str, float]] = None,
                  method: str = 'weighted_sum',
-                 preference_weights: List[float] = None):
+                 preference_weights: List[float] = None,
+                 config: Optional[Dict[str, Any]] = None):
         """
         Args:
             objectives_or_model: 目標列表（測試模式）或 PINN 模型（正常模式）
@@ -678,22 +746,32 @@ class MultiWeightManager:
             strategy_weights: 策略權重字典
             method: 多目標方法 ('weighted_sum', 'pareto')
             preference_weights: 偏好權重列表
+            config: 策略配置
         """
+        self.config = config or {}
+        if strategies is None:
+            strategies = self.config.get('strategies', ['gradnorm', 'adaptive'])
         # 判斷是測試模式還是正常模式
         if isinstance(objectives_or_model, list):
             # 測試模式：objectives_or_model 是目標列表
             self.objectives = objectives_or_model
             self.loss_names = objectives_or_model
             self.model = None
-            self.method = method
-            base_pref = preference_weights or [1.0/len(objectives_or_model)] * len(objectives_or_model)
+            self.method = self.config.get('method', method)
+            base_pref = preference_weights or self.config.get(
+                'preference_weights',
+                [1.0/len(objectives_or_model)] * len(objectives_or_model)
+            )
         else:
             # 正常模式：objectives_or_model 是模型
             self.model = objectives_or_model
             self.loss_names = loss_names or ['data', 'residual']
             self.objectives = self.loss_names
-            self.method = 'weighted_sum'
-            base_pref = [1.0/len(self.loss_names)] * len(self.loss_names)
+            self.method = self.config.get('method', method if method else 'weighted_sum')
+            base_pref = preference_weights or self.config.get(
+                'preference_weights',
+                [1.0/len(self.loss_names)] * len(self.loss_names)
+            )
         self.strategies = strategies
 
         # 正規化偏好權重長度
@@ -706,6 +784,8 @@ class MultiWeightManager:
             self.preference_weights = self.preference_weights[:len(self.objectives)]
 
         if strategy_weights is None:
+            strategy_weights = self.config.get('strategy_weights')
+        if strategy_weights is None:
             strategy_weights = {strategy: 1.0/len(strategies) for strategy in strategies}
         self.strategy_weights = strategy_weights
         
@@ -714,7 +794,12 @@ class MultiWeightManager:
         
         if 'gradnorm' in strategies:
             if self.model is not None:
-                self.weighters['gradnorm'] = GradNormWeighter(self.model, self.loss_names)
+                gradnorm_kwargs = self._build_gradnorm_kwargs()
+                self.weighters['gradnorm'] = GradNormWeighter(
+                    self.model,
+                    self.loss_names,
+                    **gradnorm_kwargs
+                )
             else:
                 import logging
                 logging.warning("GradNorm requires model reference, skipping in test mode")
@@ -738,6 +823,44 @@ class MultiWeightManager:
                 import logging
                 logging.warning("Adaptive weighting requires loss_names, skipping in test mode")
                 self.weighters['adaptive'] = None
+    
+    def _build_gradnorm_kwargs(self) -> Dict[str, Any]:
+        """提取 GradNorm 初始化參數"""
+        valid_keys = {
+            'alpha',
+            'update_frequency',
+            'initial_weights',
+            'target_gradient_ratio',
+            'target_ratios',
+            'device',
+            'min_weight',
+            'max_weight'
+        }
+        gradnorm_kwargs: Dict[str, Any] = {}
+        
+        gradnorm_cfg = self.config.get('gradnorm', {})
+        if isinstance(gradnorm_cfg, dict):
+            for key in valid_keys:
+                if key in gradnorm_cfg:
+                    gradnorm_kwargs[key] = gradnorm_cfg[key]
+            # 支援簡寫名稱
+            if 'update_freq' in gradnorm_cfg and 'update_frequency' not in gradnorm_kwargs:
+                gradnorm_kwargs['update_frequency'] = gradnorm_cfg['update_freq']
+        
+        legacy_map = {
+            'gradnorm_alpha': 'alpha',
+            'gradnorm_update_freq': 'update_frequency',
+            'gradnorm_min_weight': 'min_weight',
+            'gradnorm_max_weight': 'max_weight',
+            'gradnorm_target_ratios': 'target_ratios',
+            'gradnorm_target_gradient_ratio': 'target_gradient_ratio',
+            'gradnorm_device': 'device'
+        }
+        for legacy_key, target_key in legacy_map.items():
+            if legacy_key in self.config and target_key not in gradnorm_kwargs:
+                gradnorm_kwargs[target_key] = self.config[legacy_key]
+        
+        return gradnorm_kwargs
     
     def _update_objective_mode(self, losses: Optional[Dict[str, torch.Tensor]]) -> Dict[str, float]:
         """處理純多目標權重更新（無模型參與的情況）"""
@@ -859,7 +982,7 @@ MultiObjectiveWeighting = MultiWeightManager  # 別名
 # 便捷函數
 def create_weight_manager(model: nn.Module,
                          loss_names: List[str],
-                         config: Optional[Dict] = None) -> MultiWeightManager:
+                         config: Optional[Dict[str, Any]] = None) -> MultiWeightManager:
     """
     創建權重管理器的便捷函數
     
@@ -880,11 +1003,18 @@ def create_weight_manager(model: nn.Module,
         }
     
     strategies = config.get('strategies', ['gradnorm', 'adaptive'])
+    strategy_weights = config.get('strategy_weights')
+    method = config.get('method', 'weighted_sum')
+    preference_weights = config.get('preference_weights')
     
     return MultiWeightManager(
         model=model,
         loss_names=loss_names,
-        strategies=strategies
+        strategies=strategies,
+        strategy_weights=strategy_weights,
+        method=method,
+        preference_weights=preference_weights,
+        config=config
     )
 
 

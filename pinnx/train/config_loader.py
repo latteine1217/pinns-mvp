@@ -125,7 +125,9 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
     處理兼容性問題：
         1. model.fourier.{enabled, m, sigma, trainable} → 
            model.{use_fourier, fourier_m, fourier_sigma, fourier_trainable}
-        2. 確保所有必要字段都有默認值
+        2. model.fourier_features.{type, fourier_m, fourier_sigma} → 
+           model.{use_fourier, fourier_m, fourier_sigma}
+        3. 確保所有必要字段都有默認值
     
     Args:
         config: 原始配置字典
@@ -134,7 +136,7 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
         標準化後的配置字典
         
     範例:
-        >>> # 嵌套格式
+        >>> # 嵌套格式（舊版）
         >>> config = {
         ...     'model': {
         ...         'fourier': {
@@ -150,6 +152,22 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
         True
         >>> print(normalized['model']['fourier_m'])
         64
+        
+        >>> # 新版格式（fourier_features.type）
+        >>> config = {
+        ...     'model': {
+        ...         'fourier_features': {
+        ...             'type': 'disabled',
+        ...             'fourier_m': 0,
+        ...             'fourier_sigma': 0.0
+        ...         }
+        ...     }
+        ... }
+        >>> normalized = normalize_config_structure(config)
+        >>> print(normalized['model']['use_fourier'])
+        False
+        >>> print(normalized['model']['fourier_m'])
+        0
     """
     model_cfg = config.get('model', {})
     
@@ -174,6 +192,28 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
             model_cfg['fourier_trainable'] = fourier_cfg['trainable']
         
         logging.debug("✅ 將嵌套 fourier 配置標準化為扁平結構")
+    
+    # 處理 fourier_features.type 格式（新版格式）
+    if 'fourier_features' in model_cfg and isinstance(model_cfg['fourier_features'], dict):
+        ff_cfg = model_cfg['fourier_features']
+        ff_type = ff_cfg.get('type', 'standard')
+        
+        # 處理 type="disabled"
+        if ff_type == 'disabled':
+            model_cfg['use_fourier'] = False
+            model_cfg['fourier_m'] = 0
+            model_cfg['fourier_sigma'] = 0.0
+            logging.debug("✅ Fourier Features 已禁用 (type='disabled')")
+        
+        # 處理 type="standard" 或其他啟用類型
+        elif ff_type in ['standard', 'enhanced', 'adaptive']:
+            model_cfg['use_fourier'] = True
+            model_cfg['fourier_m'] = ff_cfg.get('fourier_m', 32)
+            model_cfg['fourier_sigma'] = ff_cfg.get('fourier_sigma', 5.0)
+            logging.debug(f"✅ Fourier Features 已啟用 (type='{ff_type}', m={model_cfg['fourier_m']})")
+        
+        else:
+            logging.warning(f"⚠️ 未知的 fourier_features.type='{ff_type}'，使用預設值")
     
     # 設置默認值（如果未設置）
     model_cfg.setdefault('use_fourier', True)  # 默認啟用 Fourier

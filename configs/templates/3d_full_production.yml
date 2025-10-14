@@ -1,0 +1,545 @@
+# 🚀 3D Full 生產級訓練模板
+# 用途：生產級訓練、完整 3D 重建、論文級結果
+# 預期時間：2-8 小時（2000-5000 epochs，3+ 階段）
+# 目標：高精度重建、完整物理驗證、可發表品質
+
+# =============================================================================
+# 基本實驗設定
+# =============================================================================
+experiment:
+  name: "3d_full_production_final"  # ⚠️ 修改為你的實驗名稱
+  version: "v1.0"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Production-grade 3D full domain reconstruction"
+
+# =============================================================================
+# 重現性設定
+# =============================================================================
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 8  # 生產級：更多工作線程
+
+# =============================================================================
+# 資料配置（3D Full Domain）
+# =============================================================================
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000) - 3D Full Domain"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+
+normalization:
+  type: 'training_data_norm'
+  params: {}
+  noise_sigma: 0.02
+  dropout_prob: 0.10
+  
+  # 3D 完整域配置
+  slice_config:
+    plane: "3d_full"
+    z_range: [0.0, 9.42]  # 完整 z 方向
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# =============================================================================
+# 感測點配置（高密度）
+# =============================================================================
+sensors:
+  K: 500  # 生產級：高密度感測點
+  selection_method: "qr_pivot"
+  spatial_coverage: "optimal"
+
+# =============================================================================
+# 模型架構（加強版）
+# =============================================================================
+model:
+  type: "enhanced_fourier_mlp"
+  in_dim: 3
+  out_dim: 4
+  width: 256  # 可選：512 for better accuracy
+  depth: 8    # 加深網路（更強表達能力）
+  activation: "sine"
+  
+  # Fourier 特徵（完整頻譜）
+  fourier_features:
+    type: "axis_selective"
+    axes_config: {x: [1, 2], y: [], z: [1, 2]}
+    full_axes_config: {x: [1, 2, 4, 8, 16], y: [], z: [1, 2, 4, 8, 16]}  # 更多高頻
+    domain_lengths: {x: 25.13, y: 2.0, z: 9.42}
+    fourier_m: 64  # 加倍 Fourier 特徵
+    fourier_sigma: 5.0
+  
+  scaling:
+    learnable: true
+    input_norm: "channel_flow"
+    output_norm: "friction_velocity"
+    friction_velocity: 0.04997
+    channel_half_height: 1.0
+    viscous_length: 1.0e-3
+
+# =============================================================================
+# 物理設定
+# =============================================================================
+physics:
+  type: "vs_pinn_channel_flow"
+  nu: 5.0e-5
+  rho: 1.0
+  
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
+    
+    loss_config:
+      disable_extra_pde_division: true
+      warmup_epochs: 10  # 更長 warmup
+    
+    boundary_config:
+      boundary_band_width: 5.0e-3
+    
+    # ⚠️ 可選：啟用 RANS prior（低保真引導）
+    enable_rans: false  # 設為 true 並提供 RANS 資料路徑
+  
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 39998.0
+    u_tau: 0.04997
+    pressure_gradient: 0.0025
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    periodic_z: true
+    pressure_driven: true
+    mean_pressure_gradient: 0.0025
+
+# =============================================================================
+# 損失函數權重（基礎配置）
+# =============================================================================
+losses:
+  data_weight: 5.0
+  boundary_weight: 5.0
+  
+  momentum_x_weight: 5.0
+  momentum_y_weight: 5.0
+  momentum_z_weight: 5.0
+  continuity_weight: 5.0
+  
+  wall_constraint_weight: 10.0
+  periodicity_weight: 2.0
+  pressure_gradient_weight: 1.0
+  
+  prior_weight: 0.3  # ⚠️ 若啟用 RANS，建議 0.1-0.5
+  source_l1: 1.0e-6
+  gradient_penalty: 1.0e-4
+  
+  # ⭐ 啟用自適應權重
+  adaptive_weighting: true
+  weight_update_freq: 50
+  grad_norm_alpha: 1.5
+  
+  adaptive_loss_terms:
+    - data
+    - momentum_x
+    - momentum_y
+    - momentum_z
+    - continuity
+    - wall_constraint
+    - periodicity
+  
+  causal_weighting: false
+
+# =============================================================================
+# 訓練設定（生產級）
+# =============================================================================
+training:
+  optimizer: "adam"  # Stage1-2 使用 Adam
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  
+  lr_scheduler:
+    type: "cosine_annealing_warmup"
+    min_lr: 1.0e-7  # 更小最低 LR
+    warmup_epochs: 100
+    T_max: 5000
+  
+  epochs: 5000
+  max_epochs: 5000
+  batch_size: 2048  # 更大批次（若記憶體允許）
+  validation_freq: 100
+  checkpoint_freq: 250
+  log_interval: 50
+  
+  early_stopping:
+    enabled: true
+    patience: 500  # 更長容忍期
+    min_delta: 1.0e-8
+  
+  sampling:
+    pde_points: 4096  # 加倍碰撞點
+    boundary_points: 2000  # 加倍邊界點
+    wall_clustering: 0.4
+  
+  gradient_clip: 1.0
+  
+  # ⚠️ 可選：後期切換至 L-BFGS（epoch > 3000）
+  lbfgs_switch:
+    enabled: false  # 設為 true 啟用
+    switch_epoch: 3000
+    max_iter: 20
+    history_size: 100
+
+# =============================================================================
+# ⭐ 課程學習配置（3 階段）
+# =============================================================================
+curriculum:
+  enable: true
+  
+  stages:
+    # ================================
+    # 階段 1: 強 PDE 暖啟（Epochs 0-1000）
+    # ================================
+    - name: "Stage1_Foundation"
+      epoch_range: [0, 1000]
+      Re_tau: 1000.0
+      nu: 5.0e-5
+      pressure_gradient: 0.0025
+      lr: 1.0e-3
+      
+      weights:
+        data: 5.0
+        boundary: 5.0
+        momentum_x: 5.0
+        momentum_y: 5.0
+        momentum_z: 5.0
+        continuity: 5.0
+        wall_constraint: 10.0
+        periodicity: 2.0
+        pressure_gradient: 1.0
+      
+      sampling:
+        pde_points: 4096
+        boundary_points: 2000
+        wall_clustering: 0.4
+      
+      stage_goals:
+        pde_ratio_min: 0.25
+        tau_w_ratio_min: 1.0
+        loss_reduction_factor: 0.6
+    
+    # ================================
+    # 階段 2: PDE 主導（Epochs 1000-3000）
+    # ================================
+    - name: "Stage2_PDEDominance"
+      epoch_range: [1000, 3000]
+      Re_tau: 1000.0
+      nu: 5.0e-5
+      pressure_gradient: 0.0025
+      lr: 5.0e-4  # 降低 LR
+      
+      weights:
+        data: 5.0
+        boundary: 5.0
+        momentum_x: 8.0
+        momentum_y: 8.0
+        momentum_z: 8.0
+        continuity: 8.0
+        wall_constraint: 12.0  # 進一步強化壁面
+        periodicity: 2.0
+        pressure_gradient: 1.0
+      
+      sampling:
+        pde_points: 4096
+        boundary_points: 2000
+        wall_clustering: 0.4
+      
+      stage_goals:
+        pde_ratio_min: 0.35
+        tau_w_ratio_min: 5.0
+        u_l2_target: 0.20
+    
+    # ================================
+    # 階段 3: 精煉優化（Epochs 3000-5000）
+    # ================================
+    - name: "Stage3_Refinement"
+      epoch_range: [3000, 5000]
+      Re_tau: 1000.0
+      nu: 5.0e-5
+      pressure_gradient: 0.0025
+      lr: 1.0e-4  # 極低 LR
+      
+      weights:
+        data: 5.0
+        boundary: 5.0
+        momentum_x: 10.0  # 最大 PDE 權重
+        momentum_y: 10.0
+        momentum_z: 10.0
+        continuity: 10.0
+        wall_constraint: 15.0
+        periodicity: 2.0
+        pressure_gradient: 1.0
+      
+      sampling:
+        pde_points: 4096
+        boundary_points: 2000
+        wall_clustering: 0.5  # 最大壁面聚集
+      
+      stage_goals:
+        pde_ratio_min: 0.40
+        tau_w_ratio_min: 10.0
+        u_l2_target: 0.15
+        mass_conservation_target: 1.0e-4
+
+# ⚠️ 可選：啟用 Ensemble（不確定性量化）
+ensemble:
+  enable: false  # 設為 true 啟用
+  n_models: 5
+  seed_offset: 100
+
+# =============================================================================
+# 評估設定
+# =============================================================================
+evaluation:
+  grid_resolution: [128, 64, 64]  # 3D Full 解析度
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "mass_conservation"
+    - "mean_velocity_profile"
+    - "turbulent_kinetic_energy"
+    - "reynolds_stress"
+    - "energy_spectrum"
+    - "two_point_correlation"  # 額外指標
+    - "vorticity_field"  # 額外指標
+  
+  # 嚴格門檻（論文級）
+  thresholds:
+    l2_error: 0.15  # ⭐ 目標 ≤ 15%
+    mass_conservation_error: 1.0e-4  # ⭐ 嚴格約束
+    wall_shear_stress_error: 0.20
+    mean_profile_correlation: 0.95
+    spectrum_rmse: 0.25  # 能譜誤差
+    reynolds_stress_error: 0.30
+
+# =============================================================================
+# 日誌與儲存
+# =============================================================================
+logging:
+  level: "info"
+  log_freq: 50
+  save_predictions: true
+  tensorboard: true
+  wandb: true  # ⚠️ 建議啟用 W&B（長期訓練追蹤）
+  
+  stage_diagnostics: true
+  save_loss_history: true
+  save_weight_evolution: true
+  save_gradient_stats: true  # 額外診斷
+
+output:
+  checkpoint_dir: "./checkpoints/3d_full_production_final"
+  results_dir: "./results/3d_full_production_final"
+  visualization_dir: "./results/3d_full_production_final/visualizations"
+  
+  save_stage_checkpoints: true
+  save_best_only: false  # 保存所有里程碑
+
+# =============================================================================
+# 驗收標準（論文級）
+# =============================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+    - no_mode_collapse: true
+  
+  performance:
+    - pde_loss_ratio_target: 0.40  # ⭐ 最終 ≥ 40%
+    - u_l2_error_target: 0.15  # ⭐ ≤ 15%
+    - v_l2_error_target: 0.30
+    - w_l2_error_target: 0.30
+    - p_l2_error_target: 0.40
+    
+    # 物理一致性
+    - mass_conservation_error_target: 1.0e-4  # ⭐ 嚴格
+    - tau_w_ratio_target: 10.0  # ⭐ ≥ 10×
+    - wall_shear_stress_error_target: 0.20
+    
+    # 統計指標
+    - mean_profile_correlation_target: 0.95
+    - spectrum_rmse_target: 0.25
+    - reynolds_stress_improvement: 0.30  # vs. RANS ≥ 30%
+  
+  curriculum:
+    - stage1_pde_ratio_min: 0.25
+    - stage2_pde_ratio_min: 0.35
+    - stage3_pde_ratio_min: 0.40
+    - stage_transition_smooth: true
+
+# =============================================================================
+# 使用說明
+# =============================================================================
+usage_notes: |
+  🎯 用途：
+    - 生產級 3D 全域重建
+    - 論文級結果產出
+    - 完整物理驗證
+    - 高精度長期訓練
+  
+  🏗️ 課程設計（3 階段）：
+    - Stage1 (0-1000): 建立物理基礎（PDE ratio ≥ 25%）
+    - Stage2 (1000-3000): PDE 主導（PDE ratio ≥ 35%, L2 < 20%）
+    - Stage3 (3000-5000): 精煉優化（PDE ratio ≥ 40%, L2 < 15%）
+  
+  ⚙️ 配置特點：
+    - K=500（高密度感測）
+    - 3D Full: 128×64×64
+    - 深層網路（256×8）
+    - 64 Fourier 特徵
+    - 自適應權重
+    - 3 階段課程學習
+    - 可選 RANS prior
+    - 可選 Ensemble UQ
+  
+  ✅ 成功標準（論文級）：
+    1. L2 ≤ 15%（u 速度）
+    2. PDE ratio ≥ 40%（最終階段）
+    3. τ_w ratio ≥ 10.0（壁面剪應力）
+    4. Mass conservation < 1e-4（嚴格守恆）
+    5. RMSE improvement ≥ 30%（vs. RANS）
+    6. Spectrum RMSE ≤ 25%（能譜準確）
+  
+  🚀 使用範例：
+    # 完整訓練（5000 epochs）
+    python scripts/train.py --cfg configs/templates/3d_full_production.yml
+    
+    # 啟用 Ensemble（UQ）
+    python scripts/train.py --cfg configs/templates/3d_full_production.yml --ensemble
+    
+    # 從 Stage2 檢查點恢復
+    python scripts/train.py --cfg configs/templates/3d_full_production.yml \
+        --resume checkpoints/3d_full_production_final/stage2_complete.pth
+  
+  📊 預期結果：
+    - 訓練時間：2-8 小時（GPU, 取決於硬體）
+    - Stage1 (1000 ep): Loss ↓ 60%, PDE ratio ≈ 25%
+    - Stage2 (3000 ep): L2 ≈ 18-20%, PDE ratio ≈ 35%
+    - Stage3 (5000 ep): L2 ≈ 12-15%, PDE ratio ≈ 40-45%
+  
+  ⚠️ 注意事項：
+    - 長期訓練建議使用 tmux/screen（防斷線）
+    - 監控 GPU 記憶體（batch_size 可能需調整）
+    - Stage 轉換時檢查 loss 跳變（應 < 20%）
+    - 定期備份檢查點（每 500 epochs）
+    - 啟用 W&B 以便遠端監控
+  
+  💾 記憶體估算：
+    - 模型參數：~5M（256×8 網路）
+    - 批次資料：~200MB（batch_size=2048）
+    - 峰值記憶體：~8-12GB（CUDA）
+  
+  🔧 效能調優：
+    - GPU 充足：batch_size=4096, width=512
+    - GPU 受限：batch_size=1024, width=256, depth=6
+    - 極速模式：關閉 Fourier（fourier_m=0）
+    - 高精度：depth=10, fourier_m=128
+
+# =============================================================================
+# 階段性評估計畫
+# =============================================================================
+evaluation_milestones:
+  - epoch: 500
+    stage: "Stage1"
+    expected_pde_ratio: 0.20
+    expected_tau_w_ratio: 0.5
+    action: "早期穩定性檢查"
+  
+  - epoch: 1000
+    stage: "Stage1 完成"
+    expected_pde_ratio: 0.25
+    expected_tau_w_ratio: 1.0
+    expected_l2: 0.35
+    action: "⚠️ Stage1→Stage2 轉換檢查"
+  
+  - epoch: 2000
+    stage: "Stage2 中期"
+    expected_pde_ratio: 0.35
+    expected_tau_w_ratio: 5.0
+    expected_l2: 0.25
+    action: "物理一致性驗證"
+  
+  - epoch: 3000
+    stage: "Stage2 完成"
+    expected_pde_ratio: 0.38
+    expected_tau_w_ratio: 8.0
+    expected_l2: 0.20
+    action: "⚠️ Stage2→Stage3 轉換檢查"
+  
+  - epoch: 4000
+    stage: "Stage3 中期"
+    expected_pde_ratio: 0.40
+    expected_tau_w_ratio: 10.0
+    expected_l2: 0.18
+    action: "精煉效果評估"
+  
+  - epoch: 5000
+    stage: "Final"
+    expected_pde_ratio: 0.45
+    expected_tau_w_ratio: 12.0
+    expected_l2: 0.15
+    action: "⭐⭐⭐ 最終論文級驗收"
+
+# =============================================================================
+# 實驗檢查清單
+# =============================================================================
+experiment_checklist:
+  before_training:
+    - "✅ 確認 JHTDB 資料已下載並快取"
+    - "✅ 檢查 GPU 記憶體充足（≥ 8GB）"
+    - "✅ 確認磁碟空間充足（檢查點 ~10GB）"
+    - "✅ 設定實驗名稱與版本號"
+    - "✅ 啟用 W&B 並登入（可選）"
+    - "✅ 建立 tmux/screen 會話（防斷線）"
+  
+  during_training:
+    - "🔍 每 500 epochs 檢查 PDE ratio"
+    - "🔍 Stage 轉換時監控 loss 跳變"
+    - "🔍 監控 GPU 溫度與使用率"
+    - "🔍 定期備份檢查點"
+  
+  after_training:
+    - "📊 執行完整物理驗證（scripts/comprehensive_evaluation.py）"
+    - "📊 生成視覺化結果"
+    - "📊 計算統計指標（mean profile, spectrum, etc.）"
+    - "📊 與 RANS baseline 對比"
+    - "📝 記錄最終指標到實驗日誌"
+    - "📝 保存最佳檢查點到安全位置"

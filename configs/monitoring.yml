@@ -1,0 +1,124 @@
+# =============================================================================
+# 通用訓練監控系統配置
+# =============================================================================
+
+# 基礎路徑設定
+paths:
+  log_base_dir: "log"
+  checkpoint_base_dir: "checkpoints"
+  config_dir: "configs"
+
+# 關鍵指標定義
+metrics:
+  # 主要 Loss 指標
+  primary:
+    - name: "total_loss"
+      display_name: "Total Loss"
+      threshold_warning: 100.0
+      threshold_error: 500.0
+    
+    - name: "data_loss"
+      display_name: "Data Loss"
+      threshold_warning: 10.0
+      threshold_error: 50.0
+    
+    - name: "pde_loss"
+      display_name: "PDE Loss"
+      threshold_warning: 50.0
+      threshold_error: 200.0
+  
+  # RANS 相關指標
+  rans:
+    - name: "continuity_loss"
+      display_name: "Continuity"
+      threshold_warning: 10.0
+    
+    - name: "momentum_x_loss"
+      display_name: "Momentum-X"
+      threshold_warning: 20.0
+    
+    - name: "momentum_y_loss"
+      display_name: "Momentum-Y"
+      threshold_warning: 20.0
+    
+    - name: "momentum_z_loss"
+      display_name: "Momentum-Z"
+      threshold_warning: 20.0
+    
+    - name: "k_equation_loss"
+      display_name: "k-Equation"
+      threshold_warning: 20.0
+    
+    - name: "epsilon_equation_loss"
+      display_name: "ε-Equation"
+      threshold_warning: 20.0
+  
+  # 約束指標
+  constraints:
+    - name: "wall_loss"
+      display_name: "Wall BC"
+      threshold_warning: 5.0
+      threshold_error: 20.0
+    
+    - name: "mean_constraint"
+      display_name: "Mean Constraint"
+      threshold_warning: 0.1
+      threshold_error: 1.0
+
+# 趨勢分析窗口（epoch 數）
+trend_analysis:
+  short_window: 10
+  medium_window: 50
+  long_window: 100
+
+# ETA 估算
+eta:
+  default_seconds_per_epoch: 1.3
+  rolling_average_window: 20
+
+# 監控行為
+monitoring:
+  # 刷新間隔（秒）
+  refresh_interval: 5
+  
+  # 顯示設定
+  display:
+    show_all_metrics: false         # false 時只顯示主要指標
+    show_trend_indicators: true     # 顯示趨勢箭頭（↑↓→）
+    show_eta: true                  # 顯示預計完成時間
+    show_process_info: true         # 顯示進程資訊（PID, CPU, Memory）
+  
+  # 警告設定
+  alerts:
+    enable_warnings: true
+    enable_nan_detection: true
+    enable_gradient_explosion_check: true
+
+# 日誌解析規則
+log_parsing:
+  # 標準 epoch 日誌格式
+  epoch_pattern: "Epoch\\s+(\\d+)/(\\d+)"
+  
+  # Loss 指標格式（支援多種格式）
+  loss_patterns:
+    - "([\\w_]+):\\s*([\\d.e+-]+)"              # key: value
+    - "([\\w_]+)=([\\d.e+-]+)"                  # key=value
+    - "([\\w_]+)Loss:\\s*([\\d.e+-]+)"          # keyLoss: value
+  
+  # 特殊值檢測
+  special_values:
+    - "nan"
+    - "inf"
+    - "-inf"
+
+# 輸出格式
+output:
+  # 報告格式
+  format: "table"  # 選項: table, json, simple
+  
+  # 顏色設定（ANSI 終端）
+  use_colors: true
+  
+  # 保存監控歷史
+  save_history: true
+  history_file: "monitoring_history.json"

@@ -104,20 +104,50 @@ python scripts/visualize_results.py --checkpoint checkpoints/model.pth
 
 ## 🔍 監控工具
 
-### `monitor_training_progress.py` ⭐
-通用訓練進度監控
+### `monitor_training.py` ⭐
+**通用訓練監控系統** - 自動檢測並監控所有訓練任務
+
+**功能：**
+- 自動檢測活躍訓練進程
+- 配置驅動的指標監控
+- 支援多實驗並行監控
+- 異常檢測與警告（NaN、梯度爆炸）
+- 趨勢分析（↑↓→）
+- ETA 預估
+
+**使用範例：**
+```bash
+# 監控所有活躍訓練
+python scripts/monitor_training.py --all
+
+# 監控特定實驗
+python scripts/monitor_training.py --config test_rans_phase6c_v1
+
+# 持續監控模式（每 5 秒刷新）
+python scripts/monitor_training.py --all --watch --interval 5
+
+# 詳細模式（顯示所有指標）
+python scripts/monitor_training.py --config phase6c_v1 --verbose
+```
+
+**配置文件：** `configs/monitoring.yml`
+
+**替代舊腳本：**
+- ✅ 取代 `monitor_phase6*` 系列
+- ✅ 取代 `watch_phase6c_training.sh`
+- ✅ 取代 `auto_evaluate_phase6c.sh`
+- ✅ 取代 `monitor_task10_training.sh`
+
+---
+
+### `monitor_training_progress.py` [舊版]
+舊版通用訓練進度監控（建議使用 `monitor_training.py`）
 
 ### `monitor_warmup_test.py`
 Warmup Cosine 學習率策略專用監控
 
 ### `monitor_curriculum.sh` / `monitor_curriculum_ic.sh`
 課程學習訓練監控腳本
-
-**使用範例：**
-```bash
-# 在另一個終端持續監控訓練
-python scripts/monitor_training_progress.py --checkpoint_dir checkpoints --interval 60
-```
 
 ---
 
@@ -308,6 +338,14 @@ python scripts/debug/diagnose_boundary_conditions.py
 
 ## 🔄 最近更新
 
+- **2025-10-14**: 通用監控系統部署完成
+  - ✅ 創建 `monitor_training.py`（配置驅動、自動檢測、多實驗支援）
+  - ✅ 刪除 7 個特定實驗監控腳本（phase6b/6c/task10 系列）
+  - ✅ 新增 `configs/monitoring.yml` 配置文件
+  - ✅ 新增 `pinnx/utils/training_monitor.py` 核心模組
+  - ✅ 新增 `docs/monitoring_guide.md` 使用指南
+  - **目前根目錄腳本數**: 44 個 → 37 個（-7，持續優化中）
+
 - **2025-10-09**: Task-9 腳本整理完成
   - 歸檔 7 個重複評估腳本至 `archive_eval/`
   - 歸檔 5 個重複監控腳本至 `archive_monitors/`
@@ -315,7 +353,6 @@ python scripts/debug/diagnose_boundary_conditions.py
   - 移動 8 個測試腳本至 `tests/`
   - 歸檔 6 個過時診斷腳本至 `archive_diagnostics/`
   - 歸檔 9 個過時 Shell 腳本至 `archive_shell_scripts/`
-  - **目前根目錄腳本數**: 30 個（目標 ≤ 20 個，持續優化中）
 
 - **2025-10-09**: VS-PINN 計算圖斷裂問題修復完成
   - `diagnose_ns_equations.py` 通過所有測試

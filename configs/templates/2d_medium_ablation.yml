@@ -1,0 +1,353 @@
+# 🧪 2D 中期消融實驗模板
+# 用途：特徵消融研究、參數敏感度分析、對照實驗
+# 預期時間：15-30 分鐘（500-1000 epochs）
+# 目標：量化特徵貢獻、建立基線對照
+
+# =============================================================================
+# 基本實驗設定
+# =============================================================================
+experiment:
+  name: "2d_medium_ablation_fourier"  # ⚠️ 修改為你的實驗名稱
+  version: "v1.0"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Ablation study - Fourier feature impact"
+
+# =============================================================================
+# 重現性設定
+# =============================================================================
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# =============================================================================
+# 資料配置（2D 切片）
+# =============================================================================
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000) - 2D 切片"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+
+normalization:
+  type: 'training_data_norm'
+  params: {}
+  noise_sigma: 0.02  # 標準噪聲
+  dropout_prob: 0.10  # 標準遺失率
+  
+  slice_config:
+    plane: "xy"
+    z_position: 4.71
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# =============================================================================
+# 感測點配置（中等稀疏度）
+# =============================================================================
+sensors:
+  K: 100  # 中等感測點數量
+  selection_method: "qr_pivot"
+  spatial_coverage: "optimal"
+
+# =============================================================================
+# 模型架構（標準配置）
+# =============================================================================
+model:
+  type: "enhanced_fourier_mlp"
+  in_dim: 3
+  out_dim: 4
+  width: 256  # 標準寬度
+  depth: 6    # 標準深度
+  activation: "sine"
+  
+  # ⚠️ 消融變數 1: Fourier 特徵（可開關）
+  fourier_features:
+    type: "axis_selective"
+    axes_config: {x: [1, 2], y: [], z: [1, 2]}
+    full_axes_config: {x: [1, 2, 4, 8], y: [], z: [1, 2, 4, 8]}
+    domain_lengths: {x: 25.13, y: 2.0, z: 9.42}
+    fourier_m: 32
+    fourier_sigma: 5.0
+    # 🧪 消融測試：設為 fourier_m: 0 來禁用 Fourier 特徵
+  
+  scaling:
+    learnable: true
+    input_norm: "channel_flow"
+    output_norm: "friction_velocity"
+    friction_velocity: 0.04997
+    channel_half_height: 1.0
+    viscous_length: 1.0e-3
+
+# =============================================================================
+# 物理設定
+# =============================================================================
+physics:
+  type: "vs_pinn_channel_flow"
+  nu: 5.0e-5
+  rho: 1.0
+  
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
+    
+    loss_config:
+      disable_extra_pde_division: true
+      warmup_epochs: 5
+    
+    boundary_config:
+      boundary_band_width: 5.0e-3
+    
+    enable_rans: false
+  
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 39998.0
+    u_tau: 0.04997
+    pressure_gradient: 0.0025
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    periodic_z: true
+    pressure_driven: true
+    mean_pressure_gradient: 0.0025
+
+# =============================================================================
+# 損失函數權重（標準配置 + 自適應）
+# =============================================================================
+losses:
+  # 基礎權重（平衡）
+  data_weight: 5.0
+  boundary_weight: 5.0
+  
+  momentum_x_weight: 5.0
+  momentum_y_weight: 5.0
+  momentum_z_weight: 5.0
+  continuity_weight: 5.0
+  
+  wall_constraint_weight: 10.0
+  periodicity_weight: 2.0
+  pressure_gradient_weight: 1.0
+  
+  prior_weight: 0.3
+  source_l1: 1.0e-6
+  gradient_penalty: 1.0e-4
+  
+  # ⚠️ 消融變數 2: 自適應權重（可開關）
+  adaptive_weighting: true  # 🧪 設為 false 來禁用
+  weight_update_freq: 50
+  grad_norm_alpha: 1.5
+  
+  adaptive_loss_terms:
+    - data
+    - momentum_x
+    - momentum_y
+    - momentum_z
+    - continuity
+    - wall_constraint
+    - periodicity
+  
+  causal_weighting: false
+
+# =============================================================================
+# 訓練設定（中期）
+# =============================================================================
+training:
+  optimizer: "adam"
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  
+  lr_scheduler:
+    type: "cosine_annealing_warmup"
+    min_lr: 1.0e-6
+    warmup_epochs: 50
+    T_max: 1000
+  
+  epochs: 1000  # 中期訓練
+  max_epochs: 1000
+  batch_size: 1024
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 20
+  
+  early_stopping:
+    enabled: true
+    patience: 200
+    min_delta: 1.0e-7
+  
+  sampling:
+    pde_points: 2048
+    boundary_points: 1000
+    wall_clustering: 0.3
+  
+  gradient_clip: 1.0
+
+# ⚠️ 關閉課程學習（消融研究通常單階段）
+curriculum:
+  enable: false
+
+ensemble:
+  enable: false
+
+# =============================================================================
+# 評估設定
+# =============================================================================
+evaluation:
+  grid_resolution: [128, 64, 64]
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "mass_conservation"
+    - "mean_velocity_profile"
+    - "turbulent_kinetic_energy"
+    - "reynolds_stress"
+  
+  thresholds:
+    l2_error: 0.30
+    mass_conservation_error: 1.0e-3
+    wall_shear_stress_error: 0.30
+    mean_profile_correlation: 0.85
+
+# =============================================================================
+# 日誌與儲存
+# =============================================================================
+logging:
+  level: "info"
+  log_freq: 20
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+  
+  save_loss_history: true
+  save_weight_evolution: true  # 追蹤權重演化
+
+output:
+  checkpoint_dir: "./checkpoints/2d_medium_ablation_fourier"
+  results_dir: "./results/2d_medium_ablation_fourier"
+  visualization_dir: "./results/2d_medium_ablation_fourier/visualizations"
+
+# =============================================================================
+# 驗收標準（對照基線）
+# =============================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+  
+  performance:
+    - u_l2_error_target: 0.30
+    - pde_loss_ratio_target: 0.30
+    - wall_shear_stress_error_target: 0.30
+  
+  # 消融研究特定指標
+  ablation_metrics:
+    - baseline_l2_comparison: true  # 需與基線對照
+    - delta_l2_threshold: 0.10  # ΔL2 ≥ 10% 視為顯著差異
+    - convergence_speed_ratio: true  # 收斂速度對比
+
+# =============================================================================
+# 使用說明
+# =============================================================================
+usage_notes: |
+  🎯 用途：
+    - 特徵消融研究（Fourier/Adaptive/RANS）
+    - 參數敏感度分析
+    - 建立對照基線
+    - 量化特徵貢獻
+  
+  🧪 消融變數：
+    1. Fourier 特徵：fourier_m (0/16/32/64)
+    2. 自適應權重：adaptive_weighting (true/false)
+    3. 網路寬度：width (128/256/512)
+    4. 感測點數：K (50/100/200)
+  
+  📊 對照實驗設計範例：
+    實驗 A (baseline):      fourier_m=32, adaptive=true
+    實驗 B (no_fourier):    fourier_m=0,  adaptive=true
+    實驗 C (no_adaptive):   fourier_m=32, adaptive=false
+    實驗 D (minimal):       fourier_m=0,  adaptive=false
+  
+  ✅ 成功標準：
+    1. L2 < 30%（合格精度）
+    2. PDE ratio > 30%（物理參與）
+    3. 相對基線 ΔL2 可量化（≥10% 視為顯著）
+  
+  🚀 使用範例：
+    # 基線實驗
+    python scripts/train.py --cfg configs/templates/2d_medium_ablation.yml
+    
+    # 消融實驗（修改配置後）
+    python scripts/train.py --cfg configs/2d_ablation_no_fourier.yml
+  
+  📈 預期結果：
+    - 訓練時間：15-30 分鐘（GPU）
+    - 最終 L2：20-30%
+    - PDE ratio：30-40%
+    - 可量化特徵貢獻（ΔL2 = 5-15%）
+  
+  ⚠️ 注意事項：
+    - 需保持其他變數不變（控制變因）
+    - 建議使用相同 seed（可重現性）
+    - 至少重複 3 次實驗（統計顯著性）
+    - 記錄所有超參數到實驗日誌
+
+# =============================================================================
+# 消融實驗計畫範例
+# =============================================================================
+ablation_experiment_plan:
+  baseline:
+    config: "2d_medium_ablation_fourier_full.yml"
+    fourier_m: 32
+    adaptive_weighting: true
+    K: 100
+    expected_l2: 0.25
+  
+  ablation_fourier:
+    config: "2d_medium_ablation_no_fourier.yml"
+    fourier_m: 0  # ⚠️ 唯一變數
+    adaptive_weighting: true
+    K: 100
+    hypothesis: "L2 增加 10-15%（高頻捕捉能力下降）"
+  
+  ablation_adaptive:
+    config: "2d_medium_ablation_fixed_weights.yml"
+    fourier_m: 32
+    adaptive_weighting: false  # ⚠️ 唯一變數
+    K: 100
+    hypothesis: "PDE ratio 下降至 15-20%（權重失衡）"
+  
+  ablation_sparse:
+    config: "2d_medium_ablation_k50.yml"
+    fourier_m: 32
+    adaptive_weighting: true
+    K: 50  # ⚠️ 唯一變數
+    hypothesis: "L2 增加 5-10%（資訊不足）"

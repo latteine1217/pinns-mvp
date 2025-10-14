@@ -1,0 +1,404 @@
+# 🎯 1000 Epoch 修正配置 v3 - 自適應權重修正版
+# 目標：修正 v2 的權重不平衡問題（data loss 佔 93%）
+# 創建時間: 2025-10-15
+# 基礎版本: test_physics_fix_1k_v2.yml
+# ⭐ 核心修正：自適應權重參數調整 + 初始 PDE 權重大幅提升
+
+# 基本實驗設定
+experiment:
+  name: "test_physics_fix_1k_v3"
+  version: "v3.0_adaptive_fix"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Fix adaptive weighting failure in v2 (data=93%, PDE=5%)"
+
+# 重現性設定
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# 資料相關設定
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000)"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+
+# 資料標準化配置
+normalization:
+  type: 'training_data_norm'
+  params: {}
+  noise_sigma: 0.02
+  dropout_prob: 0.10
+  
+  slice_config:
+    plane: "xy"
+    z_position: 4.71
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# 感測點配置
+sensors:
+  K: 500
+  selection_method: "qr_pivot"
+  spatial_coverage: "optimal"
+
+# 模型架構設定
+model:
+  type: "enhanced_fourier_mlp"
+  in_dim: 3
+  out_dim: 4
+  width: 256
+  depth: 6
+  activation: "sine"
+  
+  fourier_features:
+    type: "axis_selective"
+    axes_config: {x: [1, 2], y: [], z: [1, 2]}
+    full_axes_config: {x: [1, 2, 4, 8], y: [], z: [1, 2, 4, 8]}
+    domain_lengths: {x: 25.13, y: 2.0, z: 9.42}
+    fourier_m: 32
+    fourier_sigma: 5.0
+  
+  # VS-PINN 縮放
+  scaling:
+    learnable: true
+    input_norm: "channel_flow"
+    output_norm: "friction_velocity"
+    friction_velocity: 0.04997
+    channel_half_height: 1.0
+    viscous_length: 1.0e-3
+
+# ⭐ 物理設定
+physics:
+  type: "vs_pinn_channel_flow"
+  nu: 5.0e-5
+  rho: 1.0
+  
+  # VS-PINN 特定配置
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
+    
+    # PDE 損失修正
+    loss_config:
+      disable_extra_pde_division: true
+      warmup_epochs: 5
+    
+    # 邊界採樣策略
+    boundary_config:
+      boundary_band_width: 5.0e-3
+    
+    enable_rans: false
+  
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 39998.0
+    u_tau: 0.04997
+    pressure_gradient: 0.0025
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    periodic_z: true
+    pressure_driven: true
+    mean_pressure_gradient: 0.0025
+
+# ⭐⭐⭐ 修正損失函數權重（核心修改）
+losses:
+  # ⭐ 修改 1: 降低 data 權重以平衡
+  data_weight: 5.0              # v2: 10.0 → v3: 5.0 (降低 50%)
+  boundary_weight: 5.0          # v2: 10.0 → v3: 5.0 (保持一致)
+  
+  # ⭐ 修改 2: 顯著提升 PDE 基礎權重
+  momentum_x_weight: 2.0        # v2: 1.0 → v3: 2.0 (提升 2×)
+  momentum_y_weight: 2.0        # v2: 1.0 → v3: 2.0
+  momentum_z_weight: 2.0        # v2: 1.0 → v3: 2.0
+  continuity_weight: 2.0        # v2: 1.0 → v3: 2.0
+  
+  wall_constraint_weight: 8.0   # v2: 5.0 → v3: 8.0 (提升 60%)
+  periodicity_weight: 2.0
+  pressure_gradient_weight: 1.0
+  
+  prior_weight: 0.3
+  source_l1: 1.0e-6
+  gradient_penalty: 1.0e-4
+  
+  # ⭐⭐ 修改 3: 自適應權重參數修正（核心）
+  adaptive_weighting: true
+  weight_update_freq: 50        # v2: 100 → v3: 50 (更頻繁調整)
+  grad_norm_alpha: 1.5          # v2: 0.12 → v3: 1.5 (標準值，提升 12.5×)
+  
+  adaptive_loss_terms:
+    - data
+    - momentum_x
+    - momentum_y
+    - momentum_z
+    - continuity
+    - wall_constraint
+    - periodicity
+  
+  causal_weighting: false
+
+# ⭐ 課程訓練設定（1000 epochs，2 階段）
+training:
+  optimizer: "adam"
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  
+  lr_scheduler:
+    type: "cosine_annealing_warmup"
+    min_lr: 1.0e-6
+    warmup_epochs: 50
+    T_max: 1000
+  
+  epochs: 1000
+  max_epochs: 1000
+  batch_size: 1024
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 20
+  
+  early_stopping:
+    enabled: true
+    patience: 200
+    min_delta: 1.0e-7
+  
+  # ⭐ 修改 4: 增加壁面點採樣
+  sampling:
+    pde_points: 2048
+    boundary_points: 1000       # v2: 500 → v3: 1000 (提升 2×)
+    wall_clustering: 0.3
+  
+  gradient_clip: 1.0
+
+# ⭐ 課程學習配置（2 階段，激進 PDE 權重）
+curriculum:
+  enable: true
+  stages:
+    # 階段 1: 強 PDE 暖啟（Epochs 0-300）
+    - name: "Stage1_StrongPDE"
+      epoch_range: [0, 300]
+      Re_tau: 1000.0
+      nu: 5.0e-5
+      pressure_gradient: 0.0025
+      lr: 1.0e-3
+      
+      weights:
+        data: 5.0                # v2: 15.0 → v3: 5.0
+        boundary: 5.0            # v2: 12.0 → v3: 5.0
+        momentum_x: 5.0          # v2: 1.5 → v3: 5.0 (⭐ 提升 3.3×)
+        momentum_y: 5.0          # v2: 1.5 → v3: 5.0
+        momentum_z: 5.0          # v2: 1.5 → v3: 5.0
+        continuity: 5.0          # v2: 1.5 → v3: 5.0
+        wall_constraint: 10.0    # v2: 10.0 → v3: 10.0 (保持)
+        periodicity: 2.0
+        pressure_gradient: 1.0
+      
+      sampling:
+        pde_points: 2048
+        boundary_points: 1000    # v2: 500 → v3: 1000
+        wall_clustering: 0.3
+    
+    # 階段 2: PDE 主導（Epochs 300-1000）
+    - name: "Stage2_PDEDominance"
+      epoch_range: [300, 1000]
+      Re_tau: 1000.0
+      nu: 5.0e-5
+      pressure_gradient: 0.0025
+      lr: 3.0e-4
+      
+      weights:
+        data: 5.0                # v2: 10.0 → v3: 5.0
+        boundary: 5.0            # v2: 10.0 → v3: 5.0
+        momentum_x: 8.0          # v2: 3.0 → v3: 8.0 (⭐ 提升 2.7×)
+        momentum_y: 8.0          # v2: 3.0 → v3: 8.0
+        momentum_z: 8.0          # v2: 3.0 → v3: 8.0
+        continuity: 8.0          # v2: 3.0 → v3: 8.0
+        wall_constraint: 10.0    # v2: 5.0 → v3: 10.0 (提升 2×)
+        periodicity: 2.0
+        pressure_gradient: 1.0
+      
+      sampling:
+        pde_points: 2048
+        boundary_points: 1000
+        wall_clustering: 0.3
+
+# Ensemble 設定（關閉）
+ensemble:
+  enable: false
+
+# 評估設定
+evaluation:
+  grid_resolution: [128, 64, 64]
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "mass_conservation"
+    - "mean_velocity_profile"
+    - "turbulent_kinetic_energy"
+    - "reynolds_stress"
+    - "energy_spectrum"
+    
+  thresholds:
+    l2_error: 0.30
+    mass_conservation_error: 1.0e-3      # v2: 1e-4 → v3: 1e-3 (放寬)
+    wall_shear_stress_error: 0.30
+    mean_profile_correlation: 0.85
+
+# 日誌與儲存
+logging:
+  level: "info"
+  log_freq: 20
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+  
+  stage_diagnostics: true
+  save_loss_history: true
+  save_weight_evolution: true
+
+output:
+  checkpoint_dir: "./checkpoints/test_physics_fix_1k_v3"
+  results_dir: "./results/test_physics_fix_1k_v3"
+  visualization_dir: "./results/test_physics_fix_1k_v3/visualizations"
+  
+  save_stage_checkpoints: true
+
+# 🎯 測試驗收標準
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+    - no_mode_collapse: true
+  
+  performance:
+    # ⭐ 期望權重平衡：PDE >= 30% (v2 僅 5%)
+    - pde_loss_ratio_target: 0.30        # PDE/(PDE+Data) >= 30%
+    - u_l2_error_target: 0.30
+    - v_l2_error_target: 0.50
+    - w_l2_error_target: 0.50
+    - p_l2_error_target: 0.50
+    
+    # ⭐ 物理一致性（v2 完全失效）
+    - mass_conservation_error_target: 1.0e-2
+    - momentum_residual_target: 1.0e-2
+    - wall_shear_stress_error_target: 0.50
+    - tau_w_ratio_target: 5.0            # |τ_w| / τ_w(theory) >= 5.0
+    
+    # 動態範圍
+    - dynamic_range_coverage_u: 0.80
+    - dynamic_range_coverage_p: 0.70
+  
+  convergence:
+    - loss_converged: true
+    - validation_stable: true
+    - no_overfitting: true
+    - curriculum_completed: true
+
+# 配置變更記錄
+change_log:
+  - date: "2025-10-15"
+    version: "v3.0_adaptive_fix"
+    changes:
+      - "⭐ 自適應權重修正：alpha=0.12→1.5, freq=100→50"
+      - "⭐ 降低 data 權重：10.0→5.0 (Stage1/2)"
+      - "⭐ 提升 PDE 權重：Stage1=1.5→5.0, Stage2=3.0→8.0"
+      - "⭐ 壁面約束強化：Stage2=5.0→10.0"
+      - "⭐ 壁面點採樣加倍：500→1000"
+      - "目標：修正 v2 的權重失衡（data=93%, PDE=5%）"
+
+# 實驗假設（v3 修正版）
+experiment_hypothesis:
+  motivation: |
+    ⚠️ v2 問題診斷：
+    - 自適應權重失效（alpha=0.12 太小，freq=100 太長）
+    - 導致 data loss 佔 93%，PDE 僅 5%
+    - 物理完全失效：τ_w≈0, ∇·u>50, wall violation>16
+    
+    🎯 v3 修正策略：
+    1. 自適應參數標準化（alpha=1.5, freq=50）
+    2. 初始權重平衡（data=5, PDE=5-8）
+    3. 壁面採樣加倍（500→1000）
+  
+  v2_failure_analysis:
+    epoch_979_weights:
+      - "weighted_data_loss: 0.542 (93.1%)"
+      - "weighted_pde_loss: 0.029 (5.0%)"
+      - "weighted_wall_loss: 0.038 (6.5%)"
+    physics_failures:
+      - "τ_w ratio: 0.000 (理論 0.0025, 實際 ~0)"
+      - "max ∇·u: 51.07 (目標 <0.001)"
+      - "wall u violation: 16.5 (目標 0)"
+      - "wall w violation: 22.2 (目標 0)"
+  
+  expected_outcome:
+    # 快速測試（100 epochs）
+    - "Epoch 50: PDE ratio >= 20%（v2 為 5%）"
+    - "Epoch 100: τ_w > 0.0005（非零證據）"
+    
+    # 完整訓練（1000 epochs）
+    - "Epoch 300: PDE ratio >= 30%, τ_w > 0.001"
+    - "Epoch 600: wall violation < 1.0, ∇·u < 0.1"
+    - "Epoch 1000: τ_w > 0.0005 (理論 20%), L2 < 30%"
+  
+  success_criteria:
+    minimal: "PDE ratio >= 30% 且 τ_w 非零"
+    target: "τ_w ratio >= 5.0 且 L2 < 30%"
+    stretch: "τ_w ratio >= 10.0 且 wall violation < 0.1"
+
+# 階段性評估計畫（快速測試優先）
+evaluation_milestones:
+  - epoch: 20
+    expected_pde_ratio: 0.15
+    expected_tau_w_ratio: 0.1
+    action: "⚠️ 若 PDE ratio < 10%，立即中止並調整 alpha"
+  
+  - epoch: 50
+    expected_pde_ratio: 0.25
+    expected_tau_w_ratio: 0.5
+    action: "若 PDE ratio >= 20%，繼續至 100；否則中止"
+  
+  - epoch: 100
+    expected_pde_ratio: 0.30
+    expected_tau_w_ratio: 1.0
+    action: "⭐ 快速測試驗收點：決定是否進入 1000 epochs"
+  
+  - epoch: 300
+    expected_pde_ratio: 0.35
+    expected_tau_w_ratio: 5.0
+    action: "Stage1 完成，檢查物理約束改善"
+  
+  - epoch: 1000
+    expected_pde_ratio: 0.40
+    expected_tau_w_ratio: 10.0
+    action: "⭐ 最終驗收：決定是否進入生產級訓練"

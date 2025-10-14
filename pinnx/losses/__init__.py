@@ -424,6 +424,91 @@ class CompleteLossManager:
                 self.weight_manager.weighters['gradnorm'].reset_weights()
 
 
+class MeanConstraintLoss(nn.Module):
+    """
+    顯式均值約束損失，防止全局統計偏移
+    
+    用於修正 Fourier Features 導致的均值漂移問題。
+    錨定低頻分量（全局統計量），同時不影響高頻學習。
+    
+    設計原理：
+    - Fourier Features 增強高頻捕捉，但可能干擾低頻（均值）穩定性
+    - 顯式約束預測場均值匹配參考值（如 JHTDB 時間平均值）
+    - 僅作用於全局統計，不影響局部梯度學習
+    
+    使用場景：
+    - 湍流場重建中速度/壓力場均值偏移嚴重
+    - VS-PINN 縮放空間中均值漂移放大
+    - 需要錨定全局統計量同時保持物理結構細節
+    
+    數學形式：
+        L_mean = Σ_i (mean(pred_i) - target_mean_i)^2
+    
+    其中 i 遍歷所有需要約束的場變量（如 u, v, w）。
+    
+    Args:
+        None (stateless loss function)
+    
+    Example:
+        >>> mean_loss = MeanConstraintLoss()
+        >>> predictions = model(inputs)  # [N, 4] (u, v, w, p)
+        >>> target_means = {'u': 9.84, 'v': 0.0, 'w': 0.0}
+        >>> field_indices = {'u': 0, 'v': 1, 'w': 2}
+        >>> loss = mean_loss(predictions, target_means, field_indices)
+    """
+    
+    def __init__(self):
+        super().__init__()
+        logger.info("初始化 MeanConstraintLoss")
+    
+    def forward(self, 
+                predictions: torch.Tensor,
+                target_means: Dict[str, float],
+                field_indices: Dict[str, int]) -> torch.Tensor:
+        """
+        計算均值約束損失
+        
+        Args:
+            predictions: [N, n_vars] 網路輸出（物理空間）
+            target_means: 目標均值字典，如 {'u': 9.84, 'v': 0.0, 'w': 0.0}
+            field_indices: 場索引字典，如 {'u': 0, 'v': 1, 'w': 2, 'p': 3}
+        
+        Returns:
+            mean_loss: 標量張量，所有場的均值約束損失總和
+        
+        Notes:
+            - 計算採用 MSE 形式：(pred_mean - target_mean)^2
+            - 僅約束指定的場（通常排除壓力場）
+            - 損失在批次維度上求均值，確保尺度穩定
+        """
+        device = predictions.device
+        loss = torch.tensor(0.0, device=device)
+        
+        for field_name, target_mean in target_means.items():
+            if field_name not in field_indices:
+                logger.warning(f"場 '{field_name}' 不在 field_indices 中，跳過約束")
+                continue
+            
+            idx = field_indices[field_name]
+            pred_mean = predictions[:, idx].mean()
+            target = torch.tensor(target_mean, device=device)
+            
+            # MSE: (pred_mean - target_mean)^2
+            field_loss = (pred_mean - target) ** 2
+            loss = loss + field_loss
+            
+            # 記錄詳細資訊（低頻率，避免日誌爆炸）
+            if torch.rand(1).item() < 0.001:  # 0.1% 機率記錄
+                logger.debug(
+                    f"均值約束 | {field_name}: "
+                    f"pred={pred_mean.item():.4f}, "
+                    f"target={target_mean:.4f}, "
+                    f"loss={field_loss.item():.6f}"
+                )
+        
+        return loss
+
+
 def create_loss_manager(model: nn.Module, 
                        config: Dict[str, Any]) -> CompleteLossManager:
     """
@@ -482,6 +567,9 @@ __all__ = [
     'ConservationLoss',
     'SymmetryConsistencyLoss',
     'PriorLossManager',
+    
+    # 均值約束
+    'MeanConstraintLoss',
     
     # 動態權重
     'GradNormWeighter',

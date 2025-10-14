@@ -22,8 +22,45 @@ import numpy as np
 import torch
 from typing import Dict, Optional, Tuple, Union
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+# ===================================================================
+# 工具函數：從 Checkpoint 載入 Normalization Metadata
+# ===================================================================
+
+def _load_normalization_metadata(checkpoint_path: str) -> Optional[Dict]:
+    """
+    從 checkpoint 載入 normalization metadata
+    
+    Args:
+        checkpoint_path: checkpoint 檔案路徑
+        
+    Returns:
+        normalization metadata 字典，若不存在則返回 None
+        格式: {'type': str, 'scales': dict, 'params': dict}
+    """
+    try:
+        path = Path(checkpoint_path)
+        if not path.exists():
+            logger.warning(f"⚠️  Checkpoint 不存在: {checkpoint_path}")
+            return None
+        
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        
+        if 'normalization' in checkpoint:
+            metadata = checkpoint['normalization']
+            logger.info(f"✅ 從 checkpoint 讀取 normalization metadata: type={metadata.get('type')}")
+            return metadata
+        else:
+            logger.warning("⚠️  Checkpoint 中未找到 'normalization' metadata")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ 載入 checkpoint 失敗: {e}")
+        return None
 
 
 def denormalize_output(
@@ -31,24 +68,29 @@ def denormalize_output(
     config: Dict,
     output_norm_type: Optional[str] = None,
     verbose: bool = True,
-    true_ranges: Optional[Dict[str, Tuple[float, float]]] = None
+    true_ranges: Optional[Dict[str, Tuple[float, float]]] = None,
+    checkpoint_path: Optional[str] = None
 ) -> np.ndarray:
     """
     反標準化模型輸出到物理量綱
     
     支持的標準化類型：
-    1. "friction_velocity": 基於摩擦速度尺度
+    1. "training_data_norm": 訓練資料標準化（TASK-008 新增）
+       - 優先從 checkpoint 讀取 normalization metadata
+       - 若無 checkpoint 則從配置讀取 normalization.params
+    
+    2. "friction_velocity": 基於摩擦速度尺度
        - u, v, w → u, v, w * u_τ
        - p → p * ρu_τ²
     
-    2. "manual_scaling": ManualScalingWrapper 的反縮放
+    3. "manual_scaling": ManualScalingWrapper 的反縮放
        - 從 [-1, 1] 反縮放到配置中的 output_ranges
     
-    3. "post_scaling": 後處理縮放（自動範圍映射）
+    4. "post_scaling": 後處理縮放（自動範圍映射）
        - 從模型輸出範圍線性映射到真實數據範圍
        - 適用於訓練時未使用縮放的情況
     
-    4. "none" / "identity": 不處理
+    5. "none" / "identity": 不處理
     
     Args:
         predictions: 模型預測 [N, out_dim]，out_dim ∈ {3, 4, 5}
@@ -60,6 +102,7 @@ def denormalize_output(
         verbose: 是否輸出詳細日誌
         true_ranges: 真實數據範圍 (用於 post_scaling)
                     例如: {'u': (0.0, 17.37), 'v': (-1.31, 1.33), ...}
+        checkpoint_path: checkpoint 檔案路徑（用於載入 normalization metadata）
         
     Returns:
         反標準化後的預測 [N, out_dim] (numpy array)
@@ -68,14 +111,19 @@ def denormalize_output(
         ValueError: 配置缺失或不支持的標準化類型
         
     Examples:
+        >>> # Training data normalization (TASK-008)
+        >>> pred_normalized = np.array([[1.0, 0.1, 0.5, 0.01]])  # (u, v, w, p)
+        >>> pred_physical = denormalize_output(
+        ...     pred_normalized, config, 
+        ...     checkpoint_path='checkpoints/model.pth'
+        ... )
+        
         >>> # Friction velocity 標準化
         >>> config = {
         ...     'model': {'scaling': {'output_norm': 'friction_velocity'}},
         ...     'physics': {'rho': 1.0, 'channel_flow': {'u_tau': 1.0}}
         ... }
-        >>> pred_normalized = np.array([[1.0, 0.1, 0.5, 0.01]])  # (u, v, w, p)
         >>> pred_physical = denormalize_output(pred_normalized, config)
-        >>> # 結果: [[1.0, 0.1, 0.5, 0.01]] (u_tau=1.0 時無變化)
         
         >>> # 後處理縮放
         >>> true_ranges = {'u': (0, 17.4), 'v': (-1.3, 1.3), 'w': (-22, 21), 'p': (-226, 2.4)}
@@ -106,6 +154,12 @@ def denormalize_output(
         return predictions
     
     # ===================================================================
+    # 類型 0: Training Data Normalization (TASK-008 新增)
+    # ===================================================================
+    if output_norm_type == 'training_data_norm':
+        return _denormalize_training_data(predictions, config, checkpoint_path, verbose)
+    
+    # ===================================================================
     # 類型 1: Friction Velocity 標準化
     # ===================================================================
     if output_norm_type == 'friction_velocity':
@@ -133,6 +187,179 @@ def denormalize_output(
     
     else:
         raise ValueError(f"不支持的 output_norm 類型: {output_norm_type}")
+
+
+
+
+def _denormalize_training_data(
+    predictions: np.ndarray,
+    config: Dict,
+    checkpoint_path: Optional[str],
+    verbose: bool
+) -> np.ndarray:
+    """
+    Training Data Normalization 反標準化（Z-score: x * std + mean）
+    
+    對應訓練時的 Z-score 標準化：
+    - 訓練時：normalized = (x - mean) / std
+    - 評估時：physical = normalized * std + mean
+    
+    優先級：
+    1. 從 checkpoint 載入 normalization metadata（最高優先級）
+    2. 從 config['normalization']['params'] 讀取
+    3. 使用硬編碼預設值（JHTDB Channel Re_tau=1000 統計）
+    
+    Args:
+        predictions: 模型預測（標準化空間） [N, out_dim]
+        config: 配置字典
+        checkpoint_path: checkpoint 檔案路徑（若提供則優先載入）
+        verbose: 是否輸出日誌
+        
+    Returns:
+        物理空間的預測 [N, out_dim]
+    """
+    # 優先級 1: 從 checkpoint 載入
+    means = None
+    stds = None
+    
+    if checkpoint_path is not None:
+        metadata = _load_normalization_metadata(checkpoint_path)
+        if metadata is not None:
+            means = metadata.get('means', None)
+            stds = metadata.get('scales', None)  # scales 是 stds
+            if means and stds and verbose:
+                logger.info(f"📦 使用 checkpoint 的 Z-score 係數:")
+                logger.info(f"   means={means}")
+                logger.info(f"   stds={stds}")
+    
+    # 優先級 2: 從配置讀取
+    if means is None or stds is None:
+        if 'normalization' in config:
+            norm_cfg = config['normalization']
+            if 'params' in norm_cfg:
+                params = norm_cfg['params']
+                means = {
+                    'u': params.get('u_mean'),
+                    'v': params.get('v_mean'),
+                    'w': params.get('w_mean'),
+                    'p': params.get('p_mean')
+                }
+                stds = {
+                    'u': params.get('u_std'),
+                    'v': params.get('v_std'),
+                    'w': params.get('w_std'),
+                    'p': params.get('p_std')
+                }
+                
+                # 向後兼容：如果配置使用舊格式 (*_scale)，發出警告
+                if any(k.endswith('_scale') for k in params.keys()):
+                    logger.warning("⚠️  檢測到舊格式標準化係數 (*_scale)，建議更新為新格式 (*_mean, *_std)")
+                    # 嘗試使用舊格式
+                    if means['u'] is None:
+                        stds = {
+                            'u': params.get('u_scale'),
+                            'v': params.get('v_scale'),
+                            'w': params.get('w_scale'),
+                            'p': params.get('p_scale')
+                        }
+                        means = {'u': 0.0, 'v': 0.0, 'w': 0.0, 'p': 0.0}  # 假設舊格式均值為 0
+                
+                if verbose:
+                    logger.info(f"📋 使用配置的 Z-score 係數:")
+                    logger.info(f"   means={means}")
+                    logger.info(f"   stds={stds}")
+    
+    # 優先級 3: 硬編碼預設值（JHTDB Channel Re_tau=1000 正確統計量）
+    # 檢查是否有任何統計量為 None 或空字典
+    needs_default = False
+    if means is None or stds is None:
+        needs_default = True
+    elif isinstance(means, dict) and isinstance(stds, dict):
+        # 檢查字典是否為空或任何值為 None
+        if not means or not stds:
+            needs_default = True
+        elif any(means.get(k) is None for k in ['u', 'v', 'w', 'p']):
+            needs_default = True
+        elif any(stds.get(k) is None for k in ['u', 'v', 'w', 'p']):
+            needs_default = True
+    
+    if needs_default:
+        means = {
+            'u': 9.921185,
+            'v': -0.000085,
+            'w': -0.002202,
+            'p': -40.374241
+        }
+        stds = {
+            'u': 4.593879,
+            'v': 0.329614,
+            'w': 3.865396,
+            'p': 28.619722
+        }
+        if verbose:
+            logger.warning("⚠️  未找到標準化係數，使用硬編碼預設值（JHTDB Re_tau=1000 正確統計）")
+    
+    # 確保 means 和 stds 是字典類型
+    if not isinstance(means, dict) or not isinstance(stds, dict):
+        logger.error(f"❌ 標準化係數格式錯誤: means={type(means)}, stds={type(stds)}")
+        # 回退到預設值
+        means = {
+            'u': 9.921185,
+            'v': -0.000085,
+            'w': -0.002202,
+            'p': -40.374241
+        }
+        stds = {
+            'u': 4.593879,
+            'v': 0.329614,
+            'w': 3.865396,
+            'p': 28.619722
+        }
+    
+    u_mean, v_mean, w_mean, p_mean = means['u'], means['v'], means['w'], means['p']
+    u_std, v_std, w_std, p_std = stds['u'], stds['v'], stds['w'], stds['p']
+    
+    if verbose:
+        logger.info("🔧 執行 Z-score 反標準化 (x * std + mean)")
+        logger.info(f"📐 u: mean={u_mean:.4f}, std={u_std:.4f}")
+        logger.info(f"📐 v: mean={v_mean:.6f}, std={v_std:.4f}")
+        logger.info(f"📐 w: mean={w_mean:.6f}, std={w_std:.4f}")
+        logger.info(f"📐 p: mean={p_mean:.4f}, std={p_std:.4f}")
+    
+    result = predictions.copy()
+    out_dim = predictions.shape[-1]
+    
+    if out_dim == 3:
+        # (u, v, p) - 2D 通道流
+        result[:, 0] = result[:, 0] * u_std + u_mean
+        result[:, 1] = result[:, 1] * v_std + v_mean
+        result[:, 2] = result[:, 2] * p_std + p_mean
+        
+    elif out_dim == 4:
+        # (u, v, w, p) - 3D 通道流
+        result[:, 0] = result[:, 0] * u_std + u_mean
+        result[:, 1] = result[:, 1] * v_std + v_mean
+        result[:, 2] = result[:, 2] * w_std + w_mean
+        result[:, 3] = result[:, 3] * p_std + p_mean
+        
+    elif out_dim == 5:
+        # (u, v, w, p, S) - 含源項
+        result[:, 0] = result[:, 0] * u_std + u_mean
+        result[:, 1] = result[:, 1] * v_std + v_mean
+        result[:, 2] = result[:, 2] * w_std + w_mean
+        result[:, 3] = result[:, 3] * p_std + p_mean
+        # 源項 S 不標準化
+        
+    else:
+        raise ValueError(f"不支持的輸出維度: {out_dim} (預期 3, 4, 或 5)")
+    
+    if verbose:
+        logger.info(f"📊 反標準化後範圍: min={result.min():.4f}, max={result.max():.4f}")
+        for i, name in enumerate(['u', 'v', 'w', 'p', 'S'][:out_dim]):
+            logger.info(f"  {name}: [{result[:, i].min():.2f}, {result[:, i].max():.2f}]")
+        logger.info("✅ Z-score 反標準化完成")
+    
+    return result
 
 
 def _denormalize_friction_velocity(
@@ -435,9 +662,18 @@ def verify_denormalization(
 # 便捷函數
 # ===================================================================
 
-def create_denormalizer_from_config(config: Dict, verbose: bool = True):
+def create_denormalizer_from_config(
+    config: Dict, 
+    checkpoint_path: Optional[str] = None,
+    verbose: bool = True
+):
     """
     從配置創建反標準化函數（閉包）
+    
+    Args:
+        config: 配置字典
+        checkpoint_path: checkpoint 路徑（優先載入）
+        verbose: 是否輸出詳細日誌
     
     Returns:
         denorm_fn: 接受 predictions 並返回反標準化結果的函數
@@ -447,7 +683,10 @@ def create_denormalizer_from_config(config: Dict, verbose: bool = True):
         output_norm_type = config['model']['scaling'].get('output_norm', 'none')
     
     def denorm_fn(predictions):
-        return denormalize_output(predictions, config, output_norm_type, verbose)
+        return denormalize_output(
+            predictions, config, output_norm_type, verbose, 
+            checkpoint_path=checkpoint_path
+        )
     
     return denorm_fn
 

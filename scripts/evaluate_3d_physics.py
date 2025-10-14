@@ -65,18 +65,18 @@ def compute_wall_shear_stress(model, physics, x_range, z_range, n_points=64, dev
     # 下壁面 (y = -1)
     y_wall = torch.full_like(X, -1.0)
     wall_points = torch.stack([X.flatten(), y_wall.flatten(), Z.flatten()], dim=1)
+    wall_points.requires_grad_(True)
     
-    with torch.no_grad():
-        wall_points.requires_grad_(True)
-        u_pred = model(wall_points)
-        
-        # 計算 du/dy
-        u_component = u_pred[:, 0]  # 流向速度
-        du_dy = torch.autograd.grad(u_component.sum(), wall_points, create_graph=False)[0][:, 1]
-        
-        # 壁面剪應力 τ_w = μ * du/dy
-        nu = physics.nu.item()
-        tau_w = nu * du_dy
+    # 計算預測值和梯度（需要啟用梯度）
+    u_pred = model(wall_points)
+    
+    # 計算 du/dy
+    u_component = u_pred[:, 0]  # 流向速度
+    du_dy = torch.autograd.grad(u_component.sum(), wall_points, create_graph=False)[0][:, 1]
+    
+    # 壁面剪應力 τ_w = μ * du/dy
+    nu = physics.nu.item()
+    tau_w = nu * du_dy
     
     tau_w_grid = tau_w.reshape(n_points, n_points).cpu().numpy()
     
@@ -313,11 +313,24 @@ def main():
     checkpoint_path = Path(args.checkpoint)
     model = load_trained_model(checkpoint_path, config, device)
     
-    # 創建物理模組
-    physics = create_vs_pinn_channel_flow(config['physics'], device)
+    # 創建物理模組 - 從配置中提取正確的參數
+    physics_config = config['physics']
+    physics_params = {
+        'nu': physics_config.get('nu', 5e-5),
+        'dP_dx': physics_config.get('channel_flow', {}).get('pressure_gradient', 0.0025),
+        'rho': physics_config.get('rho', 1.0),
+        'N_x': physics_config.get('vs_pinn', {}).get('scaling_factors', {}).get('N_x', 2.0),
+        'N_y': physics_config.get('vs_pinn', {}).get('scaling_factors', {}).get('N_y', 12.0),
+        'N_z': physics_config.get('vs_pinn', {}).get('scaling_factors', {}).get('N_z', 2.0),
+        'enable_rans': physics_config.get('vs_pinn', {}).get('enable_rans', False),
+    }
+    physics = create_vs_pinn_channel_flow(**physics_params)
     
     # 域範圍
     domain = config['physics']['domain']
+    
+    # 轉換 device 為字串格式
+    device_str = str(device)
     
     # ========== 1. 壁面剪應力 ==========
     wall_data = compute_wall_shear_stress(
@@ -325,7 +338,7 @@ def main():
         x_range=domain['x_range'],
         z_range=domain['z_range'],
         n_points=64,
-        device=device
+        device=device_str
     )
     plot_wall_shear_stress(wall_data, output_dir / 'wall_shear_stress.png')
     
@@ -336,13 +349,19 @@ def main():
         z_pos=(domain['z_range'][0] + domain['z_range'][1]) / 2,
         y_range=domain['y_range'],
         n_points=128,
-        device=device
+        device=device_str
     )
     plot_velocity_profiles(profile, output_dir / 'velocity_profiles.png')
     
     # ========== 3. 完整流場評估 ==========
     grid_resolution = config['evaluation']['grid_resolution']
-    field_data = evaluate_full_field(model, grid_resolution, domain, device)
+    # 轉換域格式以匹配函數期望
+    domain_for_eval = {
+        'x': domain['x_range'],
+        'y': domain['y_range'],
+        'z': domain['z_range']
+    }
+    field_data = evaluate_full_field(model, grid_resolution, domain_for_eval, device_str)
     
     # 保存流場數據
     np.savez(

@@ -54,6 +54,10 @@ def create_model_from_config(config: Dict[str, Any], device: torch.device) -> nn
     model_cfg = config['model']
     
     # 建立基礎模型
+    fourier_cfg = model_cfg.get('fourier_features', {})
+    fourier_m = fourier_cfg.get('fourier_m', model_cfg.get('fourier_m', 32))
+    fourier_sigma = fourier_cfg.get('fourier_sigma', model_cfg.get('fourier_sigma', 1.0))
+    
     if model_cfg.get('type') == 'enhanced_fourier_mlp':
         base_model = create_enhanced_pinn(
             in_dim=model_cfg['in_dim'],
@@ -62,8 +66,8 @@ def create_model_from_config(config: Dict[str, Any], device: torch.device) -> nn
             depth=model_cfg['depth'],
             activation=model_cfg['activation'],
             use_fourier=True,
-            fourier_m=model_cfg['fourier_m'],
-            fourier_sigma=model_cfg['fourier_sigma'],
+            fourier_m=fourier_m,
+            fourier_sigma=fourier_sigma,
             use_rwf=model_cfg.get('use_rwf', False),
             rwf_scale_std=model_cfg.get('rwf_scale_std', 0.1)
         ).to(device)
@@ -75,8 +79,8 @@ def create_model_from_config(config: Dict[str, Any], device: torch.device) -> nn
             depth=model_cfg['depth'],
             activation=model_cfg['activation'],
             use_fourier=True,
-            fourier_m=model_cfg['fourier_m'],
-            fourier_sigma=model_cfg['fourier_sigma']
+            fourier_m=fourier_m,
+            fourier_sigma=fourier_sigma
         ).to(device)
     
     # 檢查是否使用 scaling wrapper

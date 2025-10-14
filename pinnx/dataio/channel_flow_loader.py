@@ -823,7 +823,8 @@ def prepare_training_data(strategy: str = 'qr_pivot',
                          K: int = 8, 
                          config_path: Optional[Union[str, Path]] = None,
                          target_fields: Optional[List[str]] = None,
-                         sensor_file: Optional[str] = None) -> Dict[str, Any]:
+                         sensor_file: Optional[str] = None,
+                         prior_type: str = 'none') -> Dict[str, Any]:
     """
     便利函數：準備 PINNs 訓練資料
     
@@ -833,15 +834,23 @@ def prepare_training_data(strategy: str = 'qr_pivot',
         config_path: 配置檔案路徑  
         target_fields: 目標場列表
         sensor_file: 自定義感測點文件名 (可選)
+        prior_type: 低保真先驗類型 ('rans', 'mock', 'none')，預設 'none'
         
     Returns:
         PINNs 訓練資料字典
+        
+    Note:
+        ⚠️ prior_type='none' 意味著僅使用感測點數據，不添加低保真先驗
+        這是推薦的預設值，避免覆蓋真實 JHTDB 數據
     """
     loader = ChannelFlowLoader(config_path=config_path)
     
     # 載入完整資料
     channel_data = loader.load_sensor_data(strategy=strategy, K=K, sensor_file=sensor_file)
-    channel_data = loader.add_lowfi_prior(channel_data, prior_type='mock')
+    
+    # 僅在明確要求時才添加低保真先驗
+    if prior_type != 'none':
+        channel_data = loader.add_lowfi_prior(channel_data, prior_type=prior_type)
     
     # 準備訓練格式
     training_data = loader.prepare_for_training(channel_data, target_fields=target_fields)

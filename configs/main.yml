@@ -1,0 +1,344 @@
+# ====================================================================
+# PINNs 訓練配置文件
+# ====================================================================
+# 1. 基本實驗設定
+# ====================================================================
+experiment:
+  name: "main training (channel flow Re1000)"        # 實驗名稱（用於日誌/檢查點目錄）
+  version: "v1.0"                     # 版本號
+  seed: 42                            # 隨機種子（確保可重現性）
+  device: "auto"                      # 設備：auto（自動檢測）/ cpu / cuda / mps
+  precision: "float32"                # 精度：float32 / float64
+  description: "主要目標架構"      # 實驗描述（用於文檔）
+
+# ====================================================================
+# 2. 重現性設定
+# ====================================================================
+reproducibility:
+  deterministic: true                 # 確保確定性運算（可能降低效能）
+  benchmark: false                    # CuDNN benchmark（若確定輸入尺寸可啟用）
+  num_workers: 2                      # DataLoader 工作進程數
+
+# ====================================================================
+# 3. 資料來源設定
+# ====================================================================
+data:
+  source: "jhtdb"                     # 資料來源：jhtdb / synthetic / custom
+  dataset: "channel"                  # 資料集：channel / hit / boundary_layer
+  
+  # JHTDB 配置（若使用 JHTDB）
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000)"
+    domain:
+      x: [0, 25.13]                   # 流向範圍
+      y: [-1.0, 1.0]                  # 壁面法向範圍
+      z: [0, 9.42]                    # 展向範圍
+    resolution:
+      x: 2048                         # 頻譜模式數（wavenumber）
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]           # 時間範圍
+    dt: 0.0065                        # 時間步長
+    variables: ['u', 'v', 'w', 'p']   # 變數：速度 + 壓力
+  
+  # 資料預處理
+  normalize: true                     # 是否標準化（推薦啟用）
+  cache_dir: "./data/jhtdb/channel_flow_re1000"  # 快取目錄
+  noise_sigma: 0.0                   # 添加噪聲（模擬真實測量）
+  dropout_prob: 0.0                  # 隨機遺失點比例
+  
+  # 切片配置（若使用 2D 切片）
+  slice_config:
+    plane: "xy"                       # 切片平面：xy / xz / yz
+    z_position: 4.71                  # 切片位置
+    steady_state: true                # 是否使用穩態（時間平均）
+    time_average_window: [20.0, 26.0] # 時間平均窗口
+
+# ====================================================================
+# 4. 感測點配置
+# ====================================================================
+sensors:
+  K: 500                               # 感測點數量
+  strategy: "qr_pivot"                # 選點策略：qr_pivot / random / uniform / hybrid
+  sensor_file: "sensors_K500_qr_pivot_3d_wall_enhanced.npz"  # 預生成感測點文件（相對於 cache_dir）
+  
+  # Hybrid 策略配置（若使用 hybrid）
+  hybrid_config:
+    wall_ratio: 0.4                   # 壁面點比例（0.0-1.0）
+    qr_ratio: 0.6                     # QR-pivot 點比例
+    wall_thickness: 0.1               # 壁面區域厚度
+
+# ====================================================================
+# 5. 模型架構配置
+# ====================================================================
+model:
+  type: "fourier_mlp"                 # 模型類型：fourier_mlp / siren / vanilla_mlp
+  width: 200                          # 隱藏層寬度
+  depth: 8                            # 隱藏層深度
+  out_dim: 4                          # 輸出維度（u, v, w, p）
+  activation: "sine"                  # 激活函數：sine / tanh / relu / gelu
+  
+  # 架構增強（可選）
+  use_residual: false                 # 殘差連接（深層網路推薦）
+  use_layer_norm: false               # Layer Normalization
+  dropout: 0.0                        # Dropout 比例（正則化）
+  use_rwf: true                      # Random Weight Factorization（改善訓練穩定性，權重分解為 W=diag(exp(s))·V）
+  rwf_scale_std: 0.1                  # RWF 尺度標準差（s 的初始化標準差，建議 0.05-0.2）
+  sine_omega_0: 1.0                   # SIREN omega_0 參數（與 Fourier 特徵結合時建議 1.0-30.0）
+  
+  # 輸出範圍（自動從資料提取或手動設定）
+  output_ranges:
+    u: "auto"                         # auto / [min, max]
+    v: "auto"
+    w: "auto"
+    p: "auto"
+  
+  # Fourier Features 配置
+  fourier_features:
+    enabled: true
+    axes_config:
+      x: [1, 2, 4, 8]                 # x 軸頻率（循環數 K）
+      y: []                           # y 軸不使用 Fourier（壁面法向）
+      z: [1, 2, 4, 8]                 # z 軸頻率
+    domain_lengths:
+      x: 25.13                        # 域長度（用於頻率縮放）
+      y: 2.0
+      z: 9.42
+    trainable: false                  # 是否訓練 Fourier 權重（通常 false）
+  
+  # VS-PINN 縮放（若使用 VS-PINN）
+  scaling:
+    learnable: true                   # 縮放因子是否可學習
+    input_norm: "channel_flow"        # 輸入歸一化：channel_flow / minmax / standard
+    output_norm: "friction_velocity"  # 輸出歸一化：friction_velocity / minmax
+    friction_velocity: 1.0            # u_τ（摩擦速度）
+    channel_half_height: 1.0          # h（通道半高）
+    viscous_length: 1.0e-3            # δ_ν（黏長尺度）
+
+# ====================================================================
+# 6. Fourier 退火配置（階段式頻率解鎖）
+# ====================================================================
+fourier_annealing:
+  enabled: true                       # 是否啟用退火
+  strategy: "custom"                  # 策略：conservative / aggressive / fine / channel_flow / custom
+  axes_names: ['x', 'y', 'z']         # 軸名稱列表
+  
+  # ===== 選項 A：使用預設策略 =====
+  # strategy: "conservative"          # 3 階段：[1,2] → [1,2,4] → [1,2,4,8]
+  # strategy: "aggressive"            # 2 階段：快速解鎖
+  # strategy: "fine"                  # 4 階段：精細控制
+  # strategy: "channel_flow"          # 通道流專用（每軸獨立）
+  
+  # ===== 選項 B：自定義配置（所有軸相同頻率）=====
+  stages:
+    - end_ratio: 0.3                  # 階段結束比例（訓練進度 0.0-1.0）
+      frequencies: [1, 2]             # 允許的頻率列表（應用於所有軸）
+      description: "低頻預熱"         # 階段描述
+    - end_ratio: 0.6
+      frequencies: [1, 2, 4]
+      description: "中頻解鎖"
+    - end_ratio: 1.0
+      frequencies: [1, 2, 4, 8]
+      description: "全頻段"
+
+# ====================================================================
+# 7. 物理設定
+# ====================================================================
+physics:
+  type: "vs_pinn_channel_flow"        # 物理模型：vs_pinn_channel_flow / navier_stokes_3d / hit_turbulence
+  nu: 5.0e-5                          # 動力黏度（無因次）
+  rho: 1.0                            # 密度
+  
+  # 通道流參數
+  channel_flow:
+    Re_tau: 1000.0                    # 摩擦雷諾數
+    Re_bulk: 39998.0                  # 體積雷諾數
+    u_tau: 0.04997                    # 摩擦速度
+    pressure_gradient: 0.0025         # 平均壓力梯度（dP/dx < 0 為驅動力）
+  
+  # 計算域
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+  
+  # 邊界條件
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]    # 壁面速度（無滑移）
+    wall_location: [-1.0, 1.0]        # 壁面位置（y 方向）
+    periodic_x: true                  # x 方向週期性
+    periodic_z: true                  # z 方向週期性
+    pressure_driven: true             # 壓力驅動流
+    mean_pressure_gradient: 0.0025    # 平均壓力梯度
+
+# ====================================================================
+# 8. 損失函數權重
+# ====================================================================
+losses:
+  # 基礎權重
+  data_weight: 10.0                   # 資料監督損失權重（sensor points）
+  boundary_weight: 10.0               # 邊界條件權重（壁面無滑移）
+  
+  # PDE 殘差權重
+  momentum_x_weight: 1.0              # x 方向動量方程
+  momentum_y_weight: 1.0              # y 方向動量方程
+  momentum_z_weight: 1.0              # z 方向動量方程
+  continuity_weight: 1.0              # 連續方程（質量守恆）
+  
+  # 物理約束權重
+  wall_constraint_weight: 5.0         # 壁面約束增強
+  periodicity_weight: 5.0             # 週期性邊界
+  pressure_gradient_weight: 1.0       # 平均壓力梯度
+  
+  # 正則化
+  prior_weight: 0.3                   # 低保真先驗一致性（0.1-0.5）
+  source_l1: 1.0e-6                   # 源項 L1 稀疏正則（還原源項時使用）
+  gradient_penalty: 1.0e-4            # 梯度懲罰（平滑性）
+  
+  # 動態權重配置
+  adaptive_weighting: true            # 是否啟用自適應權重（GradNorm）
+  weight_update_freq: 100             # 權重更新頻率（每 N 步）
+  grad_norm_alpha: 0.15               # GradNorm 超參數（0.1-0.2）
+  
+  causal_weighting: false             # 因果權重（時間演化問題）
+
+# ====================================================================
+# 9. 訓練設定
+# ====================================================================
+training:
+  # 優化器
+  optimizer: "soap"                   # 優化器：adam / adamw / lbfgs / soap
+  lr: 1.0e-3                          # 學習率（Adam 典型：1e-4 ~ 1e-3）
+  weight_decay: 1.0e-5                # 權重衰減（L2 正則）
+  
+  # 學習率調度器
+  lr_scheduler:
+    type: "cosine_warm_restarts"                    # 類型：warmup_cosine / cosine_warm_restarts / cosine / exponential / step / none
+    
+    # warmup_cosine 專用參數（推薦用於大型訓練）
+    warmup_epochs: 100                # Warmup 階段 epochs（線性增加學習率）
+    min_lr: 1.0e-6                    # CosineAnnealing 最小學習率
+    
+    # cosine_warm_restarts 專用參數（週期性重啟）
+    T_0: 100                          # 第一次重啟週期（epochs）
+    T_mult: 2                         # 週期倍增因子（1=固定週期，2=指數增長）
+    eta_min: 1.0e-6                   # 最小學習率
+    
+    # cosine 專用參數（單調遞減）
+    # min_lr: 1.0e-6                  # 最小學習率（已在上方定義）
+    
+    # exponential 專用參數（指數衰減）
+    gamma: 0.999                      # 衰減率（每 epoch 乘以 gamma）
+    
+    # step 專用參數（階梯式衰減）
+    step_size: 100                    # 每 N 個 epoch 衰減一次
+    gamma: 0.5                        # 衰減倍率（lr *= gamma）
+    
+    # none：固定學習率（無調度器）
+  
+  # 訓練循環
+  epochs: 5000                        # 總訓練 epochs
+  max_epochs: 5000                    # 最大 epochs（與 epochs 一致）
+  batch_size: 10000                   # 批次大小（PDE 點數）
+  validation_freq: 100                # 驗證頻率（每 N epochs）
+  checkpoint_freq: 500                # 檢查點保存頻率
+  log_interval: 50                    # 日誌輸出頻率
+  
+  # 早停
+  early_stopping:
+    enabled: false                     # 是否啟用早停
+    patience: 500                     # 耐心值（N epochs 無改善則停止）
+    min_delta: 1.0e-6                 # 最小改善量
+  
+  # 採樣策略
+  sampling:
+    pde_points: 20000                  # PDE 殘差採樣點數
+    boundary_points: 5000             # 邊界條件採樣點數
+    wall_clustering: 0.3              # 壁面聚類比例（0.0-1.0）
+  
+  # 課程學習（可選）
+  curriculum: true                   # 是否啟用課程學習（雷諾數漸進）
+  
+  # 梯度裁剪（穩定性）
+  gradient_clip: 1.0                  # 梯度裁剪閾值（防止梯度爆炸）
+
+# ====================================================================
+# 10. Ensemble 設定（不確定性量化）
+# ====================================================================
+ensemble:
+  enable: false                       # 是否啟用 Ensemble 訓練
+  n_models: 5                         # Ensemble 模型數量
+  diversity_weight: 0.1               # 多樣性權重（鼓勵模型差異）
+  uncertainty_threshold: 0.15         # 不確定性閾值（用於自適應採樣）
+
+# ====================================================================
+# 11. 評估設定
+# ====================================================================
+evaluation:
+  grid_resolution: [128, 32, 128]      # 3D 評估網格解析度 [Nx, Ny, Nz]
+  
+  # 評估指標
+  metrics:
+    - "relative_l2"                   # 相對 L2 誤差
+    - "wall_shear_stress"             # 壁面剪應力
+    - "velocity_profile"              # 速度剖面
+    - "turbulence_statistics"         # 湍流統計量（均方根）
+    - "pressure_drop"                 # 壓降
+    - "mass_conservation"             # 質量守恆
+    - "energy_spectrum"               # 能譜
+  
+  # 驗收閾值
+  thresholds:
+    l2_error: 0.15                    # 相對 L2 ≤ 15%
+    wall_shear_error: 0.08            # 壁面剪應力誤差 ≤ 8%
+    velocity_profile_error: 0.10      # 速度剖面誤差 ≤ 10%
+    rmse_improvement: 0.30            # 相對低保真 RMSE 改善 ≥ 30%
+    spectrum_rmse: 0.25               # 能譜 RMSE ≤ 25%
+
+# ====================================================================
+# 12. 檢查點與日誌
+# ====================================================================
+checkpointing:
+  save_dir: "./checkpoints"           # 檢查點保存目錄
+  save_best: true                     # 保存最佳模型
+  save_latest: true                   # 保存最新模型
+  save_interval: 500                  # 保存間隔（epochs）
+
+logging:
+  log_dir: "./log"                    # 日誌目錄
+  tensorboard: true                   # 是否使用 TensorBoard
+  wandb: false                        # 是否使用 Weights & Biases
+  log_level: "INFO"                   # 日誌級別：DEBUG / INFO / WARNING / ERROR
+
+# ====================================================================
+# 13. TASK-008 驗收標準（可選，用於追蹤目標）
+# ====================================================================
+task_008_gates:
+  gate_1_stability:
+    no_nan_inf: true                  # 無 NaN/Inf
+    stage_transition_loss_change: 0.20  # 階段切換損失變化 < 20%
+  
+  gate_2_convergence:
+    relative_l2: 0.15                 # 相對 L2 ≤ 15%
+    wall_shear_stress_error: 0.08     # 壁面剪應力誤差 ≤ 8%
+  
+  gate_3_efficiency:
+    training_time_hours: 8            # 訓練時間 < 8 小時
+    convergence_speedup: 0.20         # 收斂速度提升 ≥ 20%
+  
+  gate_4_physics:
+    spectrum_rmse: 0.25               # 能譜 RMSE ≤ 25%
+    velocity_profile_log_layer_error: 0.15  # 對數層速度剖面偏差 < 15%
+
+# ====================================================================
+# 配置範例說明
+# ====================================================================
+# 1. 所有軸使用相同 Fourier 頻率：使用 fourier_annealing.stages
+# 2. 每軸獨立頻率配置：使用 strategy: "channel_flow"
+# 3. 快速測試：epochs=100, checkpoint_freq=50, pde_points=1024
+# 4. 完整訓練：epochs=5000-10000, checkpoint_freq=500, pde_points=4096
+# 5. 低保真引導：prior_weight=0.3-0.5
+# 6. 源項還原：source_l1=1e-6 ~ 1e-4
+# ====================================================================

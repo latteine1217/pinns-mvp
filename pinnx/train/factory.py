@@ -92,13 +92,229 @@ def get_device(device_name: str) -> torch.device:
 # 模型創建
 # ============================================================================
 
+def _create_axis_selective_model(
+    model_cfg: Dict[str, Any],
+    config: Dict[str, Any],
+    device: torch.device
+) -> nn.Module:
+    """
+    創建使用軸向選擇性 Fourier Features 的 PINN 模型
+    
+    Args:
+        model_cfg: 模型配置（包含 fourier_features 等）
+        config: 完整配置（用於提取域配置）
+        device: 計算設備
+    
+    Returns:
+        AxisSelectiveFourierMLP 實例
+    
+    Raises:
+        ImportError: 若軸向選擇性模組未找到
+        ValueError: 若配置參數無效
+    
+    Notes:
+        若啟用 Fourier 退火，模型將使用**初始階段頻率**創建，
+        避免訓練開始時維度不匹配（TASK-007 修復）
+    """
+    # 導入軸向選擇性 Fourier 模組
+    try:
+        from pinnx.models.axis_selective_fourier import AxisSelectiveFourierFeatures
+    except ImportError as exc:
+        raise ImportError(
+            "Cannot create axis_selective_fourier_mlp: "
+            "pinnx.models.axis_selective_fourier module not found"
+        ) from exc
+    
+    # 提取 Fourier Features 配置
+    fourier_cfg = model_cfg.get('fourier_features', {})
+    if not fourier_cfg or fourier_cfg.get('type') != 'axis_selective':
+        raise ValueError(
+            "axis_selective_fourier_mlp requires 'fourier_features' config "
+            "with 'type': 'axis_selective'"
+        )
+    
+    axes_config = fourier_cfg.get('axes_config')
+    if not axes_config:
+        raise ValueError(
+            "axis_selective Fourier requires 'axes_config' in fourier_features"
+        )
+    
+    # 🔧 TASK-007 Phase 2 修復：雙配置機制
+    # 策略：
+    # 1. 模型始終使用 full_axes_config 初始化（固定最大維度）
+    # 2. 若啟用退火，傳遞 initial_axes_config 作為當前配置
+    # 3. forward() 時根據當前配置應用掩碼（置零未啟用頻率）
+    full_axes_config = axes_config  # 保存完整配置
+    current_axes_config = axes_config  # 預設：當前配置 = 完整配置
+    
+    annealing_cfg = config.get('fourier_annealing', {})
+    if annealing_cfg.get('enabled', False):
+        try:
+            from pinnx.train.fourier_annealing import (  # type: ignore
+                create_channel_flow_annealing, 
+                create_default_annealing
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "Fourier annealing enabled but pinnx.train.fourier_annealing module not found"
+            ) from exc
+        
+        strategy = annealing_cfg.get('strategy', 'channel_flow')
+        initial_axes_config: Dict[str, list] = {}
+        
+        if strategy == 'channel_flow':
+            # 通道流專用配置（每軸獨立階段）
+            per_axis_stages = create_channel_flow_annealing()
+            
+            # 提取初始階段頻率（end_ratio 最小的階段）
+            for axis, stages in per_axis_stages.items():
+                if stages:
+                    initial_stage = min(stages, key=lambda s: s.end_ratio)
+                    initial_axes_config[axis] = initial_stage.frequencies
+            
+            logging.info("🔧 Fourier 退火啟用：使用通道流初始階段頻率")
+            logging.info(f"   初始頻率（當前啟用）: {initial_axes_config}")
+            logging.info(f"   完整頻率（模型容量）: {full_axes_config}")
+            
+        else:
+            # 通用策略（全局配置）
+            global_stages = create_default_annealing(strategy)
+            if global_stages:
+                initial_stage = min(global_stages, key=lambda s: s.end_ratio)
+                initial_freqs = initial_stage.frequencies
+                
+                # 應用於所有軸
+                initial_axes_config = {axis: initial_freqs for axis in axes_config.keys()}
+                
+                logging.info(f"🔧 Fourier 退火啟用：使用 '{strategy}' 策略初始階段頻率")
+                logging.info(f"   初始頻率: {initial_freqs}")
+        
+        # 設定當前配置（訓練開始時的啟用頻率）
+        if initial_axes_config:
+            current_axes_config = initial_axes_config
+            logging.info("✅ 將使用初始階段頻率作為當前配置（通過掩碼控制）")
+        else:
+            logging.warning("⚠️  無法提取初始階段頻率，使用完整配置")
+    else:
+        logging.info("ℹ️  Fourier 退火未啟用，使用配置文件中的完整頻率")
+    
+    # 從物理域配置提取域長度
+    domain_cfg = config.get('physics', {}).get('domain', {})
+    domain_lengths = None
+    if domain_cfg:
+        axes_names = list(axes_config.keys())
+        domain_lengths = {}
+        if 'x_range' in domain_cfg and 'x' in axes_names:
+            x_range = domain_cfg['x_range']
+            domain_lengths['x'] = x_range[1] - x_range[0]
+        if 'y_range' in domain_cfg and 'y' in axes_names:
+            y_range = domain_cfg['y_range']
+            domain_lengths['y'] = y_range[1] - y_range[0]
+        if 'z_range' in domain_cfg and 'z' in axes_names:
+            z_range = domain_cfg['z_range']
+            domain_lengths['z'] = z_range[1] - z_range[0]
+        
+        logging.info(f"  域長度: {domain_lengths}")
+    
+    # 創建軸向選擇性 Fourier Features
+    # 🔧 TASK-007 Phase 2：雙配置機制
+    # - full_axes_config：完整頻率（用於構建固定大小的 B 矩陣）
+    # - current_axes_config：當前啟用頻率（用於掩碼控制）
+    trainable = fourier_cfg.get('trainable', False)
+    fourier_features = AxisSelectiveFourierFeatures(
+        axes_config=current_axes_config,     # 當前啟用頻率
+        domain_lengths=domain_lengths,
+        trainable=trainable,
+        full_axes_config=full_axes_config    # 完整頻率（固定維度）
+    )
+    
+    # 構建完整網路（Fourier + MLP）
+    # 使用與 PINNNet 相同的 MLP 架構
+    from pinnx.models.fourier_mlp import DenseLayer
+    
+    width = model_cfg['width']
+    depth = model_cfg['depth']
+    out_dim = model_cfg['out_dim']
+    activation = model_cfg['activation']
+    
+    use_residual = model_cfg.get('use_residual', False)
+    use_layer_norm = model_cfg.get('use_layer_norm', False)
+    dropout = model_cfg.get('dropout', 0.0)
+    use_rwf = model_cfg.get('use_rwf', False)
+    rwf_scale_std = model_cfg.get('rwf_scale_std', 0.1)
+    sine_omega_0 = model_cfg.get('sine_omega_0', 1.0)
+    
+    # 創建一個包裝模型
+    class AxisSelectiveFourierMLP(nn.Module):
+        """軸向選擇性 Fourier MLP 模型"""
+        def __init__(self):
+            super().__init__()
+            self.fourier_features = fourier_features
+            
+            # 計算 MLP 輸入維度（來自 Fourier Features）
+            input_features = fourier_features.out_dim
+            
+            # 隱藏層
+            layers = []
+            for i in range(depth):
+                layer_in_dim = input_features if i == 0 else width
+                
+                layers.append(DenseLayer(
+                    layer_in_dim, width,
+                    activation=activation,
+                    use_residual=use_residual and i > 0,
+                    use_layer_norm=use_layer_norm,
+                    dropout=dropout,
+                    use_rwf=use_rwf,
+                    rwf_scale_std=rwf_scale_std,
+                    sine_omega_0=sine_omega_0
+                ))
+            
+            self.hidden_layers = nn.ModuleList(layers)
+            
+            # 輸出層
+            self.output_layer = nn.Linear(width, out_dim)
+            output_gain = 0.01 if use_residual else 0.1
+            nn.init.xavier_normal_(self.output_layer.weight, gain=output_gain)
+            nn.init.zeros_(self.output_layer.bias)
+        
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # Fourier 特徵編碼
+            h = self.fourier_features(x)
+            
+            # 🎯 DEBUG: 印出 Fourier Features 輸出形狀
+            if not hasattr(self, '_debug_printed'):
+                logging.info(f"🔍 [DEBUG] Fourier Features 輸出形狀: {h.shape}")
+                logging.info(f"🔍 [DEBUG] 輸入形狀: {x.shape}")
+                logging.info(f"🔍 [DEBUG] Fourier out_dim: {self.fourier_features.out_dim}")
+                logging.info(f"🔍 [DEBUG] B 矩陣形狀: {self.fourier_features.B.shape}")
+                self._debug_printed = True
+            
+            # MLP 層
+            for layer in self.hidden_layers:
+                h = layer(h)
+            
+            # 輸出
+            return self.output_layer(h)
+    
+    model = AxisSelectiveFourierMLP().to(device)
+    
+    # 日誌輸出
+    num_params = sum(p.numel() for p in model.parameters())
+    logging.info(f"  Fourier 輸出維度: {fourier_features.out_dim}")
+    logging.info(f"  MLP 結構: {depth}×{width}, 激活: {activation}")
+    logging.info(f"  總參數量: {num_params:,}")
+    
+    return model
+
+
 def create_model(
     config: Dict[str, Any],
     device: torch.device,
     statistics: Optional[Dict[str, Dict[str, float]]] = None
 ) -> nn.Module:
     """
-    建立 PINN 模型（支援 Fourier features、VS-PINN 縮放、手動標準化）
+    建立 PINN 模型（支援 Fourier features、VS-PINN 縮放、手動標準化、軸向選擇性 Fourier）
     
     Args:
         config: 完整配置字典，需包含：
@@ -120,6 +336,7 @@ def create_model(
         - 若 activation='sine'，自動應用 SIREN 權重初始化
         - VS-PINN 模式下會跳過 ManualScalingWrapper（避免雙重標準化）
         - 支援 Fourier features 消融實驗（use_fourier 開關）
+        - 支援軸向選擇性 Fourier Features（type='axis_selective_fourier_mlp'）
     
     Examples:
         >>> config = {
@@ -165,7 +382,16 @@ def create_model(
     # === 3. 建立基礎模型 ===
     model_type = model_cfg.get('type', 'fourier_mlp')
     
-    if model_type == 'enhanced_fourier_mlp':
+    if model_type == 'axis_selective_fourier_mlp':
+        # 軸向選擇性 Fourier MLP（用於通道流等非均勻幾何）
+        base_model = _create_axis_selective_model(
+            model_cfg=model_cfg,
+            config=config,
+            device=device
+        )
+        logging.info("✅ Created Axis-Selective Fourier MLP")
+    
+    elif model_type == 'enhanced_fourier_mlp':
         # 增強版 PINN（支援 RWF 等進階特性）
         base_model = create_enhanced_pinn(
             in_dim=model_cfg['in_dim'],
@@ -181,7 +407,7 @@ def create_model(
             fourier_normalize_input=fourier_normalize_input,
             input_scale_factors=input_scale_factors
         ).to(device)
-        logging.info(f"Created Enhanced PINN (use_fourier={use_fourier})")
+        logging.info(f"✅ Created Enhanced PINN (use_fourier={use_fourier})")
     else:
         # 基礎 PINN
         base_model = PINNNet(
@@ -193,10 +419,16 @@ def create_model(
             use_fourier=use_fourier,
             fourier_m=model_cfg.get('fourier_m', 32),
             fourier_sigma=model_cfg.get('fourier_sigma', 1.0),
+            use_rwf=model_cfg.get('use_rwf', False),
+            rwf_scale_std=model_cfg.get('rwf_scale_std', 0.1),
+            use_layer_norm=model_cfg.get('use_layer_norm', False),
+            use_residual=model_cfg.get('use_residual', False),
+            dropout=model_cfg.get('dropout', 0.0),
+            sine_omega_0=model_cfg.get('sine_omega_0', 1.0),
             fourier_normalize_input=fourier_normalize_input,
             input_scale_factors=input_scale_factors
         ).to(device)
-        logging.info(f"Created PINNNet (use_fourier={use_fourier})")
+        logging.info(f"✅ Created PINNNet (use_fourier={use_fourier}, use_rwf={model_cfg.get('use_rwf', False)})")
     
     # === 4. 應用手動標準化包裝器（若配置啟用且非 VS-PINN）===
     scaling_cfg = model_cfg.get('scaling', {})
@@ -575,6 +807,10 @@ def create_physics(config: Dict[str, Any], device: torch.device):
                                       physics_cfg.get('dP_dx', 0.0025))
         rho = physics_cfg.get('rho', 1.0)
         
+        # ✅ TASK-008: 提取 RANS 配置
+        enable_rans = vs_pinn_cfg.get('enable_rans', False)
+        rans_model = vs_pinn_cfg.get('rans_model', 'k_epsilon')
+        
         physics = create_vs_pinn_channel_flow(
             N_x=scaling_cfg.get('N_x', 2.0),
             N_y=scaling_cfg.get('N_y', 12.0),
@@ -584,6 +820,8 @@ def create_physics(config: Dict[str, Any], device: torch.device):
             rho=rho,
             domain_bounds=domain_bounds,
             loss_config=config.get('losses', {}),
+            enable_rans=enable_rans,  # ✅ TASK-008: 傳遞 RANS 啟用開關
+            rans_model=rans_model,    # ✅ TASK-008: 傳遞 RANS 模型類型
         )
         
         logging.info(

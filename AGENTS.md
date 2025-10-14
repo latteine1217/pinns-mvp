@@ -137,9 +137,15 @@ pinns-mvp/
   │   │   ├─ channel_flow_loader.py # 通道流專用載入器
   │   │   └─ lowfi_loader.py       # 低保真資料載入
   │   │
-  │   ├─ train/
-  │   │   ├─ trainer.py            # 主訓練循環
-  │   │   └─ ensemble.py           # Ensemble 訓練 + UQ
+  │   ├─ train/                    # 訓練管理模組 ⭐ [重構完成]
+  │   │   ├─ trainer.py (815 行)   # 核心訓練器類別
+  │   │   │   └─ Trainer: 管理完整訓練循環（優化器、動態權重、檢查點、驗證）
+  │   │   ├─ ensemble.py           # Ensemble 訓練 + UQ
+  │   │   ├─ loop.py               # 訓練循環工具函數
+  │   │   ├─ adaptive_collocation.py # 自適應採樣
+  │   │   ├─ checkpointing.py      # 檢查點管理
+  │   │   ├─ config_loader.py      # 配置載入器
+  │   │   └─ factory.py            # 模型/優化器工廠
   │   │
   │   └─ evals/
   │       ├─ metrics.py            # 評估指標
@@ -182,7 +188,7 @@ pinns-mvp/
 - 輸出：u, v, w, p
 - loss term基礎設置(詳細由adaptive weighting決定): w_{pde} 為基準設為1，規則為w_{data} = w_{boundary} = w_{initial} > w_{pde} 
 - 數據集：JHTDB channel flow Re_\tau=1000
-- 數據集大小：~500k個點
+- 數據集大小：128 x 32 x 128
 - 使用完整數據集中的QR pivoting選點作為監督訓練，訓練完成後用來預測完整數據集的流場誤差
 
 # JHTDB channel flow Re_\tau=1000設定
@@ -232,5 +238,232 @@ pinns-mvp/
 * **啟動函數**：使用sine函數作為activation function，相比tanh更能保持高階項導數的靈敏度
 * **課程式學習**：使用階段式學習，逐步降低學習率以及提升雷諾數，使模型緩步收斂更為精準
 * **傅立葉特徵**：引入fourier feature當作輸入之一，使模型對於高頻特徵更為敏感
+
+---
+
+# 訓練架構設計
+專案採用分層架構，將訓練邏輯清晰分離：
+
+### 1. **腳本層** (`scripts/train.py` - 1232 行)
+**職責**: 輕量級協調器與入口點
+- 參數解析與配置載入
+- 資料載入與預處理協調
+- 模型/物理/損失函數初始化
+- 訓練器實例化與調用
+- 結果保存與日誌管理
+
+**關鍵特性**:
+- 不包含訓練循環邏輯（已移至 `Trainer`）
+- 專注於「組裝」而非「執行」
+- 支援單模型與 Ensemble 兩種模式
+- 保持與所有現有 30+ 配置檔案的向後相容
+
+### 2. **核心訓練器** (`pinnx/train/trainer.py` - 815 行)
+**職責**: 可重用的訓練循環管理
+- 單步訓練 (`step()`)：前向傳播、損失計算、梯度更新
+- 驗證循環 (`validate()`)：計算驗證集指標
+- 完整訓練 (`train()`)：epoch 循環、早停、檢查點管理
+- 動態權重調度（GradNorm、因果權重、課程學習）
+- 學習率調度（Adam → L-BFGS 切換）
+
+**關鍵特性**:
+- 設備無關（支援 CPU/CUDA）
+- 可獨立測試（單元測試友好）
+- 支援 VS-PINN 與標準 PINN
+- 完整的訓練歷史記錄
+
+### 3. **工具模組** (`pinnx/train/`)
+- `loop.py`: 訓練循環工具函數（權重應用、殘差計算）
+- `adaptive_collocation.py`: 自適應採樣策略
+- `checkpointing.py`: 檢查點保存/載入
+- `ensemble.py`: Ensemble 訓練與不確定性量化
+- `factory.py`: 模型/優化器/損失函數工廠
+- `config_loader.py`: 配置管理與驗證
+
+**使用範例**:
+```python
+# scripts/train.py 中的簡化調用
+from pinnx.train.trainer import Trainer
+
+# 初始化訓練器
+trainer = Trainer(model, physics, losses, config, device)
+trainer.training_data = training_data_sample
+
+# 執行訓練（一行搞定）
+train_result = trainer.train()
+```
+---
+
+## 📦 配置模板快速開始
+
+**新手用戶**：我們提供 4 個標準化模板，涵蓋從快速測試到生產訓練的完整流程。
+
+### **模板選擇指南**
+
+| 場景 | 模板 | 時間 | K 點數 | Epochs |
+|------|------|------|--------|--------|
+| **快速驗證想法** | [`2d_quick_baseline.yml`](configs/templates/2d_quick_baseline.yml) | 5-10 min | 50 | 100 |
+| **特徵消融研究** | [`2d_medium_ablation.yml`](configs/templates/2d_medium_ablation.yml) | 15-30 min | 100 | 1000 |
+| **課程式訓練** | [`3d_slab_curriculum.yml`](configs/templates/3d_slab_curriculum.yml) | 30-60 min | 100 | 1000 |
+| **論文級結果** | [`3d_full_production.yml`](configs/templates/3d_full_production.yml) | 2-8 hrs | 500 | 5000 |
+
+👉 **完整模板文檔**：[`configs/templates/README.md`](configs/templates/README.md)
+
+### **快速使用範例**
+
+```bash
+# 1. 複製模板到 configs/ 目錄
+cp configs/templates/2d_quick_baseline.yml configs/my_experiment.yml
+
+# 2. 修改必要參數（實驗名稱、輸出路徑）
+vim configs/my_experiment.yml
+
+# 3. 執行訓練
+python scripts/train.py --cfg configs/my_experiment.yml
+
+# 4. 監控訓練進度
+tail -f log/my_experiment/training.log
+```
+
+**必改參數**：
+- `experiment.name`: 改為你的實驗名稱（如 `my_ablation_fourier_v1`）
+- `output.checkpoint_dir`: 改為對應路徑（如 `./checkpoints/my_ablation_fourier_v1`）
+- `output.results_dir`: 改為對應路徑（如 `./results/my_ablation_fourier_v1`）
+
+**配置命名規範**：參見 [`configs/README.md`](configs/README.md#-配置命名規範)
+
+---
+
+## 🚀 訓練腳本使用方式
+
+### **基本訓練指令**
+```bash
+# 基本訓練（使用配置文件）
+python scripts/train.py --cfg configs/<config_name>.yml
+
+# Ensemble 訓練（不確定性量化）
+python scripts/train.py --cfg configs/<config_name>.yml --ensemble
+
+# 從檢查點恢復訓練
+python scripts/train.py --cfg configs/<config_name>.yml --resume checkpoints/<exp_name>/epoch_X.pth
+```
+
+### **命令行參數說明**
+| 參數 | 類型 | 預設值 | 說明 |
+|------|------|--------|------|
+| `--cfg` | str | `configs/defaults.yml` | 配置文件路徑 |
+| `--ensemble` | flag | False | 啟用 Ensemble 訓練 |
+| `--resume` | str | None | 從檢查點恢復訓練的路徑 |
+
+### **配置文件必要欄位**
+
+#### 1. **輸出路徑配置** (必須在 YAML 中定義)
+```yaml
+output:
+  checkpoint_dir: "./checkpoints/<experiment_name>"  # 檢查點保存位置
+  results_dir: "./results/<experiment_name>"         # 結果輸出位置
+  visualization_dir: "./results/<experiment_name>/visualizations"  # 視覺化輸出
+
+logging:
+  level: "info"              # 日誌等級: debug/info/warning/error
+  log_freq: 10              # 日誌輸出頻率（每 N 個 epoch）
+  save_predictions: true    # 是否保存預測結果
+  tensorboard: true         # 啟用 TensorBoard
+  wandb: false              # 啟用 Weights & Biases（選用）
+```
+
+#### 2. **實驗基本設定**
+```yaml
+experiment:
+  name: "<experiment_name>"  # 實驗名稱（用於日誌識別）
+  version: "v1.0"           # 版本號
+  seed: 42                  # 隨機種子（可重現性）
+  device: "auto"            # 設備：auto/cpu/cuda/cuda:0
+  precision: "float32"      # 精度：float32/float64
+  description: "實驗描述"   # 實驗說明（選用）
+```
+
+#### 3. **訓練設定**
+```yaml
+training:
+  optimizer: "adam"         # 優化器：adam/lbfgs/sgd
+  lr: 1.0e-3               # 學習率
+  epochs: 1000             # 訓練輪數
+  batch_size: 1024         # 批次大小
+  checkpoint_freq: 100     # 檢查點保存頻率
+  log_interval: 10         # 日誌輸出間隔
+  validation_freq: 50      # 驗證頻率
+```
+
+### **實際使用範例**
+
+#### 快速測試（100 epochs）
+```bash
+python scripts/train.py --cfg configs/test_rans_quick.yml
+```
+
+#### 完整訓練（1000+ epochs）
+```bash
+# 前台運行
+python scripts/train.py --cfg configs/test_physics_fix_1k.yml
+
+# 背景運行（推薦）
+nohup python scripts/train.py --cfg configs/test_physics_fix_1k.yml \
+    > log/<exp_name>/training_stdout.log 2>&1 &
+```
+
+#### 監控訓練進度
+```bash
+# 即時監控訓練日誌
+tail -f log/<exp_name>/training.log
+
+# 監控標準輸出
+tail -f log/<exp_name>/training_stdout.log
+
+# 使用監控腳本（如果有）
+./scripts/monitor_curriculum.sh
+```
+
+### **⚠️ 常見錯誤與修正**
+
+| 錯誤類型 | 錯誤原因 | 正確方式 |
+|---------|---------|---------|
+| ❌ `--log_dir` | 不存在的參數 | ✅ 在 YAML 中配置 `output.checkpoint_dir` |
+| ❌ `--checkpoint` | 不存在的參數 | ✅ 使用 `--resume <path>` |
+| ❌ `--name` | 不存在的參數 | ✅ 在 YAML 中配置 `experiment.name` |
+| ❌ 直接修改 `train.py` | 破壞可維護性 | ✅ 通過 YAML 配置所有參數 |
+| ❌ 硬編碼路徑 | 不利於複用 | ✅ 使用相對路徑並遵循目錄規範 |
+
+### **目錄結構規範**
+```
+實驗名稱建議格式: test_<feature>_<variant>_<epochs>
+範例: test_rans_phase6c_v3
+
+對應目錄結構:
+├── configs/test_rans_phase6c_v3.yml          # 配置文件
+├── checkpoints/test_rans_phase6c_v3/         # 檢查點輸出
+│   ├── epoch_100.pth
+│   ├── best_model.pth
+│   └── latest.pth
+├── results/test_rans_phase6c_v3/             # 結果輸出
+│   ├── metrics.json
+│   ├── predictions.npz
+│   └── visualizations/                       # 視覺化圖表
+└── log/test_rans_phase6c_v3/                 # 日誌文件（可選）
+    ├── training.log
+    └── training_stdout.log
+```
+
+### **檢查點管理**
+```bash
+# 從特定 epoch 恢復
+python scripts/train.py --cfg configs/my_exp.yml --resume checkpoints/my_exp/epoch_500.pth
+
+# 從最佳模型恢復（warm start）
+python scripts/train.py --cfg configs/phase2.yml --resume checkpoints/phase1/best_model.pth
+
+# 從最新檢查點恢復
+python scripts/train.py --cfg configs/my_exp.yml --resume checkpoints/my_exp/latest.pth
+```
 
 ---

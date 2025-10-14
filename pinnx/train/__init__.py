@@ -36,6 +36,10 @@ from .factory import (
     create_optimizer
 )
 
+from .schedulers import (
+    WarmupCosineScheduler
+)
+
 # TODO: ensemble 模組尚未完整實現，以下導入會觸發 NotImplementedError
 # 取消註解以啟用 ensemble 功能（當實現完成後）
 # from .ensemble import (
@@ -73,6 +77,9 @@ __all__ = [
     'create_model',
     'create_physics',
     'create_optimizer',
+    
+    # 學習率調度器
+    'WarmupCosineScheduler',
     
     # TODO: Ensemble & UQ（待實現）
     # 'EnsemblePINNTrainer',

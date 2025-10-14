@@ -61,6 +61,61 @@ class RWFLinear(nn.Module):
         if self.bias is not None:
             nn.init.zeros_(self.bias)
     
+    def apply_siren_init(self, omega_0: float, is_first: bool) -> None:
+        """
+        應用 SIREN 初始化規則到 RWF 權重
+        
+        基於論文: Sitzmann et al., "Implicit Neural Representations with Periodic Activation Functions"
+        
+        Args:
+            omega_0: Sine 激活函數的頻率參數
+            is_first: 是否為第一層（第一層使用不同的初始化規則）
+        """
+        n_in = self.V.shape[1]
+        with torch.no_grad():
+            if is_first:
+                # 第一層: U(-1/n_in, +1/n_in)
+                bound = 1.0 / n_in
+            else:
+                # 隱藏層: U(-sqrt(6/n_in)/omega_0, +sqrt(6/n_in)/omega_0)
+                bound = math.sqrt(6.0 / n_in) / omega_0
+            
+            nn.init.uniform_(self.V, -bound, bound)
+            nn.init.zeros_(self.s)  # s 初始化為 0 (exp(0) = 1, 無縮放)
+            if self.bias is not None:
+                nn.init.zeros_(self.bias)
+    
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        """
+        檢查點向後相容：自動轉換舊格式 (weight/bias) 到新格式 (V/s/bias)
+        
+        轉換規則：
+        - weight -> V (直接複製)
+        - s -> 初始化為 0（表示 exp(0)=1，無縮放）
+        - bias -> bias (直接複製)
+        
+        這允許舊的 nn.Linear 檢查點載入到 RWFLinear，並從訓練中學習最佳縮放。
+        """
+        # 檢查是否為舊格式（有 'weight' 鍵但沒有 'V' 鍵）
+        weight_key = prefix + 'weight'
+        v_key = prefix + 'V'
+        s_key = prefix + 's'
+        
+        if weight_key in state_dict and v_key not in state_dict:
+            # 舊格式轉換
+            print(f"  🔄 檢測到舊格式檢查點，轉換 {weight_key} -> {v_key}")
+            state_dict[v_key] = state_dict.pop(weight_key)
+            
+            # 初始化 s 為 0（無縮放）
+            if s_key not in state_dict:
+                state_dict[s_key] = torch.zeros(self.out_features, dtype=state_dict[v_key].dtype)
+                print(f"  ✨ 初始化 {s_key} = 0 (無縮放)")
+        
+        # 調用父類方法完成載入
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
+                                      missing_keys, unexpected_keys, error_msgs)
+    
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         scale_factors = torch.exp(self.s).unsqueeze(1)
         W = scale_factors * self.V
@@ -597,6 +652,10 @@ def init_siren_weights(model: PINNNet) -> None:
     - 隱藏層：U(-sqrt(6/n_in)/omega_0, +sqrt(6/n_in)/omega_0)
     - 輸出層：保持原始初始化（小權重）
     
+    支援：
+    - 標準 nn.Linear 層
+    - RWFLinear 層（透過 apply_siren_init() 方法）
+    
     Args:
         model: PINNNet 模型實例（必須使用 sine 激活）
     """
@@ -606,16 +665,34 @@ def init_siren_weights(model: PINNNet) -> None:
     if len(model.hidden_layers) > 0:
         first_layer = model.hidden_layers[0]  # type: ignore
         if isinstance(first_layer, DenseLayer) and isinstance(first_layer.activation, SineActivation):
+            # 獲取 omega_0 參數
+            omega_0 = first_layer.activation.omega_0
+            
             # 第一層特殊初始化
             first_linear = first_layer.linear
-            n_in = first_linear.weight.shape[1]  # type: ignore
-            bound = float(1.0 / n_in)  # type: ignore
-            with torch.no_grad():
-                nn.init.uniform_(first_linear.weight, -bound, bound)  # type: ignore
-                nn.init.zeros_(first_linear.bias)  # type: ignore
             
-            # 後續層已經在 DenseLayer.__init__ 中處理
-            print(f"✅ SIREN 初始化完成：第一層 bound=±{bound:.6f}")
+            if isinstance(first_linear, RWFLinear):
+                # RWF 路徑：使用專用初始化方法
+                first_linear.apply_siren_init(omega_0, is_first=True)
+                print(f"✅ SIREN 初始化完成（RWF 模式）：第一層 omega_0={omega_0:.2f}")
+                
+                # 初始化後續 RWF 層
+                for i, layer in enumerate(model.hidden_layers[1:], start=2):
+                    if isinstance(layer, DenseLayer) and isinstance(layer.linear, RWFLinear):
+                        layer.linear.apply_siren_init(omega_0, is_first=False)
+                
+            elif isinstance(first_linear, nn.Linear):
+                # 標準 nn.Linear 路徑
+                n_in = first_linear.weight.shape[1]  # type: ignore
+                bound = float(1.0 / n_in)  # type: ignore
+                with torch.no_grad():
+                    nn.init.uniform_(first_linear.weight, -bound, bound)  # type: ignore
+                    nn.init.zeros_(first_linear.bias)  # type: ignore
+                
+                # 後續層已經在 DenseLayer.__init__ 中處理
+                print(f"✅ SIREN 初始化完成（標準模式）：第一層 bound=±{bound:.6f}")
+            else:
+                print(f"⚠️  未知的線性層類型: {type(first_linear)}")
         else:
             print("⚠️  模型未使用 Sine 激活，跳過 SIREN 初始化")
 

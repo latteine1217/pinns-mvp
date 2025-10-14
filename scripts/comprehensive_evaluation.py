@@ -53,6 +53,7 @@ from pinnx.evals.metrics import (
     relative_L2, rmse_metrics, field_statistics,
     energy_spectrum_1d, conservation_error
 )
+from pinnx.utils.denormalization import denormalize_output  # TASK-008: 反標準化工具
 
 
 # ============================================================
@@ -60,8 +61,80 @@ from pinnx.evals.metrics import (
 # ============================================================
 
 def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device):
-    """載入訓練完成的模型"""
+    """載入訓練完成的模型（含 physics 狀態恢復）"""
     logger.info(f"📥 Loading model from {checkpoint_path}")
+    
+    # 🔍 STEP 1: 預先檢查檢查點架構，動態調整配置
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    model_state = checkpoint.get('model_state_dict', checkpoint)
+    
+    # 🆕 優先使用 checkpoint 中保存的配置（如果存在）
+    if 'config' in checkpoint:
+        ckpt_config = checkpoint['config']
+        logger.info("✅ Using config from checkpoint (overriding file config)")
+        
+        # 合併配置：checkpoint 優先，但保留評估相關的設置
+        eval_settings = config.get('evaluation', {})
+        config = ckpt_config
+        config['evaluation'] = eval_settings  # 保留評估設置
+    else:
+        logger.warning("⚠️ No config in checkpoint, using file config (may cause architecture mismatch!)")
+    
+    # 檢測 Fourier 特徵是否存在（支持 ManualScalingWrapper）
+    has_fourier = 'fourier.B' in model_state or 'base_model.fourier.B' in model_state
+    
+    # 檢測是否使用 wrapper（通過 base_model. 前綴或 input_min/max）
+    is_wrapped = ('base_model.hidden_layers.0.linear.weight' in model_state or
+                  'input_min' in model_state)
+    
+    # 檢測輸入維度（從 Fourier B 矩陣或第一層權重推斷）
+    input_proj_shape = None
+    if 'base_model.fourier.B' in model_state:
+        input_proj_shape = model_state['base_model.fourier.B']
+    elif 'fourier.B' in model_state:
+        input_proj_shape = model_state['fourier.B']
+    elif 'base_model.hidden_layers.0.linear.weight' in model_state:
+        input_proj_shape = model_state['base_model.hidden_layers.0.linear.weight']
+    elif 'hidden_layers.0.linear.weight' in model_state:
+        input_proj_shape = model_state['hidden_layers.0.linear.weight']
+    
+    if input_proj_shape is not None:
+        if has_fourier:
+            # Fourier B matrix 形狀: (input_dim, m)
+            # 實際輸入維度是 B.shape[0]，輸出是 2*m
+            input_dim = input_proj_shape.shape[0]
+            fourier_dim = input_proj_shape.shape[1] * 2  # sin + cos
+        else:
+            # Hidden layer 形狀: (hidden_size, input_dim)
+            input_dim = input_proj_shape.shape[1]
+            fourier_dim = None
+        
+        logger.info(f"🔍 Checkpoint architecture detected:")
+        logger.info(f"   Input dim: {input_dim}, Has Fourier: {has_fourier}, Wrapped: {is_wrapped}")
+        if fourier_dim:
+            logger.info(f"   Fourier output dim: {fourier_dim}")
+        
+        # 動態調整配置以匹配檢查點
+        if 'model' not in config:
+            config['model'] = {}
+        if 'fourier_features' not in config['model']:
+            config['model']['fourier_features'] = {}
+        
+        if has_fourier and fourier_dim:  # Fourier enabled
+            config['model']['use_fourier'] = True
+            config['model']['fourier_features']['type'] = 'standard'
+            # 從 B 矩陣推斷 m
+            fourier_m = input_proj_shape.shape[1]
+            config['model']['fourier_features']['fourier_m'] = int(fourier_m)
+            if config['model']['fourier_features'].get('fourier_sigma', 0) == 0:
+                config['model']['fourier_features']['fourier_sigma'] = 5.0
+            logger.info(f"✅ Config adjusted to Fourier ENABLED (m={fourier_m})")
+        else:  # Fourier disabled
+            config['model']['use_fourier'] = False
+            config['model']['fourier_features']['type'] = 'disabled'
+            config['model']['fourier_features']['fourier_m'] = 0
+            config['model']['fourier_features']['fourier_sigma'] = 0.0
+            logger.info("✅ Config adjusted to Fourier DISABLED")
     
     # 🔧 從配置文件構建 statistics 以支持 3D 模型
     # 這確保 ManualScalingWrapper 能正確設置 input_min/max 的形狀
@@ -77,48 +150,156 @@ def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device
             statistics['z'] = {'range': domain['z_range']}
         logger.info(f"📐 Constructed statistics from config: {list(statistics.keys())}")
     
-    # 創建模型架構
-    from scripts.train import create_model
-    model = create_model(config, device, statistics=statistics)
+    # 🔧 CRITICAL FIX: 若 checkpoint 使用 ManualScalingWrapper，
+    # 則必須創建 plain model（非 VS-PINN），因為 checkpoint 的 base_model 不含 input_scale_factors
+    has_wrapper = (is_wrapped and 
+                   'input_min' in model_state and 
+                   'input_max' in model_state)
     
-    # 載入權重
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    original_physics_type = config.get('physics', {}).get('type', '')
+    if has_wrapper and original_physics_type == 'vs_pinn_channel_flow':
+        # 臨時禁用 VS-PINN，避免 create_model() 創建帶 input_scale_factors 的模型
+        logger.info("⚠️  Checkpoint uses ManualScalingWrapper → Disabling VS-PINN mode for model creation")
+        config['physics']['type'] = 'channel_flow_3d'  # 使用普通物理類型
+    
+    # 創建模型架構
+    from pinnx.train.factory import create_model, create_physics
+    base_model = create_model(config, device, statistics=statistics)
+    
+    # 恢復原始 physics type（用於後續 physics 創建）
+    if has_wrapper and original_physics_type == 'vs_pinn_channel_flow':
+        config['physics']['type'] = original_physics_type
+        logger.info("✅ Restored physics type to vs_pinn_channel_flow for physics module creation")
+    
+    # 🔧 檢查 create_model() 是否已經創建了 wrapper（避免雙重包裝）
+    model_already_wrapped = hasattr(base_model, 'input_min') and hasattr(base_model, 'input_max')
+    
+    if has_wrapper and not model_already_wrapped:
+        # Checkpoint 使用 wrapper，但 create_model() 沒有創建 → 需要手動包裝
+        logger.info("🔧 Checkpoint uses ManualScalingWrapper, manually applying wrapper")
+        from pinnx.models.wrappers import ManualScalingWrapper
+        
+        # 從 checkpoint 提取縮放範圍
+        input_min = model_state['input_min'].cpu().numpy()
+        input_max = model_state['input_max'].cpu().numpy()
+        output_min = model_state.get('output_min', torch.zeros(4)).cpu().numpy()
+        output_max = model_state.get('output_max', torch.ones(4)).cpu().numpy()
+        
+        # 從配置推斷輸入變數名稱（x, y, z）
+        domain = config.get('physics', {}).get('domain', {})
+        input_keys = ['x', 'y']
+        if 'z_range' in domain or len(input_min) >= 3:
+            input_keys.append('z')
+        
+        # 構建 input/output ranges 字典
+        input_ranges = {key: (float(input_min[i]), float(input_max[i])) 
+                       for i, key in enumerate(input_keys[:len(input_min)])}
+        
+        output_keys = ['u', 'v', 'w', 'p'] if len(output_min) >= 4 else ['u', 'v', 'p']
+        output_ranges = {key: (float(output_min[i]), float(output_max[i])) 
+                        for i, key in enumerate(output_keys[:len(output_min)])}
+        
+        model = ManualScalingWrapper(
+            base_model,
+            input_ranges=input_ranges,
+            output_ranges=output_ranges
+        ).to(device)
+        logger.info(f"   Input ranges: {input_ranges}")
+        logger.info(f"   Output ranges: {list(output_ranges.keys())}")
+    elif model_already_wrapped:
+        # create_model() 已經創建了 wrapper → 直接使用
+        model = base_model
+        logger.info("✅ Model already wrapped by create_model(), using directly")
+    else:
+        # Checkpoint 不使用 wrapper → 直接使用 base model
+        model = base_model
+        logger.info("ℹ️  Checkpoint uses bare model (no wrapper)")
+    
+    # 🆕 創建 physics 對象（用於恢復 VS-PINN 縮放參數）
+    physics = None
+    physics_type = config.get('physics', {}).get('type', '')
+    if physics_type == 'vs_pinn_channel_flow':
+        physics = create_physics(config, device)
+        logger.info("✅ Created VS-PINN physics module")
+     
+    # 載入權重（使用已載入的 checkpoint）
     if 'model_state_dict' in checkpoint:
         model.load_state_dict(checkpoint['model_state_dict'])
         epoch = checkpoint.get('epoch', 'unknown')
-        logger.info(f"✅ Loaded checkpoint from epoch {epoch}")
+        logger.info(f"✅ Loaded model checkpoint from epoch {epoch}")
     else:
         model.load_state_dict(checkpoint)
-        logger.info(f"✅ Loaded checkpoint (legacy format)")
+        logger.info(f"✅ Loaded model checkpoint (legacy format)")
+    
+    # 轉移到目標設備
+    model = model.to(device)
+    
+    # 🆕 恢復 physics 的 state_dict（VS-PINN 縮放參數等）
+    if 'physics_state_dict' in checkpoint and physics is not None:
+        physics.load_state_dict(checkpoint['physics_state_dict'])
+        logger.info(f"✅ Restored physics state: {list(checkpoint['physics_state_dict'].keys())}")
+        
+        # 🔍 打印恢復的縮放參數（用於驗證）
+        if hasattr(physics, 'N_x'):
+            logger.info(f"   VS-PINN 縮放參數: N_x={physics.N_x.item():.2f}, "
+                       f"N_y={physics.N_y.item():.2f}, N_z={physics.N_z.item():.2f}")
+    elif 'physics_state_dict' not in checkpoint:
+        logger.warning("⚠️ No physics_state_dict in checkpoint (legacy checkpoint?)")
+        if physics_type == 'vs_pinn_channel_flow':
+            logger.warning("⚠️ Using default VS-PINN scaling parameters - predictions may be incorrect!")
     
     model.eval()
-    return model
+    return model, physics
 
 
 def load_jhtdb_reference(data_path: Path) -> Dict[str, np.ndarray]:
-    """載入 JHTDB 參考數據"""
+    """載入 JHTDB 參考數據（支援 2D/3D）"""
     logger.info(f"📥 Loading JHTDB reference from {data_path}")
     
-    data = np.load(data_path)
+    data = np.load(data_path, allow_pickle=True)
+    
+    # 檢查數據維度（2D 或 3D）
+    is_3d = 'z' in data and 'w' in data
+    
+    if is_3d:
+        required_fields = ['u', 'v', 'w', 'p', 'x', 'y', 'z']
+        domain_info = (f"domain: x[{data['x'].min():.2f}, {data['x'].max():.2f}], "
+                      f"y[{data['y'].min():.2f}, {data['y'].max():.2f}], "
+                      f"z[{data['z'].min():.2f}, {data['z'].max():.2f}]")
+    else:
+        required_fields = ['u', 'v', 'p', 'x', 'y']
+        domain_info = (f"domain: x[{data['x'].min():.2f}, {data['x'].max():.2f}], "
+                      f"y[{data['y'].min():.2f}, {data['y'].max():.2f}] (2D slice)")
     
     # 檢查數據格式
-    required_fields = ['u', 'v', 'w', 'p', 'x', 'y', 'z']
-    for field in required_fields:
-        if field not in data:
-            logger.warning(f"⚠️  Field '{field}' not found in reference data")
+    missing_fields = [f for f in required_fields if f not in data]
+    if missing_fields:
+        logger.warning(f"⚠️  Missing fields: {missing_fields}")
     
-    logger.info(f"✅ Loaded reference data: u{data['u'].shape}, "
-                f"domain: x[{data['x'].min():.2f}, {data['x'].max():.2f}], "
-                f"y[{data['y'].min():.2f}, {data['y'].max():.2f}], "
-                f"z[{data['z'].min():.2f}, {data['z'].max():.2f}]")
+    logger.info(f"✅ Loaded reference data ({'3D' if is_3d else '2D'}): u{data['u'].shape}, {domain_info}")
     
     return {key: data[key] for key in data.files}
 
 
 def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray, 
-                    device: torch.device, batch_size: int = 10000) -> Dict[str, np.ndarray]:
-    """在網格上進行預測"""
+                    device: torch.device, batch_size: int = 10000, 
+                    physics=None, config: Dict = None) -> Dict[str, np.ndarray]:
+    """在網格上進行預測
+    
+    Args:
+        model: 訓練好的模型
+        physics: VS-PINN physics 模組（用於座標縮放）
+        config: 配置字典（用於反標準化，TASK-008）
+        ...
+    """
     logger.info(f"🔮 Predicting on grid: {len(x)}×{len(y)}×{len(z)} = {len(x)*len(y)*len(z)} points")
+    
+    # 🆕 檢查是否使用 VS-PINN 縮放
+    use_vs_pinn = physics is not None and hasattr(physics, 'scale_coordinates')
+    if use_vs_pinn:
+        logger.info(f"🔧 Using VS-PINN coordinate scaling: N_x={physics.N_x.item():.2f}, N_y={physics.N_y.item():.2f}, N_z={physics.N_z.item():.2f}")
+    else:
+        logger.info(f"🔧 Using direct model inference (no scaling)")
     
     # 生成網格點
     X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
@@ -131,12 +312,31 @@ def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray,
     with torch.no_grad():
         for i in range(0, n_points, batch_size):
             batch = torch.tensor(points[i:i+batch_size], dtype=torch.float32, device=device)
+            
+            # 🆕 應用 VS-PINN 座標縮放（如果有）
+            if use_vs_pinn:
+                batch = physics.scale_coordinates(batch)
+            
+            # 模型推理（輸出為標準化空間）
             pred = model(batch)
             
-            u_list.append(pred[:, 0].cpu().numpy())
-            v_list.append(pred[:, 1].cpu().numpy())
-            w_list.append(pred[:, 2].cpu().numpy())
-            p_list.append(pred[:, 3].cpu().numpy())
+            # ✅ TASK-008: 反標準化回物理空間
+            if config is not None:
+                pred_physical = denormalize_output(
+                    pred.cpu().numpy(), 
+                    config, 
+                    output_norm_type='training_data_norm',
+                    verbose=False
+                )
+            else:
+                # 向後相容：無配置時不反標準化
+                logger.warning("⚠️ config 為 None，跳過反標準化（可能導致量級錯誤）")
+                pred_physical = pred.cpu().numpy()
+            
+            u_list.append(pred_physical[:, 0])
+            v_list.append(pred_physical[:, 1])
+            w_list.append(pred_physical[:, 2])
+            p_list.append(pred_physical[:, 3])
             
             if (i // batch_size + 1) % 10 == 0:
                 logger.info(f"  Progress: {i+len(batch)}/{n_points} ({100*(i+len(batch))/n_points:.1f}%)")
@@ -241,31 +441,37 @@ def compute_field_statistics(pred: Dict[str, np.ndarray],
 
 def compute_wall_shear_stress_comparison(pred: Dict[str, np.ndarray], 
                                          ref: Dict[str, np.ndarray]) -> Dict[str, float]:
-    """比較壁面剪應力"""
+    """比較壁面剪應力（支援 2D/3D）"""
     logger.info("📊 Computing wall shear stress comparison...")
     
-    # 假設壁面在 y 方向的邊界
-    y_idx_lower = 0  # 下壁面
-    y_idx_upper = -1  # 上壁面
+    # 檢測 2D vs 3D（使用 reference 判斷，因為 pred 可能被擴維）
+    is_2d = len(ref['u'].shape) == 2
     
     # 計算速度梯度（使用有限差分）
     dy = pred['y'][1] - pred['y'][0]
     
     # 下壁面剪應力：τ_w = μ * ∂u/∂y
-    pred_tau_lower = (pred['u'][:, 1, :] - pred['u'][:, 0, :]) / dy
-    ref_tau_lower = (ref['u'][:, 1, :] - ref['u'][:, 0, :]) / dy
+    if is_2d:
+        # 2D: shape (nx, ny) - squeeze pred if needed
+        pred_u = pred['u'].squeeze() if pred['u'].ndim == 3 else pred['u']
+        pred_tau_lower = (pred_u[:, 1] - pred_u[:, 0]) / dy
+        ref_tau_lower = (ref['u'][:, 1] - ref['u'][:, 0]) / dy
+    else:
+        # 3D: shape (nx, ny, nz)
+        pred_tau_lower = (pred['u'][:, 1, :] - pred['u'][:, 0, :]) / dy
+        ref_tau_lower = (ref['u'][:, 1, :] - ref['u'][:, 0, :]) / dy
     
     # 統計量
     metrics = {
-        'pred_tau_mean': np.mean(pred_tau_lower),
-        'pred_tau_std': np.std(pred_tau_lower),
-        'ref_tau_mean': np.mean(ref_tau_lower),
-        'ref_tau_std': np.std(ref_tau_lower),
-        'tau_rmse': np.sqrt(np.mean((pred_tau_lower - ref_tau_lower)**2)),
-        'tau_rel_error': np.abs(np.mean(pred_tau_lower) - np.mean(ref_tau_lower)) / (np.abs(np.mean(ref_tau_lower)) + 1e-12)
+        'pred_tau_mean': float(np.mean(pred_tau_lower)),
+        'pred_tau_std': float(np.std(pred_tau_lower)),
+        'ref_tau_mean': float(np.mean(ref_tau_lower)),
+        'ref_tau_std': float(np.std(ref_tau_lower)),
+        'tau_rmse': float(np.sqrt(np.mean((pred_tau_lower - ref_tau_lower)**2))),
+        'tau_rel_error': float(np.abs(np.mean(pred_tau_lower) - np.mean(ref_tau_lower)) / (np.abs(np.mean(ref_tau_lower)) + 1e-12))
     }
     
-    logger.info(f"✅ Wall shear stress: pred={metrics['pred_tau_mean']:.6f}, "
+    logger.info(f"✅ Wall shear stress ({'2D' if is_2d else '3D'}): pred={metrics['pred_tau_mean']:.6f}, "
                 f"ref={metrics['ref_tau_mean']:.6f}, error={metrics['tau_rel_error']:.2%}")
     
     return metrics
@@ -273,15 +479,23 @@ def compute_wall_shear_stress_comparison(pred: Dict[str, np.ndarray],
 
 def compute_energy_spectrum_comparison(pred: Dict[str, np.ndarray], 
                                        ref: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-    """比較能量譜"""
+    """比較能量譜（支援 2D/3D）"""
     logger.info("📊 Computing energy spectrum comparison...")
     
-    # 選擇中間 y 平面
-    y_mid = len(pred['y']) // 2
+    # 檢測 2D vs 3D（使用 reference 判斷）
+    is_2d = len(ref['u'].shape) == 2
     
-    # 計算動能：0.5 * (u² + v² + w²)
-    pred_ke = 0.5 * (pred['u'][:, y_mid, :]**2 + pred['v'][:, y_mid, :]**2 + pred['w'][:, y_mid, :]**2)
-    ref_ke = 0.5 * (ref['u'][:, y_mid, :]**2 + ref['v'][:, y_mid, :]**2 + ref['w'][:, y_mid, :]**2)
+    if is_2d:
+        # 2D: 直接使用整個場（squeeze pred 移除 z 維度）
+        pred_u = pred['u'].squeeze() if pred['u'].ndim == 3 else pred['u']
+        pred_v = pred['v'].squeeze() if pred['v'].ndim == 3 else pred['v']
+        pred_ke = 0.5 * (pred_u**2 + pred_v**2)
+        ref_ke = 0.5 * (ref['u']**2 + ref['v']**2)
+    else:
+        # 3D: 選擇中間 y 平面
+        y_mid = len(pred['y']) // 2
+        pred_ke = 0.5 * (pred['u'][:, y_mid, :]**2 + pred['v'][:, y_mid, :]**2 + pred['w'][:, y_mid, :]**2)
+        ref_ke = 0.5 * (ref['u'][:, y_mid, :]**2 + ref['v'][:, y_mid, :]**2 + ref['w'][:, y_mid, :]**2)
     
     # 2D FFT
     pred_fft = np.fft.fft2(pred_ke)
@@ -332,26 +546,64 @@ def compute_energy_spectrum_comparison(pred: Dict[str, np.ndarray],
 def plot_error_distribution(pred: Dict[str, np.ndarray], 
                             ref: Dict[str, np.ndarray], 
                             save_dir: Path):
-    """繪製誤差分布圖"""
+    """繪製誤差分布圖（支援 2D/3D）"""
     logger.info("🎨 Plotting error distribution...")
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    # 檢測 2D vs 3D
+    is_2d = len(ref['u'].shape) == 2
     
-    # 選擇中間 z 平面
-    z_mid = len(pred['z']) // 2
+    # 決定要繪製的場（僅繪製參考資料中存在的場）
+    available_fields = [f for f in ['u', 'v', 'w', 'p'] if f in ref]
+    n_fields = len(available_fields)
+    n_rows = (n_fields + 1) // 2
+    n_cols = 2
     
-    for idx, field in enumerate(['u', 'v', 'w', 'p']):
-        ax = axes[idx // 2, idx % 2]
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 7*n_rows))
+    if n_fields == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+    
+    # 提取切片
+    if is_2d:
+        # 2D: squeeze pred
+        def get_slice(data_dict, field):
+            if field not in data_dict:
+                return None
+            d = data_dict[field]
+            return d.squeeze() if d.ndim == 3 else d
+        z_label = "2D slice"
+    else:
+        # 3D: 選擇中間 z 平面
+        z_mid = len(pred['z']) // 2
+        def get_slice(data_dict, field):
+            if field not in data_dict:
+                return None
+            return data_dict[field][:, :, z_mid]
+        z_label = f"z={pred['z'][z_mid]:.2f}"
+    
+    for idx, field in enumerate(available_fields):
+        ax = axes[idx]
         
-        pred_slice = pred[field][:, :, z_mid]
-        ref_slice = ref[field][:, :, z_mid]
+        pred_slice = get_slice(pred, field)
+        ref_slice = get_slice(ref, field)
+        
+        if pred_slice is None or ref_slice is None:
+            ax.text(0.5, 0.5, f'{field.upper()} not available', 
+                   ha='center', va='center', fontsize=16)
+            ax.axis('off')
+            continue
+        
         error = np.abs(pred_slice - ref_slice)
         
         im = ax.contourf(pred['x'], pred['y'], error.T, levels=20, cmap='hot')
         ax.set_xlabel('x', fontsize=14)
         ax.set_ylabel('y', fontsize=14)
-        ax.set_title(f'{field.upper()} Absolute Error (z={pred["z"][z_mid]:.2f})', fontsize=16)
+        ax.set_title(f'{field.upper()} Absolute Error ({z_label})', fontsize=16)
         plt.colorbar(im, ax=ax, label='|pred - ref|')
+    
+    # 隱藏多餘的子圖
+    for idx in range(n_fields, len(axes)):
+        axes[idx].axis('off')
     
     plt.tight_layout()
     plt.savefig(save_dir / 'error_distribution.png', dpi=150, bbox_inches='tight')
@@ -362,16 +614,39 @@ def plot_error_distribution(pred: Dict[str, np.ndarray],
 def plot_field_comparison(pred: Dict[str, np.ndarray], 
                           ref: Dict[str, np.ndarray], 
                           save_dir: Path):
-    """繪製場比較圖（預測 vs 參考）"""
+    """繪製場比較圖（預測 vs 參考，支援 2D/3D）"""
     logger.info("🎨 Plotting field comparison...")
     
-    z_mid = len(pred['z']) // 2
+    # 檢測 2D vs 3D
+    is_2d = len(ref['u'].shape) == 2
     
-    for field in ['u', 'v', 'w', 'p']:
+    # 決定要繪製的場
+    available_fields = [f for f in ['u', 'v', 'w', 'p'] if f in ref]
+    
+    # 提取切片
+    if is_2d:
+        def get_slice(data_dict, field):
+            if field not in data_dict:
+                return None
+            d = data_dict[field]
+            return d.squeeze() if d.ndim == 3 else d
+    else:
+        z_mid = len(pred['z']) // 2
+        def get_slice(data_dict, field):
+            if field not in data_dict:
+                return None
+            return data_dict[field][:, :, z_mid]
+    
+    for field in available_fields:
         fig, axes = plt.subplots(1, 3, figsize=(20, 5))
         
-        pred_slice = pred[field][:, :, z_mid]
-        ref_slice = ref[field][:, :, z_mid]
+        pred_slice = get_slice(pred, field)
+        ref_slice = get_slice(ref, field)
+        
+        if pred_slice is None or ref_slice is None:
+            logger.warning(f"⚠️ Skipping {field} - not available in data")
+            plt.close()
+            continue
         
         # 統一色階
         vmin = min(pred_slice.min(), ref_slice.min())
@@ -408,27 +683,45 @@ def plot_field_comparison(pred: Dict[str, np.ndarray],
 def plot_velocity_profiles(pred: Dict[str, np.ndarray], 
                            ref: Dict[str, np.ndarray], 
                            save_dir: Path):
-    """繪製速度剖面比較"""
+    """繪製速度剖面比較（支援 2D/3D）"""
     logger.info("🎨 Plotting velocity profiles...")
+    
+    # 檢測 2D vs 3D
+    is_2d = len(ref['u'].shape) == 2
+    
+    # 決定要繪製的速度分量
+    available_fields = [f for f in ['u', 'v', 'w'] if f in ref]
+    n_fields = len(available_fields)
     
     # 選擇域中心
     x_mid = len(pred['x']) // 2
-    z_mid = len(pred['z']) // 2
     
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, n_fields, figsize=(6*n_fields, 5))
+    if n_fields == 1:
+        axes = [axes]
     
-    for idx, field in enumerate(['u', 'v', 'w']):
+    for idx, field in enumerate(available_fields):
         ax = axes[idx]
         
-        pred_profile = pred[field][x_mid, :, z_mid]
-        ref_profile = ref[field][x_mid, :, z_mid]
+        if is_2d:
+            # 2D: squeeze pred
+            pred_field = pred[field].squeeze() if pred[field].ndim == 3 else pred[field]
+            pred_profile = pred_field[x_mid, :]
+            ref_profile = ref[field][x_mid, :]
+            title_suffix = f"x={pred['x'][x_mid]:.2f}"
+        else:
+            # 3D: 使用中間 z
+            z_mid = len(pred['z']) // 2
+            pred_profile = pred[field][x_mid, :, z_mid]
+            ref_profile = ref[field][x_mid, :, z_mid]
+            title_suffix = f"x={pred['x'][x_mid]:.2f}, z={pred['z'][z_mid]:.2f}"
         
         ax.plot(pred_profile, pred['y'], 'b-', linewidth=2, label='Predicted')
         ax.plot(ref_profile, ref['y'], 'r--', linewidth=2, label='JHTDB Reference')
         
         ax.set_xlabel(f'{field}', fontsize=14)
         ax.set_ylabel('y', fontsize=14)
-        ax.set_title(f'{field.upper()} Velocity Profile (x={pred["x"][x_mid]:.2f}, z={pred["z"][z_mid]:.2f})', fontsize=16)
+        ax.set_title(f'{field.upper()} Velocity Profile ({title_suffix})', fontsize=16)
         ax.legend(fontsize=12)
         ax.grid(True, alpha=0.3)
     
@@ -484,38 +777,74 @@ def plot_wall_shear_stress(pred: Dict[str, np.ndarray],
     """繪製壁面剪應力比較"""
     logger.info("🎨 Plotting wall shear stress...")
     
+    # 檢測維度：2D (nx, ny) 或 3D (nx, ny, nz)
+    is_2d = len(ref['u'].shape) == 2
+    
+    # Squeeze pred data if needed (預測總是3D，但參考可能是2D)
+    pred_u = pred['u'].squeeze()
+    
     # 計算壁面剪應力
     dy = pred['y'][1] - pred['y'][0]
-    pred_tau = (pred['u'][:, 1, :] - pred['u'][:, 0, :]) / dy
-    ref_tau = (ref['u'][:, 1, :] - ref['u'][:, 0, :]) / dy
     
-    fig, axes = plt.subplots(1, 3, figsize=(20, 5))
-    
-    # 統一色階
-    vmin = min(pred_tau.min(), ref_tau.min())
-    vmax = max(pred_tau.max(), ref_tau.max())
-    
-    # 預測
-    im0 = axes[0].contourf(pred['x'], pred['z'], pred_tau.T, levels=20, cmap='viridis', vmin=vmin, vmax=vmax)
-    axes[0].set_title('Wall Shear Stress - Predicted', fontsize=16)
-    axes[0].set_xlabel('x', fontsize=14)
-    axes[0].set_ylabel('z', fontsize=14)
-    plt.colorbar(im0, ax=axes[0], label=r'$\tau_w$')
-    
-    # 參考
-    im1 = axes[1].contourf(ref['x'], ref['z'], ref_tau.T, levels=20, cmap='viridis', vmin=vmin, vmax=vmax)
-    axes[1].set_title('Wall Shear Stress - Reference', fontsize=16)
-    axes[1].set_xlabel('x', fontsize=14)
-    axes[1].set_ylabel('z', fontsize=14)
-    plt.colorbar(im1, ax=axes[1], label=r'$\tau_w$')
-    
-    # 誤差
-    error = pred_tau - ref_tau
-    im2 = axes[2].contourf(pred['x'], pred['z'], error.T, levels=20, cmap='seismic')
-    axes[2].set_title('Wall Shear Stress - Error', fontsize=16)
-    axes[2].set_xlabel('x', fontsize=14)
-    axes[2].set_ylabel('z', fontsize=14)
-    plt.colorbar(im2, ax=axes[2], label=r'$\Delta\tau_w$')
+    if is_2d:
+        # 2D: shape (nx, ny) -> tau shape (nx,)
+        pred_tau = (pred_u[:, 1] - pred_u[:, 0]) / dy
+        ref_tau = (ref['u'][:, 1] - ref['u'][:, 0]) / dy
+        
+        # 2D 繪製：線圖
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # 預測 vs 參考
+        axes[0].plot(pred['x'], pred_tau, 'b-', linewidth=2, label='Predicted')
+        axes[0].plot(ref['x'], ref_tau, 'r--', linewidth=2, label='Reference')
+        axes[0].set_title('Wall Shear Stress Comparison', fontsize=16)
+        axes[0].set_xlabel('x', fontsize=14)
+        axes[0].set_ylabel(r'$\tau_w$', fontsize=14)
+        axes[0].legend(fontsize=12)
+        axes[0].grid(True, alpha=0.3)
+        
+        # 誤差
+        error = pred_tau - ref_tau
+        axes[1].plot(pred['x'], error, 'k-', linewidth=2)
+        axes[1].axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        axes[1].set_title('Wall Shear Stress Error', fontsize=16)
+        axes[1].set_xlabel('x', fontsize=14)
+        axes[1].set_ylabel(r'$\Delta\tau_w$', fontsize=14)
+        axes[1].grid(True, alpha=0.3)
+        
+    else:
+        # 3D: shape (nx, ny, nz) -> tau shape (nx, nz)
+        pred_tau = (pred_u[:, 1, :] - pred_u[:, 0, :]) / dy
+        ref_tau = (ref['u'][:, 1, :] - ref['u'][:, 0, :]) / dy
+        
+        # 3D 繪製：等高線圖
+        fig, axes = plt.subplots(1, 3, figsize=(20, 5))
+        
+        # 統一色階
+        vmin = min(pred_tau.min(), ref_tau.min())
+        vmax = max(pred_tau.max(), ref_tau.max())
+        
+        # 預測
+        im0 = axes[0].contourf(pred['x'], pred['z'], pred_tau.T, levels=20, cmap='viridis', vmin=vmin, vmax=vmax)
+        axes[0].set_title('Wall Shear Stress - Predicted', fontsize=16)
+        axes[0].set_xlabel('x', fontsize=14)
+        axes[0].set_ylabel('z', fontsize=14)
+        plt.colorbar(im0, ax=axes[0], label=r'$\tau_w$')
+        
+        # 參考
+        im1 = axes[1].contourf(ref['x'], ref['z'], ref_tau.T, levels=20, cmap='viridis', vmin=vmin, vmax=vmax)
+        axes[1].set_title('Wall Shear Stress - Reference', fontsize=16)
+        axes[1].set_xlabel('x', fontsize=14)
+        axes[1].set_ylabel('z', fontsize=14)
+        plt.colorbar(im1, ax=axes[1], label=r'$\tau_w$')
+        
+        # 誤差
+        error = pred_tau - ref_tau
+        im2 = axes[2].contourf(pred['x'], pred['z'], error.T, levels=20, cmap='seismic')
+        axes[2].set_title('Wall Shear Stress - Error', fontsize=16)
+        axes[2].set_xlabel('x', fontsize=14)
+        axes[2].set_ylabel('z', fontsize=14)
+        plt.colorbar(im2, ax=axes[2], label=r'$\Delta\tau_w$')
     
     plt.tight_layout()
     plt.savefig(save_dir / 'wall_shear_stress_comparison.png', dpi=150, bbox_inches='tight')
@@ -786,18 +1115,46 @@ def main():
     logger.info(f"🖥️  Using device: {device}")
     
     # ========== 載入模型與數據 ==========
-    model = load_trained_model(Path(args.checkpoint), config, device)
+    model, physics = load_trained_model(Path(args.checkpoint), config, device)
     ref_data = load_jhtdb_reference(Path(args.reference))
     
+    # 檢測 2D 或 3D
+    is_3d = 'z' in ref_data and 'w' in ref_data
+    
     # ========== 預測 ==========
-    pred_data = predict_on_grid(
-        model, 
-        ref_data['x'], 
-        ref_data['y'], 
-        ref_data['z'], 
-        device, 
-        batch_size=args.batch_size
-    )
+    # 🆕 傳遞 physics 模組以使用 VS-PINN 縮放
+    if is_3d:
+        pred_data = predict_on_grid(
+            model, 
+            ref_data['x'], 
+            ref_data['y'], 
+            ref_data['z'], 
+            device, 
+            batch_size=args.batch_size,
+            physics=physics,  # 🆕 傳遞 physics
+            config=config     # ✅ TASK-008: 傳遞 config 用於反標準化
+        )
+    else:
+        # 2D slice: 使用固定 z 值（從配置或參考資料推斷）
+        if isinstance(ref_data.get('slice_position'), np.ndarray):
+            z_fixed_val = float(ref_data['slice_position'])
+        elif 'slice_position' in ref_data:
+            z_fixed_val = float(ref_data['slice_position'])
+        else:
+            z_fixed_val = 4.71  # 默認 z=π/2
+        
+        z_fixed = np.array([z_fixed_val])
+        logger.info(f"📐 2D slice detected, using fixed z={z_fixed_val:.3f}")
+        pred_data = predict_on_grid(
+            model, 
+            ref_data['x'], 
+            ref_data['y'], 
+            z_fixed,  # 單一 z 值
+            device, 
+            batch_size=args.batch_size,
+            physics=physics,
+            config=config
+        )
     
     # 保存預測場
     np.savez(
