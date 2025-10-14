@@ -206,7 +206,7 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
             logging.debug("✅ Fourier Features 已禁用 (type='disabled')")
         
         # 處理 type="standard" 或其他啟用類型
-        elif ff_type in ['standard', 'enhanced', 'adaptive']:
+        elif ff_type in ['standard', 'enhanced', 'adaptive', 'axis_selective']:
             model_cfg['use_fourier'] = True
             model_cfg['fourier_m'] = ff_cfg.get('fourier_m', 32)
             model_cfg['fourier_sigma'] = ff_cfg.get('fourier_sigma', 5.0)

@@ -178,7 +178,7 @@ training:
   weight_decay: 1.0e-5
   
   lr_scheduler:
-    type: "cosine_annealing_warmup"
+    type: "warmup_cosine"
     min_lr: 1.0e-5
     warmup_epochs: 10
     T_max: 100
