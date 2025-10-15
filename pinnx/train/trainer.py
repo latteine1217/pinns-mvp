@@ -17,6 +17,7 @@ from typing import Dict, Any, Optional, Tuple, List
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.amp.grad_scaler import GradScaler  # 明確導入 GradScaler
 
 from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
 from pinnx.losses.priors import PriorLossManager
@@ -125,6 +126,7 @@ class Trainer:
         
         # 初始化訓練組件
         self._setup_optimizer()
+        self._setup_amp()  # ⭐ P0.2: AMP 混合精度
         self._setup_schedulers()
         self._setup_early_stopping()
         self._setup_adaptive_sampling()
@@ -156,18 +158,24 @@ class Trainer:
         
         if optimizer_name == 'soap':
             try:
-                from torch_optimizer import SOAP  # type: ignore
+                from pinnx.optim.soap import SOAP  # Import from our implementation
             except ImportError as exc:
-                raise ImportError("需要安裝 torch_optimizer 以使用 SOAP 優化器") from exc
+                raise ImportError("SOAP 優化器未找到，請檢查 pinnx/optim/soap.py") from exc
             
-            soap_kwargs = optimizer_cfg.get('soap', self.train_cfg.get('soap', {}))
+            # 提取 SOAP 專用參數
+            precondition_frequency = optimizer_cfg.get('precondition_frequency', 2)
+            shampoo_beta = optimizer_cfg.get('shampoo_beta', -1)
+            betas = optimizer_cfg.get('betas', (0.9, 0.999))
+            
             self.optimizer = SOAP(
                 self.model.parameters(),
                 lr=lr,
+                betas=betas,
                 weight_decay=weight_decay,
-                **soap_kwargs
+                precondition_frequency=precondition_frequency,
+                shampoo_beta=shampoo_beta
             )
-            logging.info(f"✅ 使用 SOAP 優化器（lr={lr}, wd={weight_decay}）")
+            logging.info(f"✅ 使用 SOAP 優化器 (lr={lr}, betas={betas}, precond_freq={precondition_frequency})")
         
         elif optimizer_name == 'lbfgs':
             self.optimizer = torch.optim.LBFGS(
@@ -195,6 +203,69 @@ class Trainer:
                 weight_decay=weight_decay
             )
             logging.info(f"✅ 使用 Adam 優化器（lr={lr}, wd={weight_decay}）")
+    
+    def _setup_amp(self):
+        """
+        配置自動混合精度訓練（AMP）
+        
+        策略：
+        - Forward Pass: FP32（物理殘差計算數值穩定）
+        - Backward Pass: FP16（節省記憶體）
+        - 僅在 Adam + CUDA 時啟用（L-BFGS 不兼容）
+        """
+        amp_cfg = self.train_cfg.get('amp', {})
+        self.use_amp = amp_cfg.get('enabled', False)
+        
+        # AMP 支援檢查：Adam + (CUDA 或 MPS)
+        is_adam = isinstance(self.optimizer, torch.optim.Adam)
+        is_cuda = self.device.type == 'cuda'
+        is_mps = self.device.type == 'mps'
+        
+        if self.use_amp and not is_adam:
+            logging.warning(
+                "⚠️ AMP 僅支援 Adam 優化器，當前使用 "
+                f"{type(self.optimizer).__name__}，已禁用 AMP"
+            )
+            self.use_amp = False
+        
+        # MPS 限制：GradScaler 不支援（float64 問題）
+        if self.use_amp and is_mps:
+            logging.warning(
+                "⚠️ MPS 後端的 GradScaler 存在已知問題（不支援 float64）\n"
+                "   建議：(1) 使用 CUDA 設備，或 (2) 關閉 AMP\n"
+                "   已自動禁用 AMP"
+            )
+            self.use_amp = False
+        
+        if self.use_amp and not is_cuda:
+            logging.warning(
+                "⚠️ AMP 僅在 CUDA 環境完全支援，當前設備為 "
+                f"{self.device}，已禁用 AMP"
+            )
+            self.use_amp = False
+        
+        # 初始化 GradScaler（僅 CUDA）
+        if self.use_amp:
+            self.scaler = GradScaler(
+                'cuda',
+                init_scale=2.0**16,  # 初始縮放因子
+                growth_factor=2.0,   # 成長因子
+                backoff_factor=0.5,  # 回退因子
+                growth_interval=2000,  # 增長間隔
+                enabled=True
+            )
+            logging.info(
+                "✅ AMP 已啟用（Forward: FP32, Backward: FP16）\n"
+                f"   - 優化器: {type(self.optimizer).__name__}\n"
+                f"   - 設備: {self.device} (CUDA)\n"
+                f"   - GradScaler 初始 scale: {self.scaler.get_scale():.0f}"
+            )
+        else:
+            # 創建禁用的 scaler（統一接口）
+            device_type = 'cuda' if is_cuda else 'cpu'
+            self.scaler = GradScaler(device_type, enabled=False)
+            if amp_cfg.get('enabled', False):
+                logging.info("ℹ️ AMP 配置已禁用（不符合啟用條件）")
     
     def _setup_schedulers(self):
         """配置學習率與權重調度器"""
@@ -670,10 +741,17 @@ class Trainer:
         )
         
         # ==================== 5. 反向傳播與優化 ====================
-        total_loss.backward()
+        # ⭐ P0.2: AMP 混合精度策略
+        # - Forward Pass: 已在上面完成（FP32）
+        # - Backward Pass: 使用 GradScaler（FP16 梯度累積）
         
-        # 梯度裁剪（如果配置）
+        # 縮放損失並反向傳播
+        scaled_loss = self.scaler.scale(total_loss)
+        scaled_loss.backward()
+        
+        # 梯度裁剪（需先 unscale）
         if self.train_cfg.get('gradient_clip', 0.0) > 0:
+            self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 self.train_cfg['gradient_clip']
@@ -681,11 +759,19 @@ class Trainer:
         
         # L-BFGS 需要 closure 函數，其他優化器直接 step()
         if isinstance(self.optimizer, torch.optim.LBFGS):
+            # L-BFGS 不支援 AMP（已在 _setup_amp 中禁用）
             def closure():
                 return total_loss
             self.optimizer.step(closure)  # type: ignore
         else:
-            self.optimizer.step()
+            # Adam: 使用 scaler.step() 自動處理 unscale + update
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        
+        # 📉 Steps-based 調度器更新（每步調用）
+        if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'current_step'):
+            # Steps-based scheduler (如 StepsBasedWarmupScheduler)
+            self.lr_scheduler.step()
         
         # ==================== 6. 返回結果 ====================
         result = {
@@ -1039,6 +1125,11 @@ class Trainer:
         checkpoint_data['normalization'] = self.data_normalizer.get_metadata()
         logging.debug(f"💾 Normalization metadata saved: type={self.data_normalizer.norm_type}")
         
+        # ⭐ P0.2: 保存 GradScaler 狀態（AMP）
+        if self.use_amp and hasattr(self, 'scaler'):
+            checkpoint_data['scaler_state_dict'] = self.scaler.state_dict()
+            logging.debug(f"💾 GradScaler state saved: scale={self.scaler.get_scale():.0f}")
+        
         if metrics:
             checkpoint_data['metrics'] = metrics
         
@@ -1085,6 +1176,13 @@ class Trainer:
             logging.warning("⚠️ No normalization metadata in checkpoint (legacy checkpoint?)")
             logging.warning("   使用配置中的標準化設定")
             self.data_normalizer = DataNormalizer.from_config(self.config)
+        
+        # ⭐ P0.2: 恢復 GradScaler 狀態（AMP）
+        if 'scaler_state_dict' in checkpoint and self.use_amp and hasattr(self, 'scaler'):
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            logging.info(f"✅ GradScaler state restored: scale={self.scaler.get_scale():.0f}")
+        elif self.use_amp:
+            logging.warning("⚠️ AMP 已啟用但檢查點無 scaler_state_dict（legacy checkpoint?）")
         
         if self.lr_scheduler and 'lr_scheduler_state_dict' in checkpoint:
             self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])

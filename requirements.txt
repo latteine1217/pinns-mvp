@@ -1,0 +1,75 @@
+# Core deep learning stack
+torch>=2.2
+torchvision
+torchaudio
+torch-optimizer
+safetensors
+
+# Scientific computing
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+numba
+Cython
+mpmath
+
+# Data access & physics
+h5py>=3.8
+netCDF4>=1.6
+zarr
+xarray>=2023.1
+pyJHTDB>=0.0.10
+
+# Modeling utilities
+scikit-learn>=1.3
+statsmodels
+einops>=0.7
+opt-einsum
+findiff
+hydra-core>=1.3
+omegaconf>=2.3
+pydantic>=2.0
+typing_extensions
+mypy
+joblib
+pyyaml>=6.0
+toml
+
+# Visualization & reporting
+matplotlib>=3.7
+seaborn>=0.12
+plotly>=5.13
+tensorboard>=2.13
+wandb>=0.16
+rich
+tqdm
+click
+memory_profiler
+psutil
+gpustat
+
+# Development tooling
+jupyter
+ipykernel
+black
+flake8
+pytest
+pytest-cov
+pre-commit
+isort
+sphinx>=6.0
+sphinx-rtd-theme
+
+# Database & serialization
+sqlalchemy
+
+# Optional extras (enable as needed)
+ray[default]>=2.7
+jax[cpu]>=0.4.20
+jaxlib>=0.4.20
+cupy-cuda12x
+mayavi
+vtk
+pyFFTW
+meshio
+pygmsh

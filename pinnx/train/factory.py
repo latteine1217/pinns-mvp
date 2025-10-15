@@ -916,23 +916,32 @@ def create_optimizer(
                                         train_cfg.get('optimizer', 'adam')).lower()
     
     if optimizer_name == 'soap':
-        # 動態導入 SOAP（避免強制依賴）
+        # 使用專案內建的 SOAP 優化器（nikhilvyas/SOAP）
         try:
-            from torch_optimizer import SOAP  # type: ignore
+            from pinnx.optim import SOAP  # type: ignore
         except ImportError as exc:
             raise ImportError(
-                "Requested optimizer 'SOAP' but torch_optimizer is not installed. "
-                "Install with: pip install torch-optimizer"
+                "Requested optimizer 'SOAP' but pinnx.optim.SOAP not found. "
+                "Ensure soap.py is in pinnx/optim/ directory"
             ) from exc
         
-        soap_kwargs = optimizer_cfg.get('soap', train_cfg.get('soap', {}))
+        # PirateNet 論文參數
+        betas = optimizer_cfg.get('betas', (0.9, 0.999))
+        precondition_frequency = optimizer_cfg.get('precondition_frequency', 2)  # 論文預設: 2 steps
+        shampoo_beta = optimizer_cfg.get('shampoo_beta', -1)
+        
         optimizer = SOAP(
             model.parameters(),
             lr=lr,
+            betas=betas,
             weight_decay=weight_decay,
-            **soap_kwargs
+            precondition_frequency=precondition_frequency,
+            shampoo_beta=shampoo_beta
         )
-        logging.info("✅ Using SOAP optimizer")
+        logging.info(
+            f"✅ Using SOAP optimizer (lr={lr}, betas={betas}, "
+            f"precond_freq={precondition_frequency})"
+        )
     
     elif optimizer_name == 'adam':
         optimizer = torch.optim.Adam(
@@ -956,7 +965,31 @@ def create_optimizer(
     
     scheduler: Optional[object] = None
     
-    if scheduler_type == 'warmup_cosine':
+    if scheduler_type == 'warmup_exponential_steps':
+        # Steps-based Warmup + Exponential Decay（用於 PirateNet）
+        from pinnx.train.schedulers import StepsBasedWarmupScheduler
+        
+        warmup_steps = scheduler_cfg.get('warmup_steps', 2000)
+        total_steps = scheduler_cfg.get('total_steps', max_epochs * 100)  # 假設每 epoch 100 steps
+        decay_steps = scheduler_cfg.get('decay_steps', 2000)
+        gamma = scheduler_cfg.get('decay_gamma', scheduler_cfg.get('gamma', 0.9))
+        min_lr = scheduler_cfg.get('min_lr', 1e-6)
+        
+        scheduler = StepsBasedWarmupScheduler(
+            optimizer,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            base_lr=lr,
+            decay_steps=decay_steps,
+            gamma=gamma,
+            min_lr=min_lr
+        )
+        logging.info(
+            f"✅ Using StepsBasedWarmupScheduler "
+            f"(warmup={warmup_steps} steps, decay_steps={decay_steps}, γ={gamma})"
+        )
+    
+    elif scheduler_type == 'warmup_cosine':
         # 動態導入 WarmupCosineScheduler（避免循環依賴）
         try:
             from pinnx.train.lr_scheduler import WarmupCosineScheduler  # type: ignore

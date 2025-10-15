@@ -1,0 +1,197 @@
+# ========================================
+# PirateNet 論文基線配置
+# ========================================
+# 參考: PirateNet 架構 (SOAP + Swish + Steps-based Warmup)
+# 
+# 核心特性:
+#   - SOAP 優化器 (Shampoo-like preconditioner)
+#   - Swish (SiLU) 激活函數
+#   - Steps-based Warmup (2000 steps) + Exponential Decay
+#   - Random Weight Factorization (μ=1.0, σ=0.1)
+#   - Random Fourier Features (σ=2.0)
+#
+# 推薦使用場景:
+#   - 複現 PirateNet 論文結果
+#   - 研究 SOAP 優化器效能
+#   - 對比 SOAP vs Adam 收斂速度
+# ========================================
+
+experiment:
+  name: "piratenet_baseline_test"
+  version: "v1.0"
+  seed: 42
+  device: "auto"  # auto/cpu/cuda/cuda:0
+  precision: "float32"
+  description: "PirateNet 論文架構基線配置 (SOAP + Swish + Steps-based Warmup)"
+
+# ========================================
+# 資料配置
+# ========================================
+data:
+  type: "jhtdb_channel"
+  dataset: "channel"
+  re_tau: 1000
+  
+  # 資料路徑
+  data_dir: "./data/jhtdb"
+  lowfi_dir: "./data/lowfi"
+  
+  # 空間範圍（JHTDB channel flow）
+  domain:
+    x_min: 0.0
+    x_max: 25.132741228718345  # 8π
+    y_min: 0.0
+    y_max: 2.0
+    z_min: 0.0
+    z_max: 9.42477796076938   # 3π
+  
+  # 感測點配置
+  num_sensors: 50  # QR-pivot 選點數量（論文: K=30-80）
+  sensor_type: "qr_pivot"
+  sensor_noise: 0.01  # 1% 噪聲
+  
+  # 配點數量
+  num_collocation: 8192  # PirateNet 論文: 8,192 點/batch
+  num_boundary: 512
+  num_initial: 256
+
+# ========================================
+# 模型配置（PirateNet 架構）
+# ========================================
+model:
+  type: "enhanced_fourier_mlp"
+  
+  # 網路結構
+  in_dim: 3   # (x, y, z)
+  out_dim: 4  # (u, v, w, p)
+  depth: 6    # PirateNet: 2 blocks × 3 layers = 6 layers
+  width: 768  # PirateNet: 768 neurons/layer
+  
+  # 激活函數
+  activation: "swish"  # PirateNet: Swish (= SiLU)
+  
+  # Random Fourier Features
+  use_fourier: true
+  fourier_m: 64
+  fourier_sigma: 2.0  # PirateNet: N(0, 2)
+  fourier_multiscale: false
+  trainable_fourier: false
+  
+  # Random Weight Factorization
+  use_rwf: true
+  rwf_scale_mean: 1.0  # PirateNet: μ=1.0
+  rwf_scale_std: 0.1   # PirateNet: σ=0.1
+  
+  # 其他配置
+  use_residual: false  # PirateNet 論文未使用殘差
+  use_layer_norm: false
+  dropout: 0.0
+
+# ========================================
+# 訓練配置
+# ========================================
+training:
+  epochs: 1000
+  batch_size: 8192  # PirateNet 論文配置
+  
+  # SOAP 優化器
+  optimizer:
+    type: "soap"
+    lr: 1.0e-3
+    betas: [0.9, 0.999]  # PirateNet 論文參數
+    weight_decay: 0.0
+    precondition_frequency: 2  # PirateNet: 每 2 步更新特徵空間
+    shampoo_beta: -1  # 使用 betas[1] 作為預條件器的 beta
+  
+  # Steps-based Warmup + Exponential Decay
+  scheduler:
+    type: "warmup_exponential_steps"
+    warmup_steps: 2000       # PirateNet: 線性 warmup 2000 步
+    total_steps: 100000      # 假設 1000 epochs × 100 steps/epoch
+    decay_steps: 2000        # PirateNet: 每 2000 步衰減
+    decay_gamma: 0.9         # PirateNet: γ=0.9
+    min_lr: 1.0e-6
+  
+  # 驗證與日誌
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+
+# ========================================
+# 損失權重配置
+# ========================================
+losses:
+  # 基礎權重（初始值）
+  data_loss_weight: 100.0
+  pde_loss_weight: 1.0
+  wall_loss_weight: 10.0
+  initial_loss_weight: 50.0
+  
+  # 自適應權重調整（GradNorm）
+  adaptive_weights:
+    enabled: true
+    method: "gradnorm"
+    alpha: 1.5
+    update_frequency: 1000  # PirateNet: 每 1000 iterations 更新
+  
+  # 因果權重（時間先驗）
+  causal_weights:
+    enabled: true
+    epsilon: 1.0  # PirateNet: ε=1.0
+    tol: 0.1
+
+# ========================================
+# 物理配置
+# ========================================
+physics:
+  type: "vs_pinn_channel_flow"
+  nu: 5.0e-5
+  re_tau: 1000
+  u_tau: 0.04997
+  
+  # VS-PINN 縮放因子
+  scaling:
+    use_scaling: true
+    N_x: 0.33  # ~1/3
+    N_y: 1.00
+    N_z: 0.25  # ~1/4
+
+# ========================================
+# 輸出配置
+# ========================================
+output:
+  checkpoint_dir: "./checkpoints/piratenet_baseline_test"
+  results_dir: "./results/piratenet_baseline_test"
+  visualization_dir: "./results/piratenet_baseline_test/visualizations"
+  
+  save_predictions: true
+  save_frequency: 100
+
+# ========================================
+# 日誌配置
+# ========================================
+logging:
+  level: "info"
+  log_freq: 10
+  tensorboard: true
+  wandb: false
+  
+  # 監控指標
+  metrics:
+    - "total_loss"
+    - "data_loss"
+    - "pde_loss"
+    - "wall_loss"
+    - "learning_rate"
+    - "momentum_x_loss"
+    - "momentum_y_loss"
+    - "continuity_loss"
+
+# ========================================
+# 早停配置
+# ========================================
+early_stopping:
+  enabled: false
+  patience: 100
+  min_delta: 1.0e-6
+  monitor: "total_loss"

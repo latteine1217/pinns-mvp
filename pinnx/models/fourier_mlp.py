@@ -37,10 +37,12 @@ class RWFLinear(nn.Module):
                  in_features: int, 
                  out_features: int, 
                  bias: bool = True,
+                 scale_mean: float = 0.0,
                  scale_std: float = 0.1):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+        self.scale_mean = scale_mean
         self.scale_std = scale_std
         
         # V^(l): 標準權重矩陣
@@ -57,7 +59,7 @@ class RWFLinear(nn.Module):
     
     def reset_parameters(self) -> None:
         nn.init.xavier_uniform_(self.V)
-        nn.init.normal_(self.s, mean=0.0, std=self.scale_std)
+        nn.init.normal_(self.s, mean=self.scale_mean, std=self.scale_std)
         if self.bias is not None:
             nn.init.zeros_(self.bias)
     
@@ -210,13 +212,15 @@ class DenseLayer(nn.Module):
                  use_layer_norm: bool = False,
                  dropout: float = 0.0,
                  use_rwf: bool = False,
+                 rwf_scale_mean: float = 0.0,
                  rwf_scale_std: float = 0.1,
                  sine_omega_0: float = 30.0):
         super().__init__()
         
         # 選擇線性層類型
         if use_rwf:
-            self.linear = RWFLinear(in_features, out_features, bias=True, scale_std=rwf_scale_std)
+            self.linear = RWFLinear(in_features, out_features, bias=True, 
+                                   scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
         else:
             self.linear = nn.Linear(in_features, out_features)
         
@@ -315,6 +319,7 @@ class PINNNet(nn.Module):
                  use_input_projection: bool = False, # 是否使用輸入投影層
                  dropout: float = 0.0,      # Dropout 比率
                  use_rwf: bool = False,     # 是否使用 RWF
+                 rwf_scale_mean: float = 0.0, # RWF 尺度均值（PirateNet: 1.0）
                  rwf_scale_std: float = 0.1, # RWF 尺度標準差
                  sine_omega_0: float = 1.0, # Sine 激活函數頻率參數 (較保守以配合 Fourier 特徵)
                  fourier_normalize_input: bool = False, # 🔧 是否在 Fourier 前標準化輸入（修復 VS-PINN 縮放問題）
@@ -369,6 +374,7 @@ class PINNNet(nn.Module):
                 use_layer_norm=use_layer_norm,
                 dropout=dropout,
                 use_rwf=use_rwf,
+                rwf_scale_mean=rwf_scale_mean,
                 rwf_scale_std=rwf_scale_std,
                 sine_omega_0=sine_omega_0
             ))
@@ -572,6 +578,7 @@ def create_pinn_model(config: dict) -> nn.Module:
             use_input_projection=config.get('use_input_projection', False),
             dropout=config.get('dropout', 0.0),
             use_rwf=config.get('use_rwf', False),
+            rwf_scale_mean=config.get('rwf_scale_mean', 0.0),
             rwf_scale_std=config.get('rwf_scale_std', 0.1),
             sine_omega_0=config.get('sine_omega_0', 1.0),  # 預設值改為 1.0
             fourier_normalize_input=config.get('fourier_normalize_input', False),  # 🔧 新參數

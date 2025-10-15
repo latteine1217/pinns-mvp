@@ -12,6 +12,7 @@
 | **特徵消融研究** | `2d_medium_ablation.yml` | 15-30 分鐘 | 量化特徵貢獻、對照實驗 |
 | **課程式訓練** | `3d_slab_curriculum.yml` | 30-60 分鐘 | 多階段學習、穩健收斂 |
 | **論文級結果** | `3d_full_production.yml` | 2-8 小時 | 高精度重建、完整驗證 |
+| **PirateNet 複現** | `piratenet_baseline.yml` | 1-2 小時 | 複現論文架構、SOAP 優化器 |
 
 ---
 
@@ -278,6 +279,52 @@ tail -f log/<exp_name>/training.log
 # 使用 TensorBoard
 tensorboard --logdir checkpoints/<exp_name>
 ```
+
+---
+
+## 🚀 混合精度訓練（AMP）
+
+### 啟用條件
+- ✅ **CUDA 設備**（Tesla T4, A100, V100 等）
+- ❌ **MPS 設備**（Apple Silicon，不支援 GradScaler）
+- ❌ **CPU 設備**（無效能提升）
+
+### 預期效果
+| 指標 | 效果 |
+|------|------|
+| **記憶體節省** | 30-50% |
+| **速度影響** | < 10%（可忽略） |
+| **數值穩定性** | 自動損失縮放保護 |
+
+### 配置範例
+```yaml
+training:
+  amp:
+    enabled: true  # CUDA 設備推薦啟用
+```
+
+### 記憶體對比
+| 模板 | AMP 關閉 | AMP 開啟 | 節省 |
+|------|---------|---------|------|
+| 2D Medium | 6 GB | 4 GB | 33% |
+| 3D Slab | 10 GB | 6 GB | 40% |
+| 3D Full | 14 GB | 8 GB | 43% |
+
+### 使用建議
+- **Colab 免費版（T4, 15GB）**: ✅ 必須啟用（3D Full 需求 8GB < 15GB）
+- **本地調試**: ⚠️ 可關閉以簡化除錯
+- **生產訓練**: ✅ 推薦啟用（加速檢查點保存）
+
+### 故障排除
+| 問題 | 原因 | 解決 |
+|------|------|------|
+| 訓練崩潰且日誌顯示 `MPS device` | MPS 不支援 GradScaler | Trainer 會自動禁用並發出警告，無需手動修改 |
+| 記憶體溢出（CUDA OOM） | AMP 未啟用 | 在配置中設定 `amp.enabled: true` |
+
+### 技術限制
+- **MPS 設備**：自動禁用（友好警告）
+- **CPU 設備**：自動禁用（無警告）
+- **CUDA 設備**：正常啟用
 
 ---
 

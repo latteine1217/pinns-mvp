@@ -186,6 +186,185 @@ def test_warmup_cosine_scheduler_get_last_lr():
         "get_last_lr() 應與優化器的實際學習率一致"
 
 
+def test_warmup_cosine_scheduler_state_dict():
+    """測試 WarmupCosineScheduler 的 state_dict() 和 load_state_dict() 方法"""
+    from pinnx.train.schedulers import WarmupCosineScheduler
+    
+    optimizer = torch.optim.Adam([torch.nn.Parameter(torch.randn(2, 2))], lr=0.001)
+    scheduler = WarmupCosineScheduler(
+        optimizer,
+        warmup_epochs=5,
+        max_epochs=50,
+        base_lr=0.001,
+        min_lr=1e-6
+    )
+    
+    # 運行幾步
+    for _ in range(10):
+        scheduler.step()
+    
+    # 保存狀態
+    state = scheduler.state_dict()
+    assert isinstance(state, dict), "state_dict() 應返回字典"
+    assert 'current_epoch' in state, "state_dict 應包含 current_epoch"
+    assert 'warmup_epochs' in state, "state_dict 應包含 warmup_epochs"
+    assert 'max_epochs' in state, "state_dict 應包含 max_epochs"
+    assert 'base_lr' in state, "state_dict 應包含 base_lr"
+    assert 'min_lr' in state, "state_dict 應包含 min_lr"
+    assert 'cosine_scheduler_state' in state, "state_dict 應包含 cosine_scheduler_state"
+    assert state['current_epoch'] == 10, f"current_epoch 應為 10，但得到 {state['current_epoch']}"
+    
+    # 記錄當前學習率
+    lr_before_load = optimizer.param_groups[0]['lr']
+    
+    # 創建新的調度器並載入狀態
+    optimizer2 = torch.optim.Adam([torch.nn.Parameter(torch.randn(2, 2))], lr=0.001)
+    scheduler2 = WarmupCosineScheduler(
+        optimizer2,
+        warmup_epochs=5,
+        max_epochs=50,
+        base_lr=0.001,
+        min_lr=1e-6
+    )
+    scheduler2.load_state_dict(state)
+    
+    # 驗證狀態恢復
+    assert scheduler2.current_epoch == 10, "載入後 current_epoch 應為 10"
+    assert scheduler2.warmup_epochs == 5, "載入後 warmup_epochs 應為 5"
+    assert scheduler2.max_epochs == 50, "載入後 max_epochs 應為 50"
+    assert scheduler2.base_lr == 0.001, "載入後 base_lr 應為 0.001"
+    assert scheduler2.min_lr == 1e-6, "載入後 min_lr 應為 1e-6"
+    
+    # 繼續運行應產生相同的學習率序列
+    scheduler.step()
+    scheduler2.step()
+    lr1 = optimizer.param_groups[0]['lr']
+    lr2 = optimizer2.param_groups[0]['lr']
+    assert abs(lr1 - lr2) < 1e-8, f"載入狀態後學習率應一致：{lr1} vs {lr2}"
+
+
+def test_steps_based_warmup_scheduler_state_dict():
+    """測試 StepsBasedWarmupScheduler 的 state_dict() 和 load_state_dict() 方法"""
+    from pinnx.train.schedulers import StepsBasedWarmupScheduler
+    
+    optimizer = torch.optim.Adam([torch.nn.Parameter(torch.randn(2, 2))], lr=0.001)
+    scheduler = StepsBasedWarmupScheduler(
+        optimizer,
+        warmup_steps=2000,
+        total_steps=10000,
+        base_lr=0.001,
+        decay_steps=2000,
+        gamma=0.9
+    )
+    
+    # 運行幾步
+    for _ in range(1000):
+        scheduler.step()
+    
+    # 保存狀態
+    state = scheduler.state_dict()
+    assert isinstance(state, dict), "state_dict() 應返回字典"
+    assert 'current_step' in state, "state_dict 應包含 current_step"
+    assert 'warmup_steps' in state, "state_dict 應包含 warmup_steps"
+    assert 'total_steps' in state, "state_dict 應包含 total_steps"
+    assert 'base_lr' in state, "state_dict 應包含 base_lr"
+    assert 'decay_steps' in state, "state_dict 應包含 decay_steps"
+    assert 'gamma' in state, "state_dict 應包含 gamma"
+    assert 'min_lr' in state, "state_dict 應包含 min_lr"
+    assert state['current_step'] == 1000, f"current_step 應為 1000，但得到 {state['current_step']}"
+    
+    # 創建新的調度器並載入狀態
+    optimizer2 = torch.optim.Adam([torch.nn.Parameter(torch.randn(2, 2))], lr=0.001)
+    scheduler2 = StepsBasedWarmupScheduler(
+        optimizer2,
+        warmup_steps=2000,
+        total_steps=10000,
+        base_lr=0.001,
+        decay_steps=2000,
+        gamma=0.9
+    )
+    scheduler2.load_state_dict(state)
+    
+    # 驗證狀態恢復
+    assert scheduler2.current_step == 1000, "載入後 current_step 應為 1000"
+    
+    # 繼續運行應產生相同的學習率序列
+    scheduler.step()
+    scheduler2.step()
+    lr1 = optimizer.param_groups[0]['lr']
+    lr2 = optimizer2.param_groups[0]['lr']
+    assert abs(lr1 - lr2) < 1e-8, f"載入狀態後學習率應一致：{lr1} vs {lr2}"
+
+
+def test_scheduler_checkpoint_integration():
+    """測試調度器與檢查點保存/載入的完整整合"""
+    import tempfile
+    from pathlib import Path
+    
+    model = DummyModel()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    
+    from pinnx.train.schedulers import WarmupCosineScheduler
+    scheduler = WarmupCosineScheduler(
+        optimizer,
+        warmup_epochs=5,
+        max_epochs=50,
+        base_lr=0.001,
+        min_lr=1e-6
+    )
+    
+    # 訓練幾步
+    for _ in range(10):
+        scheduler.step()
+    
+    # 保存完整檢查點（模擬 trainer.save_checkpoint）
+    checkpoint = {
+        'epoch': 10,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'lr_scheduler_state_dict': scheduler.state_dict()
+    }
+    
+    with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+        checkpoint_path = f.name
+    
+    try:
+        torch.save(checkpoint, checkpoint_path)
+        
+        # 載入檢查點
+        loaded = torch.load(checkpoint_path)
+        
+        # 創建新的模型/優化器/調度器
+        model2 = DummyModel()
+        optimizer2 = torch.optim.Adam(model2.parameters(), lr=0.001)
+        scheduler2 = WarmupCosineScheduler(
+            optimizer2,
+            warmup_epochs=5,
+            max_epochs=50,
+            base_lr=0.001,
+            min_lr=1e-6
+        )
+        
+        # 恢復狀態
+        model2.load_state_dict(loaded['model_state_dict'])
+        optimizer2.load_state_dict(loaded['optimizer_state_dict'])
+        scheduler2.load_state_dict(loaded['lr_scheduler_state_dict'])
+        
+        # 驗證調度器狀態一致
+        assert scheduler2.current_epoch == 10, "調度器 epoch 應恢復為 10"
+        
+        # 繼續訓練應產生相同結果
+        scheduler.step()
+        scheduler2.step()
+        lr1 = optimizer.param_groups[0]['lr']
+        lr2 = optimizer2.param_groups[0]['lr']
+        assert abs(lr1 - lr2) < 1e-8, "恢復訓練後學習率應一致"
+        
+    finally:
+        # 清理臨時文件
+        Path(checkpoint_path).unlink(missing_ok=True)
+
+
 # ============================================================================
 # PyTorch 標準調度器基本功能測試
 # ============================================================================

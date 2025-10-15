@@ -202,6 +202,16 @@ training:
     wall_clustering: 0.2
   
   gradient_clip: 1.0
+  
+  # 混合精度訓練（AMP）
+  amp:
+    enabled: false  # ⚠️ 快速測試建議關閉（減少變數）
+    # 說明：
+    #   - 啟用後可節省 30-50% GPU 記憶體
+    #   - ⚠️ 僅支援 CUDA 設備（MPS 不支援 GradScaler）
+    #   - 需使用 Adam 優化器
+    #   - 快速測試建議關閉以簡化除錯
+    #   - 生產訓練建議開啟以提升效能
 
 # ⚠️ 關閉課程學習（簡化流程）
 curriculum:
