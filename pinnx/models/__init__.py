@@ -22,7 +22,6 @@ from .fourier_mlp import (
     FourierFeatures,
     DenseLayer,
     create_pinn_model,
-    fourier_pinn,
     multiscale_pinn,
     init_siren_weights
 )
@@ -51,7 +50,6 @@ __all__ = [
     
     # 建構函數
     'create_pinn_model',
-    'fourier_pinn',
     'multiscale_pinn',
     'create_scaled_pinn',
     'create_ensemble_pinn',

@@ -251,19 +251,6 @@ def _denormalize_training_data(
                     'p': params.get('p_std')
                 }
                 
-                # 向後兼容：如果配置使用舊格式 (*_scale)，發出警告
-                if any(k.endswith('_scale') for k in params.keys()):
-                    logger.warning("⚠️  檢測到舊格式標準化係數 (*_scale)，建議更新為新格式 (*_mean, *_std)")
-                    # 嘗試使用舊格式
-                    if means['u'] is None:
-                        stds = {
-                            'u': params.get('u_scale'),
-                            'v': params.get('v_scale'),
-                            'w': params.get('w_scale'),
-                            'p': params.get('p_scale')
-                        }
-                        means = {'u': 0.0, 'v': 0.0, 'w': 0.0, 'p': 0.0}  # 假設舊格式均值為 0
-                
                 if verbose:
                     logger.info(f"📋 使用配置的 Z-score 係數:")
                     logger.info(f"   means={means}")

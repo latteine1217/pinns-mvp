@@ -16,6 +16,13 @@ DataIO 模組
 """
 
 # 核心資料結構
+from .structures import (
+    StructuredGrid,
+    StructuredField,
+    PointSamples,
+    FlowDataBundle,
+    DomainSpec
+)
 from .lowfi_loader import (
     LowFiData,
     LowFiLoader,
@@ -92,6 +99,11 @@ __all__ = [
     'LowFiData',
     'LowFiLoader', 
     'DataReader',
+    'StructuredGrid',
+    'StructuredField',
+    'PointSamples',
+    'FlowDataBundle',
+    'DomainSpec',
     
     # 讀取器
     'NetCDFReader',

@@ -636,12 +636,8 @@ class SpatialInterpolator:
         try:
             from scipy.interpolate import RBFInterpolator
         except ImportError:
-            try:
-                from scipy.interpolate import Rbf
-                return self._rbf_interpolation_legacy(lowfi_data, target_points)
-            except ImportError:
-                logging.warning("RBF interpolation requires scipy. Falling back to IDW.")
-                return self._idw_interpolation(lowfi_data, target_points)
+            logging.warning("RBF interpolation requires SciPy >= 1.7. Falling back to IDW.")
+            return self._idw_interpolation(lowfi_data, target_points)
         
         # 構建源點網格
         coords = [lowfi_data.coordinates[k] for k in ['x', 'y'] 
@@ -708,59 +704,6 @@ class SpatialInterpolator:
                 
             except Exception as e:
                 logging.warning(f"RBF interpolation failed for field {field_name}: {e}")
-                # 回退到IDW插值
-                idw_result = self._idw_interpolation(lowfi_data, target_points)
-                interpolated_fields[field_name] = idw_result[field_name]
-        
-        return interpolated_fields
-    
-    def _rbf_interpolation_legacy(self, lowfi_data: LowFiData, 
-                                 target_points: np.ndarray) -> Dict[str, np.ndarray]:
-        """使用舊版scipy.interpolate.Rbf的RBF插值"""
-        from scipy.interpolate import Rbf
-        
-        # 構建源點網格
-        coords = [lowfi_data.coordinates[k] for k in ['x', 'y'] 
-                 if k in lowfi_data.coordinates]
-        
-        if len(coords) == 2:
-            xx, yy = np.meshgrid(coords[0], coords[1], indexing='ij')
-            source_x = xx.ravel()
-            source_y = yy.ravel()
-        else:
-            raise NotImplementedError("RBF interpolation only supports 2D currently")
-        
-        interpolated_fields = {}
-        
-        for field_name, field_data in lowfi_data.fields.items():
-            field_values = field_data.ravel()
-            
-            # 移除無效值
-            valid_mask = np.isfinite(field_values)
-            if not np.any(valid_mask):
-                interpolated_fields[field_name] = np.full(len(target_points), np.nan)
-                continue
-            
-            valid_x = source_x[valid_mask]
-            valid_y = source_y[valid_mask]
-            valid_values = field_values[valid_mask]
-            
-            try:
-                # 建立RBF插值器
-                rbf_func = self.rbf_function if self.rbf_function in [
-                    'multiquadric', 'inverse', 'gaussian', 'linear', 'cubic', 'quintic', 'thin_plate'
-                ] else 'thin_plate'
-                
-                rbf = Rbf(valid_x, valid_y, valid_values, function=rbf_func)
-                
-                # 進行插值
-                target_x = target_points[:, 0]
-                target_y = target_points[:, 1]
-                interpolated_values = rbf(target_x, target_y)
-                interpolated_fields[field_name] = interpolated_values
-                
-            except Exception as e:
-                logging.warning(f"Legacy RBF interpolation failed for field {field_name}: {e}")
                 # 回退到IDW插值
                 idw_result = self._idw_interpolation(lowfi_data, target_points)
                 interpolated_fields[field_name] = idw_result[field_name]

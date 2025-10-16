@@ -95,13 +95,12 @@ try:
     from .models import (
         FourierFeatures,
         PINNNet,
-        create_pinn_model,
-        fourier_pinn
+        create_pinn_model
     )
     
     # 損失函數 - 只匯入實際存在的類別
     from .losses import (
-        LossManager,
+        CompleteLossManager,
         GradNormWeighter,
         CausalWeighter,
         create_loss_manager
@@ -248,10 +247,10 @@ __all__ = [
     'ns_2d', 'compute_vorticity', 'incompressible_ns_2d',
     
     # 模型模組
-    'FourierFeatures', 'PINNNet', 'create_pinn_model', 'fourier_pinn',
+    'FourierFeatures', 'PINNNet', 'create_pinn_model',
     
     # 損失模組
-    'LossManager', 'GradNormWeighter', 'CausalWeighter', 'create_loss_manager',
+    'CompleteLossManager', 'GradNormWeighter', 'CausalWeighter', 'create_loss_manager',
     
     # 感測器模組
     'QRPivotSelector', 'create_sensor_selector', 'evaluate_sensor_placement',

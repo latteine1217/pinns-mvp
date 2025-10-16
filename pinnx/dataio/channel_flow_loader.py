@@ -32,6 +32,13 @@ import warnings
 # 導入現有模組
 from .lowfi_loader import LowFiData, LowFiLoader, SpatialInterpolator
 from .jhtdb_client import JHTDBManager, JHTDBConfig
+from .structures import (
+    StructuredGrid,
+    StructuredField,
+    PointSamples,
+    FlowDataBundle,
+    DomainSpec,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -39,55 +46,56 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ChannelFlowData:
-    """Channel Flow 資料容器"""
-    # 感測點資料
-    sensor_points: np.ndarray          # [K, 2] 感測點座標
-    sensor_data: Dict[str, np.ndarray] # 感測點處的場值
-    sensor_indices: np.ndarray         # [K] 在全場中的索引
-    selection_info: Dict[str, Any]     # 選擇策略資訊
-    
-    # 域配置
-    domain_config: Dict[str, Any]      # 域參數 (Re_tau, nu, 邊界等)
-    coordinate_info: Dict[str, Any]    # 座標系統資訊
-    
-    # 低保真先驗 (可選)
-    lowfi_prior: Optional[Dict[str, np.ndarray]] = None
-    lowfi_metadata: Optional[Dict[str, Any]] = None
-    
-    # 統計資訊 (VS-PINN 用)
+    """Channel Flow data bundle built on unified data structures."""
+
+    samples: PointSamples
+    domain: DomainSpec
+    selection_info: Dict[str, Any]
+    coordinate_info: Dict[str, Any]
     statistics: Optional[Dict[str, Dict[str, float]]] = None
-    
-    # 元數據
+    lowfi_prior: Optional[PointSamples] = None
+    lowfi_metadata: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
-    
-    def get_training_points(self) -> np.ndarray:
-        """獲取 PINNs 訓練點座標"""
-        return self.sensor_points
-    
-    def get_training_data(self) -> Dict[str, np.ndarray]:
-        """獲取 PINNs 訓練資料"""
-        return self.sensor_data
-    
+
+    @property
+    def sensor_points(self) -> np.ndarray:
+        return self.samples.coordinates
+
+    @property
+    def sensor_data(self) -> Dict[str, np.ndarray]:
+        return self.samples.values
+
+    @property
+    def sensor_axes(self) -> Tuple[str, ...]:
+        return self.samples.axes
+
+    @property
+    def domain_config(self) -> Dict[str, Any]:
+        return self.domain.to_config()
+
     def get_domain_bounds(self) -> Dict[str, Tuple[float, float]]:
-        """獲取域邊界"""
-        bounds = {}
-        if 'x_range' in self.domain_config:
-            bounds['x'] = tuple(self.domain_config['x_range'])
-        if 'y_range' in self.domain_config:
-            bounds['y'] = tuple(self.domain_config['y_range'])
-        return bounds
-    
+        return dict(self.domain.bounds)
+
     def get_physical_parameters(self) -> Dict[str, float]:
-        """獲取物理參數"""
-        params = {}
-        for key in ['Re_tau', 'nu', 'u_tau']:
-            if key in self.domain_config:
-                params[key] = self.domain_config[key]
-        return params
-    
+        return dict(self.domain.parameters)
+
     def has_lowfi_prior(self) -> bool:
-        """檢查是否有低保真先驗"""
-        return self.lowfi_prior is not None and len(self.lowfi_prior) > 0
+        return self.lowfi_prior is not None
+
+    def to_flow_bundle(self) -> FlowDataBundle:
+        meta = {
+            'selection_info': self.selection_info,
+            'coordinate_info': self.coordinate_info,
+        }
+        if self.metadata:
+            meta.update(self.metadata)
+        return FlowDataBundle(
+            samples=self.samples,
+            domain=self.domain,
+            statistics=self.statistics or {},
+            lowfi_prior=self.lowfi_prior,
+            metadata=meta
+        )
 
 
 class ChannelFlowLoader:
@@ -192,65 +200,74 @@ class ChannelFlowLoader:
         
         # 處理 sensor_data (可能是物件或分離的陣列)
         if 'sensor_data' in data:
-            # 新格式：sensor_data 是包含所有場的字典
-            sensor_data = data['sensor_data'].item() if data['sensor_data'].ndim == 0 else data['sensor_data']
+            sensor_data_raw = data['sensor_data'].item() if data['sensor_data'].ndim == 0 else data['sensor_data']
         else:
-            # 舊格式：分離的 sensor_u, sensor_v, sensor_p
-            sensor_data = {}
-            for field in ['u', 'v', 'p']:
+            sensor_data_raw = {}
+            for field in ['u', 'v', 'p', 'w']:
                 key = f'sensor_{field}'
                 if key in data:
-                    sensor_data[field] = data[key]
+                    sensor_data_raw[field] = data[key]
         
-        sensor_indices = data['sensor_indices']
+        sensor_values = {
+            field: np.asarray(values).reshape(-1)
+            for field, values in sensor_data_raw.items()
+        }
+        
+        sensor_indices = np.asarray(data['sensor_indices'])
         
         # 提取選擇資訊
         if 'selection_info' in data:
-            # 新格式：selection_info 是物件
             selection_info = data['selection_info'].item() if data['selection_info'].ndim == 0 else data['selection_info']
         else:
-            # 舊格式：分離的欄位
             selection_info = {
                 'strategy': str(data.get('strategy', strategy)),
                 'K_requested': int(data.get('K_requested', K)),
-                'K_actual': len(sensor_points),
+                'K_actual': int(len(sensor_points)),
                 'selection_timestamp': str(data.get('timestamp', 'unknown'))
             }
         
         # 添加噪聲 (如果指定)
         if noise_sigma is not None and noise_sigma > 0:
-            sensor_data = self._add_noise(sensor_data, noise_sigma)
+            sensor_values = self._add_noise(sensor_values, noise_sigma)
             selection_info['noise_sigma'] = noise_sigma
         
         # 添加丟失 (如果指定)
         if dropout_prob is not None and dropout_prob > 0:
-            sensor_data, valid_mask = self._add_dropout(sensor_data, dropout_prob)
+            sensor_values, valid_mask = self._add_dropout(sensor_values, dropout_prob)
             sensor_points = sensor_points[valid_mask]
             sensor_indices = sensor_indices[valid_mask]
             selection_info['dropout_prob'] = dropout_prob
-            selection_info['K_after_dropout'] = len(sensor_points)
+            selection_info['K_after_dropout'] = int(len(sensor_points))
         
         # 提取域配置
         domain_config = self._extract_domain_config()
         coordinate_info = self._extract_coordinate_info(data)
+        domain_spec = self._build_domain_spec(domain_config)
         
         # 計算統計資訊（用於 VS-PINN 與自動輸出範圍）
-        statistics = self._compute_statistics(sensor_data, sensor_points)
+        statistics = self._compute_statistics(sensor_values, sensor_points)
         
-        # 創建資料容器
+        samples = PointSamples(
+            coordinates=sensor_points,
+            values=sensor_values,
+            axes=('x', 'y', 'z') if sensor_points.shape[1] == 3 else ('x', 'y'),
+            metadata={'sensor_indices': sensor_indices}
+        )
+        
         channel_data = ChannelFlowData(
-            sensor_points=sensor_points,
-            sensor_data=sensor_data,
-            sensor_indices=sensor_indices,
+            samples=samples,
+            domain=domain_spec,
             selection_info=selection_info,
-            domain_config=domain_config,
             coordinate_info=coordinate_info,
-            statistics=statistics,  # 添加統計資訊
+            statistics=statistics,
             metadata={
                 'source': str(cache_path),
                 'config_file': str(self.config_path),
-                'loader_version': '1.0',
-                'loaded_timestamp': str(np.datetime64('now'))
+                'loader_version': '2.0',
+                'loaded_timestamp': str(np.datetime64('now')),
+                'strategy': strategy,
+                'requested_K': int(K),
+                'actual_K': int(len(sensor_points))
             }
         )
         
@@ -258,129 +275,6 @@ class ChannelFlowLoader:
         logger.info(f"Computed statistics for fields: {list(statistics.keys())}")
         return channel_data
     
-    def load_full_field_data(self, 
-                           noise_sigma: Optional[float] = None) -> ChannelFlowData:
-        """
-        載入完整流場數據（2D網格數據用於評估）
-        
-        Args:
-            noise_sigma: 噪聲水平 (可選)
-            
-        Returns:
-            包含完整流場的 Channel Flow 資料容器
-        """
-        # 尋找2D切片數據文件（與訓練數據一致）
-        cutout_file = self.cache_dir / "cutout_128x64.npz"
-        
-        if not cutout_file.exists():
-            raise FileNotFoundError(
-                f"No 2D cutout data found: {cutout_file}\n"
-                f"Please run scripts/fetch_channel_flow.py to generate 2D data"
-            )
-        
-        logger.info(f"Loading full field data from {cutout_file}")
-        
-        # 載入2D NPZ數據
-        data = np.load(cutout_file, allow_pickle=True)
-        
-        # 提取場數據 (128, 64)
-        u = data['u']  # (128, 64)
-        v = data['v']  # (128, 64)
-        p = data['p']  # (128, 64)
-        
-        # 提取或重建座標
-        if 'coordinates' in data:
-            # 從檔案中載入座標
-            coordinates_obj = data['coordinates'].item()
-            if isinstance(coordinates_obj, dict):
-                # 新格式：座標是字典，可能有不同的鍵名
-                if 'X' in coordinates_obj and 'Y' in coordinates_obj:
-                    X = coordinates_obj['X']
-                    Y = coordinates_obj['Y']
-                elif 'x' in coordinates_obj and 'y' in coordinates_obj:
-                    # 處理另一種格式：座標向量而非網格
-                    x_vec = coordinates_obj['x']
-                    y_vec = coordinates_obj['y']
-                    X, Y = np.meshgrid(x_vec, y_vec, indexing='ij')
-                else:
-                    raise KeyError(f"Unknown coordinate format in dict: {list(coordinates_obj.keys())}")
-            else:
-                # 舊格式：座標是直接的陣列
-                X, Y = coordinates_obj
-        else:
-            # 重建座標網格
-            domain_config = self._extract_domain_config()
-            x_range = domain_config.get('x_range', [0.0, 25.13])
-            y_range = domain_config.get('y_range', [-1.0, 1.0])
-            
-            x = np.linspace(x_range[0], x_range[1], 128)
-            y = np.linspace(y_range[0], y_range[1], 64)
-            X, Y = np.meshgrid(x, y, indexing='ij')
-        
-        # 將2D座標展平為 [N, 2] 格式（匹配2D模型）
-        coordinates = np.stack([X.flatten(), Y.flatten()], axis=1)
-        
-        # 將場數據展平為 [N] 格式
-        sensor_data = {
-            'u': u.flatten(),
-            'v': v.flatten(), 
-            'p': p.flatten()
-        }
-        
-        # 添加噪聲 (如果指定)
-        if noise_sigma is not None and noise_sigma > 0:
-            sensor_data = self._add_noise(sensor_data, noise_sigma)
-        
-        # 創建感測點索引 (所有點)
-        sensor_indices = np.arange(len(coordinates))
-        
-        # 選擇資訊
-        selection_info = {
-            'method': 'full_field_2d',
-            'n_sensors': len(coordinates),
-            'grid_shape': (128, 64),
-            'total_points': len(coordinates)
-        }
-        
-        if noise_sigma is not None:
-            selection_info['noise_sigma'] = noise_sigma
-        
-        # 提取域配置
-        domain_config = self._extract_domain_config()
-        
-        # 提取座標系統資訊
-        coordinate_info = {
-            'type': '2D_cartesian',
-            'x_range': domain_config.get('x_range', [0.0, 25.13]),
-            'y_range': domain_config.get('y_range', [-1.0, 1.0]),
-            'grid_dimensions': (128, 64),
-            'coordinate_order': ['x', 'y']
-        }
-        
-        # 計算統計資訊（用於 VS-PINN 與自動輸出範圍）
-        statistics = self._compute_statistics(sensor_data, coordinates)
-        
-        # 創建資料容器
-        channel_data = ChannelFlowData(
-            sensor_points=coordinates,
-            sensor_data=sensor_data,
-            sensor_indices=sensor_indices,
-            selection_info=selection_info,
-            domain_config=domain_config,
-            coordinate_info=coordinate_info,
-            statistics=statistics,  # 添加統計資訊
-            metadata={
-                'source': str(cutout_file),
-                'config_file': str(self.config_path),
-                'loader_version': '1.0',
-                'loaded_timestamp': str(np.datetime64('now')),
-                'data_type': 'full_field_2d'
-            }
-        )
-        
-        logger.info(f"Loaded {len(coordinates)} full field points from 128×64 2D grid")
-        logger.info(f"Computed statistics for fields: {list(statistics.keys())}")
-        return channel_data
     
     def add_lowfi_prior(self, 
                        channel_data: ChannelFlowData,
@@ -415,24 +309,28 @@ class ChannelFlowLoader:
             # 對於 mock prior，已經在感測點計算，不需要插值
             if interpolate_to_sensors and prior_type != 'mock':
                 prior_fields = self.interpolator.interpolate_to_points(
-                    lowfi_data, 
+                    lowfi_data,
                     channel_data.sensor_points
                 )
             else:
-                # 使用全場資料或 mock prior 已計算的感測點值
                 prior_fields = lowfi_data.fields
-            
-            # 更新資料容器
-            channel_data.lowfi_prior = prior_fields
+
+            prior_samples = PointSamples(
+                coordinates=channel_data.sensor_points,
+                values={k: np.asarray(v).reshape(-1) for k, v in prior_fields.items()},
+                axes=channel_data.sensor_axes,
+                metadata={'prior_type': prior_type}
+            )
+
+            channel_data.lowfi_prior = prior_samples
             channel_data.lowfi_metadata = lowfi_data.metadata
-            # 不覆蓋 statistics - 保留 load_sensor_data() 中計算的真實資料統計
             
             logger.info(f"Added {prior_type} low-fidelity prior with {len(prior_fields)} fields")
             
         except Exception as e:
             logger.warning(f"Failed to load low-fidelity prior: {e}")
-            # 創建空的先驗資料
-            channel_data.lowfi_prior = {}
+            # 保持 lowfi_prior 為 None（不設為空字典）
+            channel_data.lowfi_prior = None
             channel_data.lowfi_metadata = {'type': 'none', 'error': str(e)}
             # 不覆蓋 statistics - 保留原有的統計資訊
         
@@ -440,53 +338,30 @@ class ChannelFlowLoader:
     
     def prepare_for_training(self, 
                            channel_data: ChannelFlowData,
-                           target_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+                           target_fields: Optional[List[str]] = None) -> FlowDataBundle:
         """
         準備 PINNs 訓練資料格式
         
         Args:
             channel_data: Channel Flow 資料
-            target_fields: 目標場列表，預設 ['u', 'v', 'p']
+            target_fields: 目標場列表，預設 ['u', 'v', 'w', 'p']（3D）或 ['u', 'v', 'p']（2D）
             
         Returns:
-            PINNs 訓練所需的資料字典
+            FlowDataBundle 封裝的訓練資料
         """
         if target_fields is None:
-            target_fields = ['u', 'v', 'p']
-        
-        training_data = {
-            # 座標
-            'coordinates': channel_data.sensor_points,
-            
-            # 感測資料
-            'sensor_data': {
-                field: channel_data.sensor_data[field] 
-                for field in target_fields 
-                if field in channel_data.sensor_data
-            },
-            
-            # 域配置
-            'domain_bounds': channel_data.get_domain_bounds(),
-            'physical_params': channel_data.get_physical_parameters(),
-            
-            # 低保真先驗 (如果有)
-            'lowfi_prior': channel_data.lowfi_prior if channel_data.has_lowfi_prior() else {},
-            
-            # VS-PINN 統計
-            'statistics': channel_data.statistics or {},
-            
-            # 元數據
-            'metadata': {
-                **(channel_data.metadata or {}),
-                'selection_info': channel_data.selection_info,
-                'coordinate_info': channel_data.coordinate_info,
-                'has_lowfi_prior': channel_data.has_lowfi_prior(),
-                'target_fields': target_fields
-            }
-        }
-        
-        logger.info(f"Prepared training data with {len(training_data['sensor_data'])} fields")
-        return training_data
+            # 🆕 自動檢測可用欄位（優先使用完整 4 變量）
+            available_fields = list(channel_data.sensor_data.keys())
+            if 'w' in available_fields:
+                target_fields = ['u', 'v', 'w', 'p']  # 3D 或含 w 的 2D 切片
+            else:
+                target_fields = ['u', 'v', 'p']  # 舊版 2D（向後兼容）
+            logger.info(f"Auto-detected target_fields: {target_fields}")
+        bundle = channel_data.to_flow_bundle()
+        bundle.metadata['has_lowfi_prior'] = channel_data.has_lowfi_prior()
+        bundle.metadata['target_fields'] = list(target_fields)
+        logger.info(f"Prepared training bundle with fields: {target_fields}")
+        return bundle
     
     def _add_noise(self, 
                   sensor_data: Dict[str, np.ndarray], 
@@ -566,7 +441,38 @@ class ChannelFlowLoader:
             })
         
         return domain_config
-    
+
+    def _build_domain_spec(self, domain_config: Dict[str, Any]) -> DomainSpec:
+        bounds: Dict[str, Tuple[float, float]] = {}
+        for axis in ('x', 'y', 'z', 't'):
+            key = f"{axis}_range"
+            if key in domain_config:
+                rng = domain_config[key]
+                bounds[axis] = (float(rng[0]), float(rng[1]))
+
+        resolution: Dict[str, int] = {}
+        for axis_key, axis_name in (('nx', 'x'), ('ny', 'y'), ('nz', 'z')):
+            if axis_key in domain_config:
+                resolution[axis_name] = int(domain_config[axis_key])
+
+        parameters = {
+            key: float(domain_config[key])
+            for key in ('Re_tau', 'nu', 'u_tau', 'rho', 'pressure_gradient')
+            if key in domain_config
+        }
+
+        time_range = None
+        if 'time_range' in domain_config:
+            rng = domain_config['time_range']
+            time_range = (float(rng[0]), float(rng[1]))
+
+        return DomainSpec(
+            bounds=bounds,
+            parameters=parameters,
+            resolution=resolution,
+            time_range=time_range
+        )
+
     def _extract_coordinate_info(self, data) -> Dict[str, Any]:
         """從 NPZ 資料提取座標資訊"""
         coord_info = {}
@@ -777,8 +683,8 @@ class ChannelFlowLoader:
         if channel_data.has_lowfi_prior() and channel_data.lowfi_prior:
             checks['lowfi_prior_available'] = True
             for field in ['u', 'v', 'p']:
-                if field in channel_data.lowfi_prior:
-                    values = channel_data.lowfi_prior[field]
+                if field in channel_data.lowfi_prior.values:
+                    values = channel_data.lowfi_prior.values[field]
                     checks[f'lowfi_{field}_finite'] = np.all(np.isfinite(values))
         
         # 統計資訊檢查
@@ -786,6 +692,65 @@ class ChannelFlowLoader:
             checks['statistics_available'] = True
         
         return checks
+    
+    def load_full_field_data(self,
+                           noise_sigma: Optional[float] = None) -> StructuredField:
+        """
+        載入完整流場數據並返回統一的 StructuredField 物件。
+        """
+        cutout_file = self.cache_dir / "cutout_128x64_with_w.npz"
+        if not cutout_file.exists():
+            raise FileNotFoundError(
+                f"Expected high-fidelity cutout at {cutout_file}. "
+                "Regenerate 2D cutout data with scripts/fetch_channel_flow.py."
+            )
+
+        logger.info(f"Loading full field data from {cutout_file}")
+        data = np.load(cutout_file, allow_pickle=True)
+
+        fields = {
+            'u': np.asarray(data['u']),
+            'v': np.asarray(data['v']),
+            'w': np.asarray(data['w']),
+            'p': np.asarray(data['p'])
+        }
+
+        if noise_sigma is not None and noise_sigma > 0:
+            noisy = self._add_noise({k: v.reshape(-1) for k, v in fields.items()}, noise_sigma)
+            for key, arr in noisy.items():
+                fields[key] = arr.reshape(fields[key].shape)
+
+        if 'coordinates' not in data:
+            raise KeyError("cutout_128x64_with_w.npz must include structured 'coordinates'")
+        coordinates_obj = data['coordinates'].item()
+        if not isinstance(coordinates_obj, dict):
+            raise TypeError("coordinates metadata must be provided as a dictionary")
+        if 'x' in coordinates_obj and 'y' in coordinates_obj:
+            x_axis = np.asarray(coordinates_obj['x'])
+            y_axis = np.asarray(coordinates_obj['y'])
+        elif 'X' in coordinates_obj and 'Y' in coordinates_obj:
+            X = np.asarray(coordinates_obj['X'])
+            Y = np.asarray(coordinates_obj['Y'])
+            x_axis = X[:, 0]
+            y_axis = Y[0, :]
+        else:
+            raise KeyError(f"Unsupported coordinate keys: {list(coordinates_obj.keys())}")
+
+        grid = StructuredGrid.from_axes({'x': x_axis, 'y': y_axis})
+        stats_input = {k: v.reshape(-1) for k, v in fields.items()}
+        statistics = self._compute_statistics(stats_input, grid.to_points(order=('x', 'y')))
+
+        return StructuredField(
+            grid=grid,
+            fields=fields,
+            metadata={
+                'source': str(cutout_file),
+                'config_file': str(self.config_path),
+                'loader_version': '2.0',
+                'noise_sigma': noise_sigma,
+                'statistics': statistics
+            }
+        )
 
 
 # 便利函數
@@ -824,7 +789,7 @@ def prepare_training_data(strategy: str = 'qr_pivot',
                          config_path: Optional[Union[str, Path]] = None,
                          target_fields: Optional[List[str]] = None,
                          sensor_file: Optional[str] = None,
-                         prior_type: str = 'none') -> Dict[str, Any]:
+                         prior_type: str = 'none') -> FlowDataBundle:
     """
     便利函數：準備 PINNs 訓練資料
     
@@ -837,7 +802,7 @@ def prepare_training_data(strategy: str = 'qr_pivot',
         prior_type: 低保真先驗類型 ('rans', 'mock', 'none')，預設 'none'
         
     Returns:
-        PINNs 訓練資料字典
+        FlowDataBundle: 準備好的訓練資料容器
         
     Note:
         ⚠️ prior_type='none' 意味著僅使用感測點數據，不添加低保真先驗

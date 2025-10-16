@@ -26,6 +26,7 @@ import torch.autograd as autograd
 import torch.utils.checkpoint as checkpoint
 from typing import Tuple, Dict, Optional, Any
 import numpy as np
+import logging
 
 from .ns_3d_temporal import compute_derivatives_3d_temporal
 
@@ -92,8 +93,9 @@ def compute_gradient_3d_checkpointed(
         - 數值精度: 無變化 (與原函數完全一致)
         
     Note:
-        使用 `use_reentrant=False` 以符合 PyTorch 2.0+ 的最佳實踐，
-        避免舊版檢查點機制的警告與潛在問題。
+        使用 `use_reentrant=False` 以符合 PyTorch 2.0+ 的最佳實踐。
+        ⚠️ 注意：此函數在 PINNs 高階導數場景可能導致錯誤，
+        建議通過配置 `use_gradient_checkpointing: false` 禁用檢查點。
     """
     def gradient_fn(field_inner, coords_inner):
         """內部梯度計算函數（將被檢查點機制包裝）"""
@@ -176,17 +178,15 @@ class VSPINNChannelFlow(nn.Module):
         self.register_buffer('N_max', torch.tensor(float(N_max_value)))
         self.register_buffer('N_max_sq', torch.tensor(float(N_max_value ** 2)))
         
+        if loss_config and 'disable_extra_pde_division' in loss_config:
+            raise ValueError("loss_config.disable_extra_pde_division has been removed. Remove it from the configuration.")
+
         # === 損失歸一化參數 ===
         self.loss_normalizers: Dict[str, float] = {}  # 存儲每個損失項的參考值
         self.normalize_losses = True  # 損失歸一化開關（可通過配置控制）
         # 🔴 修正：從配置讀取 warmup_epochs，默認 5
         self.warmup_epochs = (loss_config or {}).get('warmup_epochs', 5)
         self.normalizer_momentum = 0.9  # 滑動平均動量（平滑更新）
-        
-        # ⭐ TASK-ENHANCED-5K-PHYSICS-FIX: PDE 損失雙重削弱修正
-        # 禁用對 PDE/continuity 的額外 /N_max_sq 削弱（默認啟用修正）
-        # 設為 False 可回退至舊行為（相容性）
-        self.disable_extra_pde_division = (loss_config or {}).get('disable_extra_pde_division', True)
         
         # === ✅ RANS 湍流模型初始化（診斷用途）===
         # ⚠️ 變更警告（2025-10-14）：
@@ -198,7 +198,7 @@ class VSPINNChannelFlow(nn.Module):
         
         # ⚡ TASK-PERF-001: 梯度檢查點配置
         self.use_gradient_checkpointing = use_gradient_checkpointing
-        
+        logging.info(f"⚡ 梯度檢查點配置: use_gradient_checkpointing={use_gradient_checkpointing}")
         # 物理初始化開關（控制 k, ε 估算方式）
         self.rans_use_physical_init = loss_config.get('rans_use_physical_init', True) if loss_config else True
         
@@ -235,7 +235,6 @@ class VSPINNChannelFlow(nn.Module):
         print(f"   物理参数: ν={self.nu:.2e}, dP/dx={self.dP_dx:.4f}, ρ={self.rho:.1f}")  # type: ignore[attr-defined]
         print(f"   Loss 补偿因子: 1/N_max² = 1/{self.N_max_sq:.2f}")  # type: ignore[attr-defined]
         print(f"   損失歸一化: {'啟用' if self.normalize_losses else '禁用'} (warmup={self.warmup_epochs} epochs)")
-        print(f"   ⭐ PDE 額外除法: {'禁用 (修正後)' if self.disable_extra_pde_division else '啟用 (舊行為)'}")
     
     def _verify_configuration(self):
         """验证配置的物理合理性"""
@@ -312,6 +311,11 @@ class VSPINNChannelFlow(nn.Module):
             此方法為內部使用，外部應直接調用 `compute_gradients()` 或
             `compute_laplacian()` 等高階介面。
         """
+        # 🔍 診斷日誌：僅在首次調用時輸出
+        if not hasattr(self, '_gradient_path_logged'):
+            logging.info(f"🔍 梯度計算路徑: use_gradient_checkpointing={self.use_gradient_checkpointing}")
+            self._gradient_path_logged = True
+        
         if self.use_gradient_checkpointing:
             return compute_gradient_3d_checkpointed(field, coords, component)
         else:
@@ -937,22 +941,7 @@ class VSPINNChannelFlow(nn.Module):
             if normalizer < 1e-12:
                 normalizer = 1.0
 
-            normalized_loss = loss / normalizer
-
-            # ⭐ TASK-ENHANCED-5K-PHYSICS-FIX: 條件性 PDE 削弱修正
-            # 舊行為：對 PDE/continuity 額外除以 N_max_sq（可能導致權重過低）
-            # 新行為：默認跳過額外除法，讓外部權重補償機制正常運作
-            if not self.disable_extra_pde_division:  # 舊行為（向後相容）
-                if key in {
-                    'momentum_x',
-                    'momentum_y',
-                    'momentum_z',
-                    'continuity',
-                    'periodicity'
-                }:
-                    normalized_loss = normalized_loss / self.N_max_sq  # type: ignore[operator]
-
-            normalized[key] = normalized_loss
+            normalized[key] = loss / normalizer
         
         return normalized
     

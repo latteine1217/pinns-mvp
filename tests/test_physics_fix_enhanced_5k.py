@@ -2,7 +2,7 @@
 單元測試：Enhanced 5K Curriculum 物理修正驗證
 
 測試 TASK-ENHANCED-5K-PHYSICS-FIX 的兩項核心修正：
-- 修正 A1: PDE 損失雙重削弱問題（disable_extra_pde_division）
+- 修正 A1: PDE 損失雙重削弱問題（現已固定採用修正後行為）
 - 修正 A2: 邊界帶狀採樣策略（boundary_band_width）
 
 創建時間: 2025-10-15
@@ -42,51 +42,26 @@ class TestPDELossScalingFix:
             }
         }
     
-    def test_disable_extra_pde_division_default(self, physics_config):
-        """測試默認行為：disable_extra_pde_division = True"""
-        # 創建物理模組（默認配置）
+    def test_no_longer_exposes_toggle(self, physics_config):
+        """確認模組不再暴露 disable_extra_pde_division"""
         physics = VSPINNChannelFlow(physics_config)
-        
-        # 驗證默認值
-        assert physics.disable_extra_pde_division is True, \
-            "默認應禁用額外 PDE 除法（修正後行為）"
-        
-        print("✅ 測試通過：默認禁用額外 PDE 除法")
+        assert not hasattr(physics, 'disable_extra_pde_division'), \
+            "legacy disable_extra_pde_division flag should be removed"
+        print("✅ 測試通過：禁用舊式 PDE 除法開關")
     
-    def test_explicit_enable_extra_pde_division(self, physics_config):
-        """測試顯式啟用舊行為：disable_extra_pde_division = False"""
-        # 修改配置啟用舊行為
+    def test_injecting_legacy_key_raises(self, physics_config):
+        """確認配置中攜帶 legacy key 時會明確拒絕"""
         physics_config['vs_pinn']['loss_config'] = {
             'disable_extra_pde_division': False
         }
-        
-        physics = VSPINNChannelFlow(physics_config)
-        
-        # 驗證配置生效
-        assert physics.disable_extra_pde_division is False, \
-            "應允許顯式啟用舊行為（向後相容）"
-        
-        print("✅ 測試通過：可顯式啟用舊行為")
+        with pytest.raises(ValueError):
+            VSPINNChannelFlow(physics_config)
+        print("✅ 測試通過：legacy disable_extra_pde_division 會被拒絕")
     
     def test_pde_loss_scaling_behavior(self, physics_config):
-        """測試 PDE 損失縮放行為差異"""
-        # 創建兩個配置：新行為 vs. 舊行為
-        config_new = physics_config.copy()
-        config_new['vs_pinn'] = {
-            'scaling_factors': {'N_x': 2.0, 'N_y': 12.0, 'N_z': 2.0},
-            'loss_config': {'disable_extra_pde_division': True}
-        }
+        """測試預期的 PDE 損失縮放行為"""
+        physics = VSPINNChannelFlow(physics_config)
         
-        config_old = physics_config.copy()
-        config_old['vs_pinn'] = {
-            'scaling_factors': {'N_x': 2.0, 'N_y': 12.0, 'N_z': 2.0},
-            'loss_config': {'disable_extra_pde_division': False}
-        }
-        
-        physics_new = VSPINNChannelFlow(config_new)
-        physics_old = VSPINNChannelFlow(config_old)
-        
-        # 創建模擬損失
         mock_losses = {
             'momentum_x': torch.tensor(1.0),
             'momentum_y': torch.tensor(1.0),
@@ -96,42 +71,19 @@ class TestPDELossScalingFix:
             'wall_constraint': torch.tensor(1.0)
         }
         
-        # 測試新行為（應保持原值）
-        normalized_new = physics_new.normalize_loss(mock_losses.copy())
-        
-        # 測試舊行為（PDE 項應額外削弱）
-        normalized_old = physics_old.normalize_loss(mock_losses.copy())
-        
-        # 計算 N_max_sq（應為 144 = 12^2）
-        N_max_sq = physics_new.N_max_sq
+        normalized = physics.normalize_loss(mock_losses.copy())
+        N_max_sq = physics.N_max_sq
         assert N_max_sq == 144.0, f"N_max_sq 應為 144，實際為 {N_max_sq}"
         
-        # 驗證新行為：PDE 損失不被額外削弱
         for key in ['momentum_x', 'momentum_y', 'momentum_z', 'continuity']:
+            expected = mock_losses[key] / N_max_sq
             assert torch.isclose(
-                normalized_new[key],
-                mock_losses[key] / N_max_sq,
+                normalized[key],
+                expected,
                 rtol=1e-5
-            ), f"新行為：{key} 應只除以 N_max_sq 一次"
+            ), f"{key} 應只除以 N_max_sq"
         
-        # 驗證舊行為：PDE 損失被額外削弱
-        for key in ['momentum_x', 'momentum_y', 'momentum_z', 'continuity']:
-            expected_old = mock_losses[key] / (N_max_sq ** 2)
-            assert torch.isclose(
-                normalized_old[key],
-                expected_old,
-                rtol=1e-5
-            ), f"舊行為：{key} 應除以 N_max_sq 兩次"
-        
-        # 驗證損失值差異（新行為應大 N_max_sq 倍）
-        ratio = normalized_new['momentum_x'] / normalized_old['momentum_x']
-        assert torch.isclose(ratio, torch.tensor(N_max_sq), rtol=1e-5), \
-            f"新舊行為 PDE 損失比應為 {N_max_sq}，實際為 {ratio.item()}"
-        
-        print(f"✅ 測試通過：PDE 損失縮放行為正確")
-        print(f"   新行為損失: {normalized_new['momentum_x'].item():.6e}")
-        print(f"   舊行為損失: {normalized_old['momentum_x'].item():.6e}")
-        print(f"   比值: {ratio.item():.2f} (預期 {N_max_sq})")
+        print("✅ 測試通過：PDE 損失縮放行為固定為修正後邏輯")
 
 
 class TestBoundaryBandSampling:
@@ -276,10 +228,8 @@ class TestIntegrationWithConfig:
         """測試修正後配置的載入"""
         from pinnx.train.config_loader import load_config
         
-        # 載入修正後的配置
-        config = load_config(
-            '/Users/latteine/Documents/coding/pinns-mvp/configs/test_enhanced_5k_curriculum_fixed.yml'
-        )
+        config_path = Path(__file__).resolve().parent.parent / "configs" / "test_enhanced_5k_curriculum_fixed.yml"
+        config = load_config(str(config_path))
         
         # 驗證關鍵修正參數
         assert 'physics' in config, "配置應包含 physics 段落"
@@ -287,10 +237,8 @@ class TestIntegrationWithConfig:
         
         # 驗證修正 A1 配置
         loss_config = config['physics']['vs_pinn'].get('loss_config', {})
-        assert 'disable_extra_pde_division' in loss_config, \
-            "配置應包含 disable_extra_pde_division 參數"
-        assert loss_config['disable_extra_pde_division'] is True, \
-            "disable_extra_pde_division 應設為 True"
+        assert 'disable_extra_pde_division' not in loss_config, \
+            "配置不應再包含 disable_extra_pde_division 參數"
         
         # 驗證修正 A2 配置（可選）
         boundary_config = config['physics']['vs_pinn'].get('boundary_config', {})
@@ -298,17 +246,15 @@ class TestIntegrationWithConfig:
             assert boundary_config['boundary_band_width'] == 5e-3, \
                 "boundary_band_width 應為 5e-3"
         
-        print("✅ 測試通過：配置載入正確")
-        print(f"   disable_extra_pde_division: {loss_config['disable_extra_pde_division']}")
+        print("✅ 測試通過：配置載入正確且無 legacy 旗標")
         if 'boundary_band_width' in boundary_config:
             print(f"   boundary_band_width: {boundary_config['boundary_band_width']}")
 
 
 class TestBackwardCompatibility:
-    """測試向後相容性"""
+    """確認舊配置在新行為下仍能正常運行"""
     
     def test_old_config_still_works(self):
-        """測試舊配置仍可正常運行（向後相容）"""
         config = {
             'nu': 5.0e-5,
             'rho': 1.0,
@@ -327,19 +273,24 @@ class TestBackwardCompatibility:
                     'N_y': 12.0,
                     'N_z': 2.0
                 }
-                # 注意：沒有 loss_config，應使用默認值
             }
         }
         
-        # 創建物理模組（應自動使用新默認值）
         physics = VSPINNChannelFlow(config)
+        assert not hasattr(physics, 'disable_extra_pde_division')
         
-        # 驗證默認行為（新修正）
-        assert physics.disable_extra_pde_division is True, \
-            "舊配置應自動採用新默認行為"
+        mock_losses = {
+            'momentum_x': torch.tensor(1.0),
+            'momentum_y': torch.tensor(1.0),
+            'momentum_z': torch.tensor(1.0),
+            'continuity': torch.tensor(1.0)
+        }
+        normalized = physics.normalize_loss(mock_losses.copy())
+        for key in mock_losses:
+            expected = mock_losses[key] / physics.N_max_sq
+            assert torch.isclose(normalized[key], expected, rtol=1e-5)
         
-        print("✅ 測試通過：向後相容性良好")
-        print("   舊配置自動採用新默認值（disable_extra_pde_division=True）")
+        print("✅ 測試通過：舊配置在新行為下正常運行")
 
 
 if __name__ == "__main__":
@@ -353,8 +304,8 @@ if __name__ == "__main__":
     test_a1 = TestPDELossScalingFix()
     physics_config = test_a1.physics_config()
     
-    test_a1.test_disable_extra_pde_division_default(physics_config)
-    test_a1.test_explicit_enable_extra_pde_division(physics_config)
+    test_a1.test_no_longer_exposes_toggle(physics_config)
+    test_a1.test_injecting_legacy_key_raises(physics_config)
     test_a1.test_pde_loss_scaling_behavior(physics_config)
     
     # 測試 A2: 邊界帶狀採樣

@@ -535,36 +535,6 @@ class PriorLossManager(nn.Module):
         return all_losses
 
 
-class CompletePriorLossManager(PriorLossManager):
-    """
-    完整先驗損失管理器：統一管理多種先驗約束
-    
-    與 PriorLossManager 相同，提供別名以保持向後相容性
-    """
-    
-    def __init__(self, 
-                 loss_config: Dict,
-                 global_weight: float = 1.0):
-        """
-        Args:
-            loss_config: 損失配置字典
-            global_weight: 全域先驗權重
-        """
-        # 解析配置中的權重
-        consistency_weight = loss_config.get('consistency_weight', 1.0) * global_weight
-        statistical_weight = loss_config.get('statistical_weight', 0.5) * global_weight
-        conservation_weight = loss_config.get('conservation_weight', 0.3) * global_weight
-        symmetry_weight = loss_config.get('symmetry_weight', 0.2) * global_weight
-        
-        super().__init__(
-            consistency_weight=consistency_weight,
-            statistical_weight=statistical_weight,
-            conservation_weight=conservation_weight,
-            symmetry_weight=symmetry_weight,
-            loss_config=loss_config.get('components', {})
-        )
-
-
 # 便捷建構函數
 def create_prior_loss(config: Dict) -> PriorLossManager:
     """根據配置建立先驗損失管理器"""

@@ -49,7 +49,8 @@ class GradNormWeighter:
                  target_ratios: Optional[List[float]] = None,
                  device: Optional[str] = None,
                  min_weight: float = 0.1,
-                 max_weight: float = 10.0):
+                 max_weight: float = 10.0,
+                 max_ratio: float = 50.0):
         """
         Args:
             model: PINN 模型
@@ -69,6 +70,7 @@ class GradNormWeighter:
         self.target_ratios = target_ratios  # 存儲目標比例（用於相容性）
         self.min_weight = float(min_weight)
         self.max_weight = float(max_weight)
+        self.max_ratio = float(max(1.0, max_ratio))
         self.eps = _EPS
         
         # 自動檢測設備
@@ -89,6 +91,7 @@ class GradNormWeighter:
         self.initial_weight_values = {
             name: float(initial_weights.get(name, 1.0)) for name in loss_names
         }
+        self.initial_weight_sum = float(sum(self.initial_weight_values.values()))
         self.weights = {}
         for name in loss_names:
             base_weight = torch.tensor(
@@ -276,6 +279,8 @@ class GradNormWeighter:
             if len(self.gradient_history[name]) > 100:  # 保持歷史長度
                 self.gradient_history[name].pop(0)
         
+        self._normalize_weights()
+        
         return self.get_weights()
     
     def get_weights(self) -> Dict[str, float]:
@@ -294,9 +299,75 @@ class GradNormWeighter:
                 min=self.min_weight,
                 max=self.max_weight
             )
+        self._normalize_weights()
         self.step_count = 0
         self.initial_losses = None
         self.gradient_history.clear()
+
+    def _normalize_weights(self) -> None:
+        """Normalize weights to keep total constant and ratios bounded."""
+        if not self.loss_names:
+            return
+        
+        target_sum = torch.tensor(
+            max(self.initial_weight_sum, self.eps),
+            device=self.device,
+            dtype=torch.float32
+        )
+        
+        for _ in range(3):
+            weights_tensor = torch.stack([self.weights[name] for name in self.loss_names])
+            total = weights_tensor.sum()
+            if not torch.isfinite(total) or total.abs() <= self.eps:
+                break
+            scale = target_sum / total
+            updated = []
+            for name in self.loss_names:
+                scaled = self.weights[name] * scale
+                updated_weight = torch.clamp(scaled, self.min_weight, self.max_weight)
+                self.weights[name] = updated_weight
+                updated.append(updated_weight)
+            new_total = torch.stack(updated).sum()
+            if torch.abs(new_total - target_sum) / target_sum < 1e-6:
+                break
+        
+        # Enforce ratio constraint
+        weights_tensor = torch.stack([self.weights[name] for name in self.loss_names])
+        max_w = torch.max(weights_tensor)
+        min_w = torch.clamp(torch.min(weights_tensor), min=self.min_weight)
+        ratio = max_w / (min_w + self.eps)
+        if ratio > self.max_ratio:
+            geometric_mean = torch.exp(torch.log(weights_tensor + self.eps).mean())
+            span = math.sqrt(self.max_ratio)
+            lower = torch.tensor(
+                max(self.min_weight, geometric_mean / span),
+                device=self.device,
+                dtype=torch.float32
+            )
+            upper = torch.tensor(
+                min(self.max_weight, geometric_mean * span),
+                device=self.device,
+                dtype=torch.float32
+            )
+            for name in self.loss_names:
+                self.weights[name] = torch.clamp(self.weights[name], lower, upper)
+            
+            # Re-normalize after clamping (iterate to respect bounds)
+            for _ in range(3):
+                weights_tensor = torch.stack([self.weights[name] for name in self.loss_names])
+                total = weights_tensor.sum()
+                if not torch.isfinite(total) or total.abs() <= self.eps:
+                    break
+                scale = target_sum / total
+                updated = []
+                for name in self.loss_names:
+                    scaled = self.weights[name] * scale
+                    updated_weight = torch.clamp(scaled, self.min_weight, self.max_weight)
+                    self.weights[name] = updated_weight
+                    updated.append(updated_weight)
+                new_total = torch.stack(updated).sum()
+                if torch.abs(new_total - target_sum) / target_sum < 1e-6:
+                    break
 
 
 class CausalWeighter:
@@ -395,20 +466,6 @@ class CausalWeighter:
         
         return adjusted_weights
     
-    def compute_temporal_weights(self, 
-                               time_losses: List[torch.Tensor],
-                               time_points: Optional[List[float]] = None) -> List[float]:
-        """
-        向後相容性別名方法
-        
-        警告: 此方法已棄用，請使用 compute_causal_weights
-        """
-        import warnings
-        warnings.warn("compute_temporal_weights is deprecated, use compute_causal_weights", 
-                      DeprecationWarning, stacklevel=2)
-        return self.compute_causal_weights(time_losses, time_points)
-
-
 class NTKWeighter:
     """
     神經正切核 (NTK) 權重器
@@ -847,19 +904,6 @@ class MultiWeightManager:
             if 'update_freq' in gradnorm_cfg and 'update_frequency' not in gradnorm_kwargs:
                 gradnorm_kwargs['update_frequency'] = gradnorm_cfg['update_freq']
         
-        legacy_map = {
-            'gradnorm_alpha': 'alpha',
-            'gradnorm_update_freq': 'update_frequency',
-            'gradnorm_min_weight': 'min_weight',
-            'gradnorm_max_weight': 'max_weight',
-            'gradnorm_target_ratios': 'target_ratios',
-            'gradnorm_target_gradient_ratio': 'target_gradient_ratio',
-            'gradnorm_device': 'device'
-        }
-        for legacy_key, target_key in legacy_map.items():
-            if legacy_key in self.config and target_key not in gradnorm_kwargs:
-                gradnorm_kwargs[target_key] = self.config[legacy_key]
-        
         return gradnorm_kwargs
     
     def _update_objective_mode(self, losses: Optional[Dict[str, torch.Tensor]]) -> Dict[str, float]:
@@ -971,14 +1015,6 @@ class MultiWeightManager:
         return weights
 
 
-# 為測試文件提供的相容性類別名
-GradNorm = GradNormWeighter  # 別名
-NTKWeighting = NTKWeighter   # 別名
-AdaptiveWeighting = AdaptiveWeightScheduler  # 別名
-CausalWeighting = CausalWeighter  # 別名
-MultiObjectiveWeighting = MultiWeightManager  # 別名
-
-
 # 便捷函數
 def create_weight_manager(model: nn.Module,
                          loss_names: List[str],
@@ -997,8 +1033,10 @@ def create_weight_manager(model: nn.Module,
     if config is None:
         config = {
             'strategies': ['gradnorm', 'adaptive'],
-            'gradnorm_alpha': 0.12,
-            'gradnorm_update_freq': 1000,
+            'gradnorm': {
+                'alpha': 0.12,
+                'update_frequency': 1000
+            },
             'adaptive_phases': None  # 使用預設階段
         }
     
@@ -1062,11 +1100,3 @@ if __name__ == "__main__":
     print(f"最終權重: {final_weights}")
     
     print("✅ 動態權重模組測試完成！")
-
-
-# 為測試相容性提供別名
-GradNorm = GradNormWeighter  # 測試期待的類別名稱
-NTKWeighting = NTKWeighter  # NTK 權重策略別名  
-AdaptiveWeighting = AdaptiveWeightScheduler  # 自適應權重別名
-CausalWeighting = CausalWeighter  # 因果權重別名
-MultiObjectiveWeighting = MultiWeightManager  # 多目標權重別名

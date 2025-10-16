@@ -8,15 +8,11 @@ import torch
 import pytest
 import sys
 import os
+from typing import Dict
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from pinnx.models.fourier_mlp import FourierFeatures, PINNNet, MultiScalePINNNet
 from pinnx.models.wrappers import ScaledPINNWrapper, EnsemblePINNWrapper, PhysicsConstrainedWrapper, MultiHeadWrapper
-
-# 為了向後相容，創建別名
-EnsembleWrapper = EnsemblePINNWrapper
-# ResidualWrapper 已經在 wrappers.py 中實作，直接導入
-from pinnx.models.wrappers import ResidualWrapper
 
 
 class TestFourierFeatures:
@@ -147,6 +143,73 @@ class TestPINNNet:
             assert param_count > 0
             print(f"配置 {config}: 參數數量 = {param_count}")
 
+    def test_fourier_inverse_normalizer_standard(self):
+        """標準化座標應在 Fourier 前還原為物理座標"""
+        net = PINNNet(
+            in_dim=2,
+            out_dim=2,
+            width=16,
+            depth=1,
+            use_fourier=True,
+            use_input_projection=False
+        ).to(self.device)
+        net.eval()
+        torch.manual_seed(0)
+        x_phys = torch.randn(32, 2, device=self.device) * 5.0 + 2.0
+        mean = x_phys.mean(dim=0, keepdim=True)
+        std = x_phys.std(dim=0, keepdim=True).clamp(min=1e-4)
+        x_norm = (x_phys - mean) / std
+        metadata = {
+            'norm_type': 'standard',
+            'mean': mean.detach().cpu(),
+            'std': std.detach().cpu(),
+            'feature_range': torch.tensor([-1.0, 1.0])
+        }
+        net.configure_fourier_input(metadata)
+        captured: Dict[str, torch.Tensor] = {}
+        handle = net.fourier.register_forward_hook(lambda m, inp, out: captured.setdefault('input', inp[0].detach().clone()))
+        try:
+            net(x_norm)
+        finally:
+            handle.remove()
+        assert 'input' in captured
+        assert torch.allclose(captured['input'], x_phys, atol=1e-5)
+
+    def test_fourier_inverse_normalizer_minmax(self):
+        """MinMax 正規化應正確逆變換"""
+        net = PINNNet(
+            in_dim=2,
+            out_dim=2,
+            width=16,
+            depth=1,
+            use_fourier=True,
+            use_input_projection=False
+        ).to(self.device)
+        net.eval()
+        torch.manual_seed(1)
+        x_phys = torch.rand(32, 2, device=self.device) * 4.0 - 1.0
+        data_min = x_phys.min(dim=0, keepdim=True).values
+        data_max = x_phys.max(dim=0, keepdim=True).values
+        data_range = (data_max - data_min).clamp(min=1e-4)
+        lo, hi = -1.0, 1.0
+        x_norm = (x_phys - data_min) / data_range
+        x_norm = x_norm * (hi - lo) + lo
+        metadata = {
+            'norm_type': 'minmax',
+            'data_min': data_min.detach().cpu(),
+            'data_range': data_range.detach().cpu(),
+            'feature_range': torch.tensor([lo, hi])
+        }
+        net.configure_fourier_input(metadata)
+        captured: Dict[str, torch.Tensor] = {}
+        handle = net.fourier.register_forward_hook(lambda m, inp, out: captured.setdefault('input', inp[0].detach().clone()))
+        try:
+            net(x_norm)
+        finally:
+            handle.remove()
+        assert 'input' in captured
+        assert torch.allclose(captured['input'], x_phys, atol=1e-5)
+
 
 class TestMultiHeadWrapper:
     """測試多頭包裝器"""
@@ -203,7 +266,7 @@ class TestMultiHeadWrapper:
         assert not torch.isnan(divergence).any()
 
 
-class TestEnsembleWrapper:
+class TestEnsemblePINNWrapper:
     """測試集成包裝器"""
     
     def setup_method(self):
@@ -219,7 +282,7 @@ class TestEnsembleWrapper:
             for _ in range(3)
         ]
         
-        ensemble = EnsembleWrapper(models).to(self.device)
+        ensemble = EnsemblePINNWrapper(models).to(self.device)
         
         x = torch.randn(8, 2, device=self.device)
         
@@ -251,7 +314,7 @@ class TestEnsembleWrapper:
             model = PINNNet(in_dim=2, out_dim=1, width=16, depth=2).to(self.device)
             models.append(model)
         
-        ensemble = EnsembleWrapper(models).to(self.device)
+        ensemble = EnsemblePINNWrapper(models).to(self.device)
         
         x = torch.randn(10, 2, device=self.device)
         stats = ensemble(x, mode='stats')
@@ -263,8 +326,8 @@ class TestEnsembleWrapper:
         assert stats['std'].mean() > 0
 
 
-class TestResidualWrapper:
-    """測試殘差包裝器"""
+class TestScaledPINNWrapper:
+    """測試 ScaledPINNWrapper"""
     
     def setup_method(self):
         """設置測試環境"""
@@ -275,9 +338,7 @@ class TestResidualWrapper:
         """測試殘差包裝器基本功能"""
         base_net = PINNNet(in_dim=2, out_dim=3, width=32, depth=2).to(self.device)
         
-        # ResidualWrapper 實際上是 ScaledPINNWrapper 的別名
-        # 使用正確的 API
-        wrapper = ResidualWrapper(
+        wrapper = ScaledPINNWrapper(
             base_model=base_net,
             variable_names=['u', 'v', 'p']  # 正確的參數
         ).to(self.device)
@@ -289,13 +350,11 @@ class TestResidualWrapper:
         assert not torch.isnan(output).any()
     
     def test_residual_vs_base(self):
-        """測試 ResidualWrapper (ScaledPINNWrapper) 的行為"""
+        """測試 ScaledPINNWrapper 的行為"""
         torch.manual_seed(42)
         base_net = PINNNet(in_dim=2, out_dim=2, width=32, depth=3).to(self.device)
         
-        # ResidualWrapper 實際上是 ScaledPINNWrapper 的別名
-        # 測試它能正確包裝基礎網路並提供相同的輸出（無尺度器時）
-        residual_wrapper = ResidualWrapper(
+        residual_wrapper = ScaledPINNWrapper(
             base_model=base_net,
             variable_names=['u', 'v']
         ).to(self.device)
@@ -322,8 +381,8 @@ def test_models_integration():
         for _ in range(3)
     ]
     
-    # 建立集成 (EnsembleWrapper 期待返回張量的模型，不是字典)
-    ensemble = EnsembleWrapper(base_models).to(device)
+    # 建立集成 (EnsemblePINNWrapper 期待返回張量的模型，不是字典)
+    ensemble = EnsemblePINNWrapper(base_models).to(device)
     
     # 測試資料 (時間 + 2D 空間)
     x = torch.randn(15, 3, device=device)

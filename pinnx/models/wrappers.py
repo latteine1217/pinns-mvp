@@ -456,11 +456,6 @@ class EnsemblePINNWrapper(nn.Module):
             
         else:
             raise ValueError(f"不支援的模式: {mode}")
-        
-        # 舊的實作保持不變（用於向後相容）
-        # 加權平均
-        weighted_mean = torch.einsum('m,mbo->bo', self.weights, stacked)
-        return weighted_mean
     
     def predict_with_uncertainty(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -540,11 +535,6 @@ class AdaptivePINNWrapper(nn.Module):
         # 例如：動態調整 Fourier 頻率、學習率、權重等
         pass
 
-
-# 為測試相容性提供別名（保留向後相容性）
-# MultiHeadWrapper 已經是正確的類別，不需要別名
-ResidualWrapper = ScaledPINNWrapper   # 殘差包裝器使用 ScaledPINNWrapper
-EnsembleWrapper = EnsemblePINNWrapper  # 集成模型別名
 
 # 便捷建構函數
 def create_scaled_pinn(model_config: Dict, 

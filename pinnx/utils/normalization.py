@@ -133,6 +133,35 @@ class InputNormalizer:
         if self.bounds is not None:
             self.bounds = self.bounds.to(device)
         return self
+    
+    def get_metadata(self) -> Dict[str, Any]:
+        """Return normalization statistics for downstream consumers."""
+        if self.mean is not None:
+            device = self.mean.device
+        elif self.data_min is not None:
+            device = self.data_min.device
+        elif self.bounds is not None:
+            device = self.bounds.device
+        else:
+            device = torch.device('cpu')
+        feature_range_tensor = torch.tensor(
+            self.feature_range, dtype=torch.float32, device=device
+        )
+        metadata: Dict[str, Any] = {
+            'norm_type': self.norm_type,
+            'feature_range': feature_range_tensor
+        }
+        if self.mean is not None:
+            metadata['mean'] = self.mean.clone().detach()
+        if self.std is not None:
+            metadata['std'] = self.std.clone().detach()
+        if self.data_min is not None:
+            metadata['data_min'] = self.data_min.clone().detach()
+        if self.data_range is not None:
+            metadata['data_range'] = self.data_range.clone().detach()
+        if self.bounds is not None:
+            metadata['bounds'] = self.bounds.clone().detach()
+        return metadata
 
 
 # ===================================================================
@@ -469,7 +498,11 @@ class DataNormalizer:
         Returns:
             (means, stds) 元組
         """
-        # 正確的 JHTDB Channel Re_τ=1000 統計量 (cutout3d_128x128x32.npz)
+        # ⚠️ 警告：默認值應僅作為後備，實際使用時**必須**在配置中提供準確統計量
+        # 
+        # 注意：以下默認值來自 cutout3d_128x128x32.npz（3D 體數據），
+        # 可能不適用於 2D 切片或其他數據源。建議在配置中明確指定：
+        #   normalization.params.u_mean, u_std, v_mean, v_std, w_mean, w_std, p_mean, p_std
         means = {
             'u': params.get('u_mean', 9.921185),
             'v': params.get('v_mean', -0.000085),
@@ -480,13 +513,16 @@ class DataNormalizer:
         stds = {
             'u': params.get('u_std', 4.593879),
             'v': params.get('v_std', 0.329614),
-            'w': params.get('w_std', 3.865396),
+            'w': params.get('w_std', 3.865396),  # ⚠️ 此默認值可能不適用於 2D 切片（實測 ~4.76）
             'p': params.get('p_std', 28.619722)
         }
         
         if 'u_mean' not in params or 'u_std' not in params:
             logger.warning(
-                "⚠️  配置中未提供完整統計量，使用 JHTDB Channel Re1000 默認值"
+                "⚠️  配置中未提供完整統計量，使用 cutout3d 默認值（可能不準確！）"
+            )
+            logger.warning(
+                "   強烈建議在配置文件中明確指定：u_mean, u_std, v_mean, v_std, w_mean, w_std, p_mean, p_std"
             )
         
         return means, stds
@@ -568,4 +604,3 @@ def create_normalizer_from_checkpoint(checkpoint_path: str) -> DataNormalizer:
         return DataNormalizer(norm_type='none')
     
     return DataNormalizer.from_metadata(ckpt['normalization'])
-

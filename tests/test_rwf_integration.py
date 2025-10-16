@@ -1,12 +1,11 @@
 """
 RWF (Random Weight Factorization) 集成測試
 
-測試 RWF 功能的完整性與向後相容性，涵蓋：
+測試 RWF 功能的完整性，涵蓋：
 1. 模型創建與參數驗證
 2. 前向/反向傳播
 3. SIREN 初始化
-4. 檢查點保存/載入（新格式）
-5. 舊檢查點向後相容（舊格式 -> 新格式）
+4. 檢查點保存/載入
 """
 
 import pytest
@@ -152,7 +151,7 @@ class TestRWFCheckpoint:
     """測試 RWF 的檢查點功能"""
     
     def test_rwf_checkpoint_save_load(self):
-        """測試 RWF 模型的保存與載入（新格式）"""
+        """測試 RWF 模型的保存與載入"""
         # 創建模型並訓練幾步
         model = PINNNet(
             in_dim=2, out_dim=3, width=64, depth=2,
@@ -195,66 +194,6 @@ class TestRWFCheckpoint:
                 torch.testing.assert_close(y1, y2, rtol=1e-6, atol=1e-7)
         
         print("✅ RWF 檢查點保存/載入正常")
-    
-    def test_rwf_legacy_checkpoint_loading(self):
-        """測試舊格式檢查點（nn.Linear）載入到 RWF 模型（向後相容）"""
-        # 1. 創建標準模型（不使用 RWF）
-        model_old = PINNNet(
-            in_dim=2, out_dim=3, width=64, depth=2,
-            use_rwf=False  # 標準 nn.Linear
-        )
-        
-        # 訓練幾步
-        optimizer = torch.optim.Adam(model_old.parameters(), lr=0.001)
-        x = torch.randn(50, 2, requires_grad=True)
-        y_true = torch.randn(50, 3)
-        
-        for _ in range(5):
-            optimizer.zero_grad()
-            y_pred = model_old(x)
-            loss = ((y_pred - y_true) ** 2).mean()
-            loss.backward()
-            optimizer.step()
-        
-        # 保存舊格式檢查點
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_ckpt_path = os.path.join(tmpdir, "old_model.pth")
-            torch.save(model_old.state_dict(), old_ckpt_path)
-            
-            # 2. 創建 RWF 模型並載入舊檢查點
-            model_new = PINNNet(
-                in_dim=2, out_dim=3, width=64, depth=2,
-                use_rwf=True  # 使用 RWF
-            )
-            
-            old_state = torch.load(old_ckpt_path)
-            model_new.load_state_dict(old_state, strict=False)  # strict=False 允許缺少 s 參數
-            
-            # 3. 驗證關鍵參數已正確載入
-            # 由於啟用了 _load_from_state_dict hook，weight 應已轉換為 V
-            for layer_old, layer_new in zip(model_old.hidden_layers, model_new.hidden_layers):
-                if isinstance(layer_old, DenseLayer) and isinstance(layer_new, DenseLayer):
-                    if isinstance(layer_old.linear, nn.Linear) and isinstance(layer_new.linear, RWFLinear):
-                        # V 應等於舊的 weight
-                        torch.testing.assert_close(
-                            layer_new.linear.V, 
-                            layer_old.linear.weight, 
-                            rtol=1e-5, atol=1e-6,
-                            msg="V 應等於舊的 weight"
-                        )
-                        
-                        # s 應接近 0（初始無縮放）
-                        assert layer_new.linear.s.abs().max() < 1e-5, "轉換後 s 應初始化為 0"
-            
-            # 4. 驗證輸出差異合理（由於 s=0，exp(0)=1，輸出應接近）
-            with torch.no_grad():
-                y_old = model_old(x)
-                y_new = model_new(x)
-                
-                # 允許小誤差（由於浮點精度）
-                torch.testing.assert_close(y_old, y_new, rtol=1e-3, atol=1e-4)
-        
-        print("✅ 舊檢查點向後相容載入成功")
 
 
 class TestRWFIntegrationWithFactory:
@@ -317,16 +256,12 @@ if __name__ == "__main__":
     test_siren.test_init_siren_weights_on_rwf_model()
     
     # 3. 檢查點測試
-    print("\n【測試 3/5】檢查點保存/載入")
+    print("\n【測試 3/4】檢查點保存/載入")
     test_ckpt = TestRWFCheckpoint()
     test_ckpt.test_rwf_checkpoint_save_load()
     
-    # 4. 向後相容測試
-    print("\n【測試 4/5】舊檢查點向後相容")
-    test_ckpt.test_rwf_legacy_checkpoint_loading()
-    
-    # 5. 工廠集成測試
-    print("\n【測試 5/5】模型工廠集成")
+    # 4. 工廠集成測試
+    print("\n【測試 4/4】模型工廠集成")
     test_factory = TestRWFIntegrationWithFactory()
     test_factory.test_factory_creates_rwf_model()
     

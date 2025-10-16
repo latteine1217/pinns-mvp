@@ -1,8 +1,11 @@
 # 🚀 PirateNet Colab 快速啟動指南
 
+> **最後更新**：2025-10-16  
+> **適用版本**：重構後新架構（使用 `Trainer` 類別）
+
 ## 📋 背景
 
-上次訓練（`piratenet_quick_test`）失敗原因：
+### 上次訓練失敗原因（已修復）
 - ❌ 壁面邊界錯誤：`y: [0, 2]`（應為 `[-1, 1]`）
 - ❌ 學習率調度器未啟用
 - ❌ 訓練不足：100 epochs（建議 1000+）
@@ -14,20 +17,28 @@
 ## ✅ 已修復配置
 
 ### 文件列表
-1. **`configs/colab_piratenet_1k.yml`**（380 行）
+1. **`configs/colab_piratenet_2d_slice.yml`**（新版本）
    - ✅ 壁面邊界：`y: [-1, 1]`（三處一致）
    - ✅ 學習率調度器：`warmup_exponential`
    - ✅ GradNorm 自適應權重
    - ✅ 因果權重：`epsilon=1.0`
+   - ✅ 記憶體優化：**2D 切片版本**（~8GB vs 40GB）
+   - ✅ 目標誤差：≤ 20%（2D slice）vs ≤ 15%（3D full）
 
-2. **`PirateNet_Colab_Training.ipynb`**
+2. **`PirateNet_Colab_Training.ipynb`**（已更新）
    - 完整訓練流程
    - Google Drive 自動保存
    - TensorBoard 監控
    - 故障排除指南
+   - **適配新訓練架構**
 
 3. **`scripts/evaluate_piratenet_vs_jhtdb.py`**（已修復）
    - 支援 VS-PINN 縮放因子載入
+
+### 🆕 架構變更
+- **訓練器重構**：核心訓練循環移至 `pinnx.train.trainer.Trainer`
+- **向後相容**：所有命令行參數與配置格式不變
+- **腳本精簡**：`scripts/train.py` 僅負責協調
 
 ---
 
@@ -45,7 +56,7 @@
 
 # 選項 B：手動上傳文件
 1. 上傳 PirateNet_Colab_Training.ipynb 到 Colab
-2. 上傳 configs/colab_piratenet_1k.yml
+2. 上傳 configs/colab_piratenet_2d_slice.yml
 3. 上傳整個 pinnx/ 資料夾
 ```
 
@@ -67,7 +78,7 @@
 ```python
 # 在新 Cell 中執行
 %load_ext tensorboard
-%tensorboard --logdir ./checkpoints/colab_piratenet_1k
+%tensorboard --logdir ./checkpoints/colab_piratenet_2d_slice
 ```
 
 ---
@@ -119,30 +130,30 @@ drive.mount('/content/drive')
 #### 步驟 6：開始訓練
 ```bash
 # Cell 6: 訓練模型
-!python scripts/train.py --cfg configs/colab_piratenet_1k.yml
+!python scripts/train.py --cfg configs/colab_piratenet_2d_slice.yml
 ```
 
 #### 步驟 7：監控訓練
 ```python
 # Cell 7: TensorBoard（新 Cell）
 %load_ext tensorboard
-%tensorboard --logdir ./checkpoints/colab_piratenet_1k
+%tensorboard --logdir ./checkpoints/colab_piratenet_2d_slice
 ```
 
 #### 步驟 8：評估結果
 ```bash
 # Cell 8: 評估檢查點（訓練完成後）
 !python scripts/evaluate_piratenet_vs_jhtdb.py \
-  --checkpoint checkpoints/colab_piratenet_1k/best_model.pth \
-  --config configs/colab_piratenet_1k.yml \
+  --checkpoint checkpoints/colab_piratenet_2d_slice/best_model.pth \
+  --config configs/colab_piratenet_2d_slice.yml \
   --device cuda
 ```
 
 #### 步驟 9：保存結果到 GDrive
 ```bash
 # Cell 9: 保存到 Google Drive
-!cp -r checkpoints/colab_piratenet_1k /content/drive/MyDrive/pinns-mvp/checkpoints/
-!cp -r results/colab_piratenet_1k /content/drive/MyDrive/pinns-mvp/results/
+!cp -r checkpoints/colab_piratenet_2d_slice /content/drive/MyDrive/pinns-mvp/checkpoints/
+!cp -r results/colab_piratenet_2d_slice /content/drive/MyDrive/pinns-mvp/results/
 ```
 
 ---
@@ -163,16 +174,18 @@ drive.mount('/content/drive')
 ```bash
 # 執行評估
 !python scripts/evaluate_piratenet_vs_jhtdb.py \
-  --checkpoint checkpoints/colab_piratenet_1k/best_model.pth \
-  --config configs/colab_piratenet_1k.yml \
+  --checkpoint checkpoints/colab_piratenet_2d_slice/best_model.pth \
+  --config configs/colab_piratenet_2d_slice.yml \
   --device cuda
 ```
 
-**成功標準**：
+**成功標準**（2D 切片版本）：
 - ✅ 速度場 L2：≤ 20%（可接受）/ ≤ 15%（理想）
 - ✅ 壓力場 L2：≤ 25%（可接受）/ ≤ 20%（理想）
 - ✅ `wall_loss` > 0（壁面約束生效）
 - ✅ 訓練穩定收斂（無 NaN）
+
+> **注意**：2D 切片版本因記憶體優化，誤差略高於 3D 完整版
 
 ---
 
@@ -186,17 +199,21 @@ Runtime → Change runtime type → Hardware accelerator: GPU
 
 ### **問題 2：記憶體不足**
 ```yaml
-# 修改 configs/colab_piratenet_1k.yml
+# 修改 configs/colab_piratenet_2d_slice.yml
 training:
-  batch_size: 4096  # 降低批次大小（原 8192）
+  batch_size: 2048  # 降低批次大小（原 4096）
+
+# 或使用更激進的優化
+collocation:
+  N_domain: 2000   # 降低採樣點（原 4000）
 ```
 
 ### **問題 3：訓練中斷**
 ```bash
 # 從檢查點恢復
 !python scripts/train.py \
-  --cfg configs/colab_piratenet_1k.yml \
-  --resume checkpoints/colab_piratenet_1k/latest.pth
+  --cfg configs/colab_piratenet_2d_slice.yml \
+  --resume checkpoints/colab_piratenet_2d_slice/latest.pth
 ```
 
 ### **問題 4：JHTDB 資料下載失敗**
@@ -211,8 +228,8 @@ training:
 ### **問題 5：wall_loss = 0**
 ```bash
 # 檢查配置文件
-!rg "y_min:\s*-1\.0" configs/colab_piratenet_1k.yml
-!rg "y:\s*\[-1\.0,\s*1\.0\]" configs/colab_piratenet_1k.yml
+!rg "y_min:\s*-1\.0" configs/colab_piratenet_2d_slice.yml
+!rg "y:\s*\[-1\.0,\s*1\.0\]" configs/colab_piratenet_2d_slice.yml
 
 # 應該顯示 3 處匹配（data.domain, physics.domain, jhtdb_config.domain）
 ```
@@ -220,7 +237,7 @@ training:
 ### **問題 6：學習率不變**
 ```python
 # 檢查訓練日誌
-!tail -100 log/colab_piratenet_1k/training.log | grep "learning_rate"
+!tail -100 log/colab_piratenet_2d_slice/training.log | grep "learning_rate"
 
 # 預期：learning_rate 應逐步下降
 # Epoch 20: ~1e-3 → Epoch 100: ~5e-4 → Epoch 500: ~1e-4
@@ -230,13 +247,15 @@ training:
 
 ## 📈 預期訓練時間
 
-| GPU 型號 | Batch Size | Epochs | 訓練時間 | 預期 L2 |
-|---------|------------|--------|---------|---------|
-| T4 | 8192 | 1000 | 1.5-2 hrs | 20-25% |
-| T4 | 8192 | 2000 | 3-4 hrs | 15-20% |
-| V100 | 8192 | 1000 | 40-60 min | 20-25% |
-| V100 | 8192 | 2000 | 1.5-2 hrs | 15-20% |
-| A100 | 8192 | 1000 | 20-30 min | 20-25% |
+| GPU 型號 | Batch Size | Epochs | 訓練時間 | 預期 L2 (2D slice) |
+|---------|------------|--------|---------|-------------------|
+| T4 | 4096 | 1000 | 30-60 min | 18-22% |
+| T4 | 4096 | 2000 | 1-1.5 hrs | 15-18% |
+| V100 | 4096 | 1000 | 15-25 min | 18-22% |
+| V100 | 4096 | 2000 | 30-45 min | 15-18% |
+| A100 | 4096 | 1000 | 10-15 min | 18-22% |
+
+> **注意**：2D 切片版本記憶體占用 ~8GB（vs 3D 完整版 ~40GB）
 
 ---
 
@@ -244,7 +263,7 @@ training:
 
 ### **步驟 1：訓練完成後檢查檢查點**
 ```bash
-!ls -lh checkpoints/colab_piratenet_1k/
+!ls -lh checkpoints/colab_piratenet_2d_slice/
 # 應包含：
 # - best_model.pth
 # - latest.pth
@@ -254,10 +273,10 @@ training:
 ### **步驟 2：執行評估**
 ```bash
 !python scripts/evaluate_piratenet_vs_jhtdb.py \
-  --checkpoint checkpoints/colab_piratenet_1k/best_model.pth \
-  --config configs/colab_piratenet_1k.yml \
+  --checkpoint checkpoints/colab_piratenet_2d_slice/best_model.pth \
+  --config configs/colab_piratenet_2d_slice.yml \
   --device cuda \
-  --output results/colab_piratenet_1k
+  --output results/colab_piratenet_2d_slice
 ```
 
 ### **步驟 3：檢查結果**
@@ -265,7 +284,7 @@ training:
 import json
 
 # 讀取統計結果
-with open('results/colab_piratenet_1k/vs_jhtdb_statistics.json') as f:
+with open('results/colab_piratenet_2d_slice/vs_jhtdb_statistics.json') as f:
     stats = json.load(f)
 
 print(f"速度場 L2 誤差：")
@@ -278,7 +297,7 @@ print(f"\n整體評估: {'✅ 成功' if stats['success_criteria']['overall_succ
 
 ### **步驟 4：視覺化結果**
 ```bash
-!ls results/colab_piratenet_1k/visualizations/
+!ls results/colab_piratenet_2d_slice/visualizations/
 # 應包含：
 # - velocity_comparison.png
 # - pressure_comparison.png
@@ -292,16 +311,18 @@ print(f"\n整體評估: {'✅ 成功' if stats['success_criteria']['overall_succ
 ```
 pinns-mvp/
 ├── configs/
-│   └── colab_piratenet_1k.yml          # ✅ 修復後的配置
+│   └── colab_piratenet_2d_slice.yml    # ✅ 修復後的配置（2D 切片版本）
 ├── scripts/
 │   ├── train.py                         # 訓練腳本
 │   ├── evaluate_piratenet_vs_jhtdb.py  # ✅ 修復後的評估腳本
 │   └── fetch_channel_flow.py           # 資料下載
 ├── pinnx/                               # 核心模組
+│   └── train/
+│       └── trainer.py                   # ✅ 新訓練器類別
 ├── checkpoints/
-│   └── colab_piratenet_1k/             # 訓練檢查點（自動創建）
+│   └── colab_piratenet_2d_slice/       # 訓練檢查點（自動創建）
 ├── results/
-│   └── colab_piratenet_1k/             # 評估結果（自動創建）
+│   └── colab_piratenet_2d_slice/       # 評估結果（自動創建）
 ├── data/
 │   └── jhtdb/
 │       └── channel_flow_re1000/        # JHTDB 資料（下載後）
@@ -319,26 +340,28 @@ pinns-mvp/
 4. 等待訓練完成（1-2 小時）
 5. 檢查評估結果
 
-### **若達標（L2 ≤ 15%）**
+### **若達標（L2 ≤ 20%）**
 1. 保存檢查點到 Google Drive
 2. 執行 K-scan 實驗（找出最少感測點數）
 3. Ensemble 訓練（不確定性量化）
 
-### **若未達標（L2 > 15%）**
+### **若未達標（L2 > 20%）**
 1. 延長訓練時間（2000-5000 epochs）
 2. 增加感測點（K=80-100）
 3. 調整網路結構（width=1024）
 4. 檢查訓練日誌（確認修復生效）
+5. 考慮改用 3D 完整版配置（需更多記憶體）
 
 ---
 
 ## 📧 支援與回報
 
 若遇到問題，請提供：
-1. 訓練日誌（`log/colab_piratenet_1k/training.log`）
-2. 評估結果（`results/colab_piratenet_1k/vs_jhtdb_statistics.json`）
-3. 配置文件（`configs/colab_piratenet_1k.yml`）
+1. 訓練日誌（`log/colab_piratenet_2d_slice/training.log`）
+2. 評估結果（`results/colab_piratenet_2d_slice/vs_jhtdb_statistics.json`）
+3. 配置文件（`configs/colab_piratenet_2d_slice.yml`）
 4. TensorBoard 截圖（損失曲線）
+5. 系統資訊（GPU 型號、記憶體占用）
 
 ---
 
@@ -347,10 +370,12 @@ pinns-mvp/
 在開始訓練前，請確認：
 - [ ] GPU 可用（`torch.cuda.is_available() == True`）
 - [ ] Google Drive 已掛載
+- [ ] 配置文件存在：`configs/colab_piratenet_2d_slice.yml`
 - [ ] 配置文件中 `y_min = -1.0`（三處）
 - [ ] 學習率調度器已啟用（`scheduler.type: warmup_exponential`）
 - [ ] GradNorm 已啟用（`adaptive_weights.enabled: true`）
 - [ ] JHTDB 資料已下載或從 GDrive 載入
+- [ ] 記憶體足夠（建議 ≥ 12GB 系統 RAM + 8GB VRAM）
 
 ---
 

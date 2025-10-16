@@ -862,7 +862,7 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
     is_3d = config.get('physics', {}).get('type') == 'vs_pinn_channel_flow'
     target_fields = ['u', 'v', 'w', 'p'] if is_3d else ['u', 'v', 'p']
     
-    channel_data = load_channel_flow(
+    training_bundle = load_channel_flow(
         config_path=config_path,  # ⭐ 傳遞配置路徑給 ChannelFlowLoader
         strategy=strategy,
         K=K,
@@ -870,16 +870,24 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
         sensor_file=sensor_file  # 傳遞自定義文件名
     )
     
-    # 提取感測器座標和資料
-    coords = channel_data['coordinates']  # (K, 2 or 3) numpy array
-    sensor_data = channel_data['sensor_data']  # dict with 'u', 'v', ('w',) 'p'
-    domain_bounds = channel_data['domain_bounds']
-    
+    training_data = training_bundle.as_training_dict(
+        target_fields=target_fields,
+        device=device,
+        include_w=is_3d
+    )
+
+    coords = training_data['coordinates']  # torch tensor on device
+    sensor_data = training_data['sensor_data']
+    domain_bounds = training_data['domain_bounds']
     # 計算標準化參數（VS-PINN 風格：映射到 [-1, 1]）
     x_range = domain_bounds['x']
     y_range = domain_bounds['y']
     x_min, x_max = x_range[0], x_range[1]
     y_min, y_max = y_range[0], y_range[1]
+    if 'z' in domain_bounds:
+        z_min, z_max = domain_bounds['z']
+    else:
+        z_min = z_max = 0.0
     
     def normalize_coord(coord, c_min, c_max):
         """將座標標準化到 [-1, 1]"""
@@ -893,36 +901,24 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
     is_vs_pinn = config.get('physics', {}).get('type') == 'vs_pinn_channel_flow'
     
     # 轉換為 PyTorch tensor
-    x_sensors_raw = torch.from_numpy(coords[:, 0:1]).float().to(device)  # (K, 1)
-    y_sensors_raw = torch.from_numpy(coords[:, 1:2]).float().to(device)  # (K, 1)
+    x_sensors = coords[:, 0:1]
+    y_sensors = coords[:, 1:2]
     
     # 🆕 如果是 VS-PINN 且有真實 z 座標，使用它；否則為 0
-    if is_vs_pinn and coords.shape[1] >= 3:
-        z_sensors_raw = torch.from_numpy(coords[:, 2:3]).float().to(device)  # (K, 1)
-        # 從配置讀取 z 範圍
-        z_domain = config['physics'].get('domain', {})
-        z_min = z_domain.get('z_range', [0.0, 9.42])[0]
-        z_max = z_domain.get('z_range', [0.0, 9.42])[1]
+    if is_vs_pinn:
+        z_sensors = coords[:, 2:3]
     else:
-        z_sensors_raw = torch.zeros_like(x_sensors_raw)
-        z_min = z_max = 0.0  # 2D 情況
-    
-    # 🔧 保持物理座標（由 ManualScalingWrapper 負責標準化）
-    x_sensors = x_sensors_raw
-    y_sensors = y_sensors_raw
-    z_sensors = z_sensors_raw if is_vs_pinn else torch.zeros_like(x_sensors)
+        z_sensors = torch.zeros_like(x_sensors)
     t_sensors = torch.zeros_like(x_sensors)  # 暫時假設 t=0
     
-    u_sensors = torch.from_numpy(sensor_data['u'].reshape(-1, 1)).float().to(device)
-    v_sensors = torch.from_numpy(sensor_data['v'].reshape(-1, 1)).float().to(device)
-    p_sensors = torch.from_numpy(sensor_data['p'].reshape(-1, 1)).float().to(device)
+    u_sensors = sensor_data['u']
+    v_sensors = sensor_data['v']
+    p_sensors = sensor_data['p']
     
     # 🆕 如果是 VS-PINN，添加 w 分量（假設為 0 或從數據中獲取）
     if is_vs_pinn:
-        if 'w' in sensor_data:
-            w_sensors = torch.from_numpy(sensor_data['w'].reshape(-1, 1)).float().to(device)
-        else:
-            # 2D 切片假設 w=0
+        w_sensors = sensor_data.get('w')
+        if w_sensors is None:
             w_sensors = torch.zeros_like(u_sensors)
     else:
         w_sensors = None  # 2D 不需要 w
@@ -1033,7 +1029,8 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
     global _channel_data_cache
     _channel_data_cache = {
         'domain_bounds': domain_bounds,
-        'channel_data': channel_data,
+        'bundle': training_bundle,
+        'training_dict': training_data,
         'normalization': {
             'x_min': x_min, 'x_max': x_max,
             'y_min': y_min, 'y_max': y_max,
@@ -1105,16 +1102,19 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
         # 2D 情況下不需要 w，但為了統一性可以添加空張量
         training_dict['w_sensors'] = torch.empty(0, 1, device=device)
         training_dict['w_ic'] = torch.empty(0, 1, device=device)
+
+    training_dict['metadata'] = training_data.get('metadata', {})
+    training_dict['statistics'] = training_data.get('statistics', {})
     
     # 添加低保真先驗資料到批次 (如果可用)
-    if 'lowfi_prior' in channel_data and channel_data['lowfi_prior']:
-        lowfi = channel_data['lowfi_prior']
+    if training_data['has_prior']:
+        lowfi = training_data.get('lowfi_prior', {}) or {}
         if 'u' in lowfi:
-            training_dict['u_prior'] = torch.from_numpy(lowfi['u'].reshape(-1, 1)).float().to(device)
+            training_dict['u_prior'] = lowfi['u']
         if 'v' in lowfi:
-            training_dict['v_prior'] = torch.from_numpy(lowfi['v'].reshape(-1, 1)).float().to(device)
+            training_dict['v_prior'] = lowfi['v']
         if 'p' in lowfi:
-            training_dict['p_prior'] = torch.from_numpy(lowfi['p'].reshape(-1, 1)).float().to(device)
+            training_dict['p_prior'] = lowfi['p']
         training_dict['has_prior'] = True
     else:
         training_dict['has_prior'] = False
@@ -1183,15 +1183,15 @@ def main():
     # 從快取中提取統計資訊（如果可用）
     statistics = None
     if '_channel_data_cache' in globals() and _channel_data_cache is not None:
-        channel_data = _channel_data_cache.get('channel_data', {})
-        if 'statistics' in channel_data:
-            statistics = channel_data['statistics']
-            logger.info(f"✅ Extracted statistics for auto output ranges:")
+        cached_bundle = _channel_data_cache.get('bundle')
+        if cached_bundle and cached_bundle.statistics:
+            statistics = cached_bundle.statistics
+            logger.info("✅ Extracted statistics for auto output ranges:")
             logger.info(f"   u: {statistics.get('u', {}).get('range', 'N/A')}")
             logger.info(f"   v: {statistics.get('v', {}).get('range', 'N/A')}")
             logger.info(f"   p: {statistics.get('p', {}).get('range', 'N/A')}")
         else:
-            logger.warning("⚠️  No statistics found in channel_data")
+            logger.warning("⚠️  No statistics found in cached training bundle")
     else:
         logger.warning("⚠️  Channel data cache not available, will use hardcoded ranges")
     
@@ -1200,12 +1200,15 @@ def main():
     physics = create_physics(config, device)
     losses = create_loss_functions(config, device)
     
+    physics_type = config.get('physics', {}).get('type', 'unknown')
+    is_vs_pinn = physics_type == 'vs_pinn_channel_flow'
+    input_normalizer = create_input_normalizer(config, training_data_sample, is_vs_pinn, device)
+    
     logger.info(f"Model architecture: {config['model']['type']}")
     logger.info(f"Input dimension: {config['model']['in_dim']}")
     logger.info(f"Output dimension: {config['model']['out_dim']}")
     
     # 安全讀取物理參數
-    physics_type = config.get('physics', {}).get('type', 'unknown')
     if physics_type == 'vs_pinn_channel_flow':
         physics_params = config.get('physics', {}).get('physics_params', {})
         logger.info(f"Physics: VS-PINN Channel Flow with nu={physics_params.get('nu', 'N/A')}")
@@ -1231,7 +1234,9 @@ def main():
             member_weighters = create_weighters(config, member_model, device, physics=physics)
             
             # 使用 Trainer 訓練
-            trainer = Trainer(member_model, physics, losses, config, device, weighters=member_weighters)
+            trainer = Trainer(member_model, physics, losses, config, device,
+                               weighters=member_weighters,
+                               input_normalizer=input_normalizer)
             trainer.training_data = training_data_sample
             
             # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）
@@ -1254,19 +1259,26 @@ def main():
                     )
                     logger.info(f"✅ 已從訓練資料計算標準化統計量（Ensemble member {i+1}）: {trainer.data_normalizer}")
             
+            # 載入 checkpoint（若指定）
+            if args.resume:
+                logger.info(f"⏮️  載入 checkpoint: {args.resume} (Ensemble member {i+1})")
+                trainer.load_checkpoint(args.resume)
+            
             train_result = trainer.train()
             models.append(member_model)
             
             logger.info(f"Member {i+1} final loss: {train_result['final_loss']:.6f}")
         
-        # 儲存模型列表（暫時不使用 EnsembleWrapper）
+        # 儲存模型列表（暫時不使用 EnsemblePINNWrapper）
         logger.info(f"Ensemble training completed with {len(models)} members")
-        logger.info("Note: EnsembleWrapper not implemented yet - models stored as list")
+        logger.info("Note: EnsemblePINNWrapper integration pending - models stored as list")
         
     else:
         logger.info("Running single model training...")
         weighters = create_weighters(config, model, device, physics=physics)
-        trainer = Trainer(model, physics, losses, config, device, weighters=weighters)
+        trainer = Trainer(model, physics, losses, config, device,
+                          weighters=weighters,
+                          input_normalizer=input_normalizer)
         trainer.training_data = training_data_sample
         
         # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）
@@ -1288,6 +1300,11 @@ def main():
                     norm_type='training_data_norm'
                 )
                 logger.info(f"✅ 已從訓練資料計算標準化統計量: {trainer.data_normalizer}")
+        
+        # 載入 checkpoint（若指定）
+        if args.resume:
+            logger.info(f"⏮️  載入 checkpoint: {args.resume}")
+            trainer.load_checkpoint(args.resume)
         
         train_result = trainer.train()
         logger.info(f"Training completed. Final loss: {train_result['final_loss']:.6f}")

@@ -132,8 +132,76 @@ class Trainer:
         self._setup_adaptive_sampling()
         self._setup_fourier_annealing()
         # RANS 權重預熱已移除（2025-10-14）
+        self._configure_input_transform()
         
         logging.info(f"✅ Trainer 初始化完成（設備: {device}）")
+    
+    def _configure_input_transform(self) -> None:
+        """Propagate input normalization metadata to the model if needed."""
+        if self.input_normalizer is None:
+            return
+        try:
+            self.input_normalizer.to(self.device)
+        except AttributeError:
+            pass
+        
+        if hasattr(self.model, 'configure_fourier_input'):
+            metadata = self.input_normalizer.get_metadata()
+            self.model.configure_fourier_input(metadata)
+    
+    def _infer_variable_order(
+        self,
+        out_dim: int,
+        context: str = "",
+        data_batch: Optional[Dict[str, torch.Tensor]] = None
+    ) -> List[str]:
+        """
+        根據輸出維度推斷對應的物理變量順序。
+        
+        優先級：
+        1. 配置 (model.output_variables / model.variable_names / model.variables)
+        2. 模型屬性 (variable_names 或 get_variable_names())
+        3. 常用啟發式（u,v,w,p,S）
+        """
+        if out_dim <= 0:
+            return []
+        
+        model_cfg = self.config.get('model', {})
+        explicit_order = model_cfg.get('output_variables') or \
+            model_cfg.get('variable_names') or \
+            model_cfg.get('variables')
+        if explicit_order:
+            explicit = list(explicit_order)
+            if len(explicit) >= out_dim:
+                return explicit[:out_dim]
+        
+        attr_order = getattr(self.model, 'variable_names', None)
+        if attr_order is None and hasattr(self.model, 'get_variable_names'):
+            try:
+                attr_order = self.model.get_variable_names()
+            except Exception:
+                attr_order = None
+        if attr_order:
+            attr_list = list(attr_order)
+            if len(attr_list) >= out_dim:
+                return attr_list[:out_dim]
+        
+        if out_dim == 1:
+            return ['u']
+        if out_dim == 2:
+            return ['u', 'v']
+        if out_dim == 3:
+            return ['u', 'v', 'p']
+        if out_dim == 4:
+            return ['u', 'v', 'w', 'p']
+        if out_dim == 5:
+            return ['u', 'v', 'w', 'p', 'S']
+        
+        default_order = ['u', 'v', 'w', 'p', 'S']
+        if out_dim <= len(default_order):
+            return default_order[:out_dim]
+        
+        return [f'var_{i}' for i in range(out_dim)]
     
     def _setup_optimizer(self):
         """配置優化器"""
@@ -459,16 +527,37 @@ class Trainer:
         is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
         
         # ==================== 輔助函數 ====================
-        def prepare_model_coords(coord_tensor: torch.Tensor, require_grad: bool = False) -> torch.Tensor:
-            """準備模型輸入座標（處理標準化與縮放）"""
-            coords = coord_tensor
+        def prepare_model_coords(
+            coord_tensor: torch.Tensor, 
+            require_grad: bool = False
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """
+            準備模型輸入座標（處理標準化與縮放）
+            
+            Returns:
+                (coords_physical, coords_norm, model_coords):
+                - coords_physical: 物理座標（供 PDE autograd 使用）
+                - coords_norm: 標準化後的座標（若無 InputNormalizer 則與 coords_physical 相同）
+                - model_coords: 最終模型輸入（可能經過 VS-PINN scaling）
+            """
+            # 1. 保留物理座標（啟用梯度追蹤）
+            coords_physical = coord_tensor.clone()
+            if require_grad:
+                coords_physical.requires_grad_(True)
+            
+            # 2. 輸入標準化（可選）
             if self.input_normalizer is not None:
-                coords = self.input_normalizer.transform(coords)
+                coords_norm = self.input_normalizer.transform(coords_physical)
+            else:
+                coords_norm = coords_physical
+            
+            # 3. VS-PINN 縮放（可選，作用於標準化後的座標）
             if is_vs_pinn and hasattr(self.physics, 'scale_coordinates'):
-                coords = self.physics.scale_coordinates(coords)  # 修正：使用標準化後的 coords
-            if require_grad and not coords.requires_grad:
-                coords.requires_grad_(True)
-            return coords
+                model_coords = self.physics.scale_coordinates(coords_norm)
+            else:
+                model_coords = coords_norm
+            
+            return coords_physical, coords_norm, model_coords
         
         # ==================== 1. PDE 殘差損失 ====================
         # 組合 PDE 點座標
@@ -477,55 +566,62 @@ class Trainer:
         else:
             coords_pde = torch.cat([data_batch['x_pde'], data_batch['y_pde']], dim=1)
         
-        coords_pde.requires_grad_(True)
-        model_coords_pde = prepare_model_coords(coords_pde, require_grad=True)
+        # ✅ 解包三元組：(物理座標, 標準化座標, 模型輸入座標)
+        coords_pde_physical, coords_pde_norm, model_coords_pde = prepare_model_coords(coords_pde, require_grad=True)
         
         # 調試：打印維度（僅第一個 epoch）
         if epoch == 0 and not hasattr(self, '_debug_printed'):
             logging.info(f"🔍 調試資訊：coords_pde.shape={coords_pde.shape}, model_coords_pde.shape={model_coords_pde.shape}")
+            logging.info(f"  - coords_pde_physical 梯度追蹤: {coords_pde_physical.requires_grad}")
             self._debug_printed = True
         
-        # 模型預測
-        u_pred = self.model(model_coords_pde)
+        # 模型預測（標準化空間輸出）
+        u_pred_norm = self.model(model_coords_pde)
         
-        # 提取速度和壓力分量
+        # ✅ 立即反標準化為物理量（供 PDE 殘差計算使用）
+        var_order = self._infer_variable_order(u_pred_norm.shape[1], context='pde')
+        u_pred_pde_physical_raw = self.data_normalizer.denormalize_batch(u_pred_norm, var_order=var_order)
+        # 確保是 Tensor 類型（denormalize_batch 保持輸入類型）
+        u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)  # type: ignore
+        
+        # ✅ 提取速度和壓力分量（物理空間）
         if is_vs_pinn:
-            if u_pred.shape[1] == 3:
+            if u_pred_pde_physical.shape[1] == 3:
                 # 模型只輸出 [u, v, p]，添加 w=0
-                velocity = u_pred[:, :2]
-                pressure = u_pred[:, 2:3]
-                w_component = torch.zeros_like(pressure)
-                predictions = torch.cat([velocity, w_component, pressure], dim=1)
-            elif u_pred.shape[1] == 4:
+                velocity_phys = u_pred_pde_physical[:, :2]
+                pressure_phys = u_pred_pde_physical[:, 2:3]
+                w_component_phys = torch.zeros_like(pressure_phys)
+                predictions_phys = torch.cat([velocity_phys, w_component_phys, pressure_phys], dim=1)
+            elif u_pred_pde_physical.shape[1] == 4:
                 # 模型輸出完整 [u, v, w, p]
-                predictions = u_pred
-                velocity = u_pred[:, :2]
-                pressure = u_pred[:, 3:4]
+                predictions_phys = u_pred_pde_physical
+                velocity_phys = u_pred_pde_physical[:, :2]
+                pressure_phys = u_pred_pde_physical[:, 3:4]
             else:
-                raise ValueError(f"VS-PINN 模型輸出維度錯誤：{u_pred.shape[1]}，期望 3 或 4")
+                raise ValueError(f"VS-PINN 模型輸出維度錯誤：{u_pred_pde_physical.shape[1]}，期望 3 或 4")
         else:
-            if u_pred.shape[1] == 3:
-                velocity = u_pred[:, :2]
-                pressure = u_pred[:, 2:3]
-            elif u_pred.shape[1] == 4:
-                velocity = u_pred[:, :2]
-                pressure = u_pred[:, 3:4]
+            if u_pred_pde_physical.shape[1] == 3:
+                velocity_phys = u_pred_pde_physical[:, :2]
+                pressure_phys = u_pred_pde_physical[:, 2:3]
+            elif u_pred_pde_physical.shape[1] == 4:
+                velocity_phys = u_pred_pde_physical[:, :2]
+                pressure_phys = u_pred_pde_physical[:, 3:4]
             else:
-                raise ValueError(f"標準 PINN 輸出維度錯誤: {u_pred.shape[1]}，期望 3 或 4")
-            predictions = None
+                raise ValueError(f"標準 PINN 輸出維度錯誤: {u_pred_pde_physical.shape[1]}，期望 3 或 4")
+            predictions_phys = None
         
-        # 計算物理殘差
+        # ✅ 計算物理殘差（使用物理座標 + 物理量）
         try:
             if is_vs_pinn and hasattr(self.physics, 'compute_momentum_residuals'):
                 # VS-PINN 3D
                 residuals_mom = self.physics.compute_momentum_residuals(
-                    coords_pde,
-                    predictions,
-                    scaled_coords=model_coords_pde
+                    coords_pde_physical,    # ✅ 物理座標（含梯度）
+                    predictions_phys,        # ✅ 物理量
+                    scaled_coords=model_coords_pde  # VS-PINN 仍需縮放座標
                 )
                 continuity_residual = self.physics.compute_continuity_residual(
-                    coords_pde,
-                    predictions,
+                    coords_pde_physical,    # ✅ 物理座標（含梯度）
+                    predictions_phys,        # ✅ 物理量
                     scaled_coords=model_coords_pde
                 )
                 residuals = {
@@ -536,7 +632,7 @@ class Trainer:
                 }
             else:
                 # 標準 NS 2D
-                residuals = self.physics.residual(coords_pde, velocity, pressure)
+                residuals = self.physics.residual(coords_pde_physical, velocity_phys, pressure_phys)
             
             # 應用點權重（如果存在）
             pde_point_weights = data_batch.get('pde_point_weights', None)
@@ -553,7 +649,7 @@ class Trainer:
         
         except Exception as e:
             logging.error(f"🚨 物理殘差計算失敗: {e}")
-            logging.error(f"coords_pde shape: {coords_pde.shape}, u_pred shape: {u_pred.shape}")
+            logging.error(f"coords_pde shape: {coords_pde.shape}, u_pred_norm shape: {u_pred_norm.shape}, u_pred_pde_physical shape: {u_pred_pde_physical.shape}")
             raise
         
         # ==================== 1B. RANS 已移除（僅保留為 LoFi 場診斷工具）====================
@@ -568,8 +664,14 @@ class Trainer:
         else:
             coords_bc = torch.cat([data_batch['x_bc'], data_batch['y_bc']], dim=1)
         
-        model_coords_bc = prepare_model_coords(coords_bc, require_grad=False)
-        u_bc_pred = self.model(model_coords_bc)
+        # ✅ 解包三元組
+        coords_bc_physical, coords_bc_norm, model_coords_bc = prepare_model_coords(coords_bc, require_grad=False)
+        u_bc_pred_norm = self.model(model_coords_bc)
+        
+        # ✅ 反標準化為物理量（壁面邊界條件在物理空間應為 0）
+        var_order_bc = self._infer_variable_order(u_bc_pred_norm.shape[1], context='bc')
+        u_bc_pred_phys_raw = self.data_normalizer.denormalize_batch(u_bc_pred_norm, var_order=var_order_bc)
+        u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)  # type: ignore
         
         # 識別壁面點（y = ±1）
         y_bc = data_batch['y_bc']
@@ -577,8 +679,9 @@ class Trainer:
         wall_mask = wall_mask.squeeze()
         
         if wall_mask.sum() > 0:
-            u_wall = u_bc_pred[wall_mask, 0]  # u 分量
-            v_wall = u_bc_pred[wall_mask, 1]  # v 分量
+            # ✅ 使用物理量（壁面速度應為 0）
+            u_wall = u_bc_pred_phys[wall_mask, 0]  # u 分量（物理空間）
+            v_wall = u_bc_pred_phys[wall_mask, 1]  # v 分量（物理空間）
             wall_loss = torch.mean(u_wall**2 + v_wall**2)
         else:
             wall_loss = torch.tensor(0.0, device=self.device)
@@ -591,34 +694,37 @@ class Trainer:
         else:
             coords_sensors = torch.cat([data_batch['x_sensors'], data_batch['y_sensors']], dim=1)
         
-        model_coords_sensors = prepare_model_coords(coords_sensors, require_grad=False)
-        u_sensors_pred = self.model(model_coords_sensors)
+        # ✅ 解包三元組
+        coords_sensors_physical, coords_sensors_norm, model_coords_sensors = prepare_model_coords(coords_sensors, require_grad=False)
+        u_sensors_pred_norm = self.model(model_coords_sensors)
         
-        # 提取真實資料
+        # ✅ 反標準化為物理量（直接與真實物理量比較）
+        var_order_sensors = self._infer_variable_order(
+            u_sensors_pred_norm.shape[1],
+            context='sensors',
+            data_batch=data_batch
+        )
+        u_sensors_pred_phys_raw = self.data_normalizer.denormalize_batch(u_sensors_pred_norm, var_order=var_order_sensors)
+        u_sensors_pred_phys: torch.Tensor = u_sensors_pred_phys_raw if isinstance(u_sensors_pred_phys_raw, torch.Tensor) else torch.tensor(u_sensors_pred_phys_raw, device=self.device)  # type: ignore
+        
+        # 提取真實資料（物理空間）
         u_true = data_batch['u_sensors']
         v_true = data_batch['v_sensors']
         w_true = data_batch.get('w_sensors', None)  # 3D 通道流才有 w
         p_true = data_batch['p_sensors']
         
-        # ✅ TASK-008: 使用統一的 DataNormalizer 進行標準化
-        # 讓模型在標準化空間中學習，輸出已標準化的值
-        u_true_norm = self.data_normalizer.normalize(u_true, 'u')
-        v_true_norm = self.data_normalizer.normalize(v_true, 'v')
-        p_true_norm = self.data_normalizer.normalize(p_true, 'p')
-        
-        # 標準化空間的 MSE
-        u_loss = torch.mean((u_sensors_pred[:, 0:1] - u_true_norm)**2)
-        v_loss = torch.mean((u_sensors_pred[:, 1:2] - v_true_norm)**2)
+        # ✅ 物理空間的 MSE（直接比對，不再標準化真實值）
+        u_loss = torch.mean((u_sensors_pred_phys[:, 0:1] - u_true)**2)
+        v_loss = torch.mean((u_sensors_pred_phys[:, 1:2] - v_true)**2)
         
         # w 分量損失（僅 3D）
         if w_true is not None:
-            w_true_norm = self.data_normalizer.normalize(w_true, 'w')
-            w_loss = torch.mean((u_sensors_pred[:, 2:3] - w_true_norm)**2)
-            pressure_loss = torch.mean((u_sensors_pred[:, 3:4] - p_true_norm)**2)
+            w_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - w_true)**2)
+            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true)**2)
             velocity_loss = u_loss + v_loss + w_loss
         else:
             w_loss = torch.tensor(0.0, device=u_loss.device)
-            pressure_loss = torch.mean((u_sensors_pred[:, 2:3] - p_true_norm)**2)
+            pressure_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - p_true)**2)
             velocity_loss = u_loss + v_loss
         
         data_loss = velocity_loss + pressure_loss
@@ -675,12 +781,29 @@ class Trainer:
         base_pde_weight = loss_cfg.get('pde_weight', 1.0)
         base_bc_weight = loss_cfg.get('bc_weight', 10.0)
         
+        # ⭐ 支援細粒度權重配置（優先級：細項 > 統一 > 預設）
+        # 優先讀取細項權重，若不存在則回退到統一權重
         w_data = scaled_weight('data', base_data_weight)
-        w_momentum_x = scaled_weight('momentum_x', base_pde_weight)
-        w_momentum_y = scaled_weight('momentum_y', base_pde_weight)
-        w_momentum_z = scaled_weight('momentum_z', base_pde_weight) if is_vs_pinn else 0.0
-        w_continuity = scaled_weight('continuity', base_pde_weight)
-        w_bc = scaled_weight('wall_constraint', base_bc_weight)
+        w_momentum_x = scaled_weight('momentum_x', loss_cfg.get('momentum_x_weight', base_pde_weight))
+        w_momentum_y = scaled_weight('momentum_y', loss_cfg.get('momentum_y_weight', base_pde_weight))
+        w_momentum_z = scaled_weight('momentum_z', loss_cfg.get('momentum_z_weight', base_pde_weight)) if is_vs_pinn else 0.0
+        w_continuity = scaled_weight('continuity', loss_cfg.get('continuity_weight', base_pde_weight))
+        w_bc = scaled_weight('wall_constraint', loss_cfg.get('wall_constraint_weight', base_bc_weight))
+        
+        # 📊 診斷日誌：在訓練開始時打印實際應用的權重
+        if epoch == 0 and not hasattr(self, '_weights_logged'):
+            logging.info("=" * 60)
+            logging.info("📊 Loss 權重配置摘要")
+            logging.info("=" * 60)
+            logging.info(f"  Data Loss:        {w_data:.2e}")
+            logging.info(f"  Momentum X:       {w_momentum_x:.2e}")
+            logging.info(f"  Momentum Y:       {w_momentum_y:.2e}")
+            if is_vs_pinn:
+                logging.info(f"  Momentum Z:       {w_momentum_z:.2e}")
+            logging.info(f"  Continuity:       {w_continuity:.2e}")
+            logging.info(f"  Wall Constraint:  {w_bc:.2e}")
+            logging.info("=" * 60)
+            self._weights_logged = True
         
         # ==================== RANS 損失已移除（2025-10-14）====================
         # RANS 權重預熱功能已停用，相關損失項已從訓練循環中移除
@@ -698,23 +821,16 @@ class Trainer:
         mean_constraint_loss = torch.tensor(0.0, device=data_loss.device)
         mean_constraint_cfg = loss_cfg.get('mean_constraint', {})
         if mean_constraint_cfg.get('enabled', False) and 'mean_constraint' in self.losses:
-            # ✅ TASK-008: 修正空間處理
-            # MeanConstraintLoss 期望物理空間的值，但模型輸出是標準化空間
-            # 需要先反標準化再計算均值約束
-            
-            # 使用 PDE 點上的預測（更全域的統計量）而非 sensor 點
-            u_pred_physical = self.data_normalizer.denormalize_batch(
-                u_pred, 
-                var_order=['u', 'v', 'w', 'p'][:u_pred.shape[-1]]
-            )
+            # ✅ 使用已反標準化的 PDE 點預測（更全域的統計量）
+            # u_pred_pde_physical 已在 Line 515 反標準化完成
             
             target_means = mean_constraint_cfg.get('target_means', {})
             field_indices = {'u': 0, 'v': 1, 'w': 2}  # 不約束壓力場
             
             mean_constraint_loss_fn = self.losses['mean_constraint']
             mean_constraint_loss = mean_constraint_loss_fn(
-                predictions=u_pred_physical,  # ✅ 使用物理空間的預測
-                target_means=target_means,    # 物理空間的目標均值
+                predictions=u_pred_pde_physical,  # ✅ 使用物理空間的預測
+                target_means=target_means,         # 物理空間的目標均值
                 field_indices=field_indices
             )
             
@@ -727,8 +843,8 @@ class Trainer:
                 # 記錄預測均值以便診斷
                 with torch.no_grad():
                     for field_name, idx in field_indices.items():
-                        if idx < u_pred_physical.shape[-1]:
-                            pred_mean = u_pred_physical[:, idx].mean().item()
+                        if idx < u_pred_pde_physical.shape[-1]:
+                            pred_mean = u_pred_pde_physical[:, idx].mean().item()
                             target_mean = target_means.get(field_name, 0.0)
                             logging.info(f"   {field_name}: pred={pred_mean:.4f}, target={target_mean:.4f}")
         
@@ -838,18 +954,24 @@ class Trainer:
         self.model.eval()
         
         with torch.no_grad():
-            # 座標標準化與縮放
+            # ✅ 使用 prepare_model_coords 輔助函數處理座標（需要在 step() 之外定義或改為實例方法）
+            # 簡化處理：直接在此處理座標標準化與縮放
             coords_for_model = coords
             if self.input_normalizer is not None:
                 coords_for_model = self.input_normalizer.transform(coords_for_model)
             if self.physics is not None and hasattr(self.physics, 'scale_coordinates'):
-                coords_for_model = self.physics.scale_coordinates(coords)
+                coords_for_model = self.physics.scale_coordinates(coords_for_model)
             
-            # 模型預測
-            preds = self.model(coords_for_model)
+            # 模型預測（標準化空間輸出）
+            preds_norm = self.model(coords_for_model)
+            
+            # ✅ 反標準化為物理量（與真實物理量比較）
+            var_order_val = self._infer_variable_order(preds_norm.shape[1], context='validation')
+            preds_phys_raw = self.data_normalizer.denormalize_batch(preds_norm, var_order=var_order_val)
+            preds_phys: torch.Tensor = preds_phys_raw if isinstance(preds_phys_raw, torch.Tensor) else torch.tensor(preds_phys_raw, device=self.device)  # type: ignore
             
             # 處理維度不匹配（僅比較可用的場分量）
-            n_pred = preds.shape[1]
+            n_pred = preds_phys.shape[1]
             n_targets = targets.shape[1]
             n_common = min(n_pred, n_targets)
             
@@ -859,13 +981,13 @@ class Trainer:
                     f"比較前 {n_common} 個分量。"
                 )
             
-            preds = preds[:, :n_common]
-            targets = targets[:, :n_common]
+            preds_final = preds_phys[:, :n_common]
+            targets_final = targets[:, :n_common]
             
-            # 計算誤差指標
-            diff = preds - targets
+            # ✅ 計算誤差指標（物理空間）
+            diff = preds_final - targets_final
             mse = torch.mean(diff**2).item()
-            rel_l2 = relative_L2(preds, targets).mean().item()
+            rel_l2 = relative_L2(preds_final, targets_final).mean().item()
         
         # 恢復訓練狀態
         if training_mode:
@@ -917,8 +1039,13 @@ class Trainer:
         # 初始化損失字典（防止 epoch=0 時未定義）
         loss_dict = {'total_loss': 0.0, 'residual_loss': 0.0, 'bc_loss': 0.0, 'data_loss': 0.0}
         
+        # 確定訓練起始 epoch（支援從 checkpoint 恢復）
+        start_epoch = self.epoch  # 若從 checkpoint 恢復，self.epoch 會被 load_checkpoint() 設定
+        if start_epoch > 0:
+            logging.info(f"🔄 從 epoch {start_epoch} 恢復訓練")
+        
         # 訓練循環
-        for epoch in range(max_epochs):
+        for epoch in range(start_epoch, max_epochs):
             self.epoch = epoch
             
             # 🔧 自適應採樣（如果啟用）
@@ -1158,31 +1285,29 @@ class Trainer:
         self.epoch = checkpoint['epoch']
         self.history = checkpoint.get('history', self.history)
         
-        # 🆕 恢復 physics 的 state_dict（VS-PINN 縮放參數等）
-        if 'physics_state_dict' in checkpoint and self.physics is not None:
-            if hasattr(self.physics, 'load_state_dict'):
-                self.physics.load_state_dict(checkpoint['physics_state_dict'])
-                logging.info(f"✅ Physics state restored: {list(checkpoint['physics_state_dict'].keys())}")
-            else:
-                logging.warning("⚠️ Physics object does not support load_state_dict()")
-        elif 'physics_state_dict' not in checkpoint:
-            logging.warning("⚠️ No physics_state_dict in checkpoint (legacy checkpoint?)")
+        # 恢復 physics 的 state_dict（VS-PINN 縮放參數等）
+        if self.physics is not None:
+            if 'physics_state_dict' not in checkpoint:
+                raise KeyError("checkpoint is missing required 'physics_state_dict'")
+            if not hasattr(self.physics, 'load_state_dict'):
+                raise TypeError("physics module does not support load_state_dict()")
+            self.physics.load_state_dict(checkpoint['physics_state_dict'])
+            logging.info(f"✅ Physics state restored: {list(checkpoint['physics_state_dict'].keys())}")
         
-        # ✅ TASK-008: 恢復標準化器
-        if 'normalization' in checkpoint:
-            self.data_normalizer = DataNormalizer.from_metadata(checkpoint['normalization'])
-            logging.info(f"✅ DataNormalizer restored: {self.data_normalizer}")
-        else:
-            logging.warning("⚠️ No normalization metadata in checkpoint (legacy checkpoint?)")
-            logging.warning("   使用配置中的標準化設定")
-            self.data_normalizer = DataNormalizer.from_config(self.config)
+        # 恢復標準化器
+        if 'normalization' not in checkpoint:
+            raise KeyError("checkpoint is missing required 'normalization' metadata")
+        self.data_normalizer = DataNormalizer.from_metadata(checkpoint['normalization'])
+        logging.info(f"✅ DataNormalizer restored: {self.data_normalizer}")
         
-        # ⭐ P0.2: 恢復 GradScaler 狀態（AMP）
-        if 'scaler_state_dict' in checkpoint and self.use_amp and hasattr(self, 'scaler'):
+        # 恢復 GradScaler 狀態（AMP）
+        if self.use_amp:
+            if not hasattr(self, 'scaler'):
+                raise AttributeError("AMP enabled but trainer lacks GradScaler instance")
+            if 'scaler_state_dict' not in checkpoint:
+                raise KeyError("checkpoint is missing required 'scaler_state_dict' for AMP recovery")
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
             logging.info(f"✅ GradScaler state restored: scale={self.scaler.get_scale():.0f}")
-        elif self.use_amp:
-            logging.warning("⚠️ AMP 已啟用但檢查點無 scaler_state_dict（legacy checkpoint?）")
         
         if self.lr_scheduler and 'lr_scheduler_state_dict' in checkpoint:
             self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])

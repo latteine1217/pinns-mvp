@@ -66,7 +66,7 @@ data:
   sensor_type: "qr_pivot"
   sensor_noise: 0.01
   
-  num_collocation: 2048  # ✅ 降低至 2048（原 8192）
+  num_collocation: 4096  # ✅ 降低至 2048（原 8192）
   num_boundary: 256      # ✅ 降低至 256（原 512）
   num_initial: 128       # ✅ 降低至 128（原 256）
 
@@ -131,7 +131,7 @@ training:
   
   # 採樣配置（降低記憶體）
   sampling:
-    pde_points: 2048       # ✅ 降低（原 8192）
+    pde_points: 4096       # ✅ 降低（原 8192）
     boundary_points: 256   # ✅ 降低（原 512）
     wall_clustering: 0.3
   
@@ -145,7 +145,7 @@ training:
 # 損失權重（PirateNet GradNorm 配置）
 # =============================================================================
 losses:
-  data_loss_weight: 100.0
+  data_loss_weight: 50.0
   pde_loss_weight: 1.0
   wall_loss_weight: 10.0
   initial_loss_weight: 50.0

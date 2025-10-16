@@ -40,7 +40,7 @@ import hashlib
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.dataio.jhtdb_client import JHTDBManager, JHTDBConfig
-from pinnx.sensors.qr_pivot import QRPivotSelector
+from pinnx.sensors import FieldSensorSelector
 from pinnx.dataio.lowfi_loader import LowFiData
 from pinnx.physics.scaling import VSScaler
 
@@ -541,44 +541,65 @@ class ChannelFlowDataFetcher:
         X, Y = np.meshgrid(x, y, indexing='ij')
         points_full = np.stack([X.ravel(), Y.ravel()], axis=-1)
         
-        # 準備場資料矩陣 (用於 QR-pivot)
-        field_matrix = []
-        for var in ['u', 'v', 'p']:
-            if var in field_data:
-                field_matrix.append(field_data[var].ravel())
-        field_matrix = np.array(field_matrix).T  # [N_points, N_vars]
-        
         # 感測點選擇
         if method == "qr_pivot":
-            selector = QRPivotSelector()
-            sensor_indices, selection_info = selector.select_sensors(
-                field_matrix, K
+            selector = FieldSensorSelector(
+                strategy='qr_pivot',
+                feature_scaling='standard',
+                nan_policy='raise'
             )
+            selection = selector.select(field_data, n_sensors=K)
+            sensor_indices = selection.indices
+            selection_info = dict(selection.metrics)
+            selection_info['strategy'] = 'qr_pivot'
+            sensor_points = selection.coordinates()
+            if sensor_points is None:
+                sensor_points = points_full[sensor_indices]
         elif method == "random":
             np.random.seed(42)
             sensor_indices = np.random.choice(len(points_full), K, replace=False)
             selection_info = {"method": "random"}
+            sensor_points = points_full[sensor_indices]
         else:
             raise ValueError(f"未支援的感測點選擇方法: {method}")
         
         # 提取感測點座標與數值
-        sensor_points = points_full[sensor_indices]
         sensor_data = {}
         
-        for var in ['u', 'v', 'p']:
+        # ⚠️ 修復：處理完整的 4 個變量 (u, v, w, p)
+        for var in ['u', 'v', 'w', 'p']:
             if var in field_data:
-                field_values = field_data[var].ravel()[sensor_indices]
+                if method == "qr_pivot":
+                    component_values = selection.component_values.get(var)
+                    if component_values is None:
+                        continue
+                    field_values = component_values
+                else:
+                    full_values = field_data[var].reshape(-1)
+                    field_values = full_values[sensor_indices]
+                
+                if field_values.ndim == 2 and field_values.shape[1] == 1:
+                    field_values = field_values[:, 0]
                 
                 # 添加噪聲
                 if noise_sigma > 0:
-                    noise = np.random.normal(0, noise_sigma * np.std(field_values), len(field_values))
-                    field_values += noise
+                    if field_values.ndim == 1:
+                        noise_scale = np.std(field_values)
+                        noise = np.random.normal(0, noise_sigma * noise_scale, len(field_values))
+                        field_values = field_values + noise
+                    else:
+                        noise_scale = np.std(field_values, axis=0, keepdims=True)
+                        noise = np.random.normal(0, noise_sigma, size=field_values.shape) * noise_scale
+                        field_values = field_values + noise
                 
                 # 隨機遺失
                 if dropout_prob > 0:
                     n_dropout = int(dropout_prob * len(field_values))
                     dropout_indices = np.random.choice(len(field_values), n_dropout, replace=False)
-                    field_values[dropout_indices] = np.nan
+                    if field_values.ndim == 1:
+                        field_values[dropout_indices] = np.nan
+                    else:
+                        field_values[dropout_indices, :] = np.nan
                 
                 sensor_data[var] = field_values
         

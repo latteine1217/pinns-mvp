@@ -223,13 +223,11 @@ def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device
         logger.info("✅ Created VS-PINN physics module")
      
     # 載入權重（使用已載入的 checkpoint）
-    if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
-        epoch = checkpoint.get('epoch', 'unknown')
-        logger.info(f"✅ Loaded model checkpoint from epoch {epoch}")
-    else:
-        model.load_state_dict(checkpoint)
-        logger.info(f"✅ Loaded model checkpoint (legacy format)")
+    if 'model_state_dict' not in checkpoint:
+        raise KeyError("checkpoint must include 'model_state_dict'")
+    model.load_state_dict(checkpoint['model_state_dict'])
+    epoch = checkpoint.get('epoch', 'unknown')
+    logger.info(f"✅ Loaded model checkpoint from epoch {epoch}")
     
     # 轉移到目標設備
     model = model.to(device)
@@ -243,10 +241,8 @@ def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device
         if hasattr(physics, 'N_x'):
             logger.info(f"   VS-PINN 縮放參數: N_x={physics.N_x.item():.2f}, "
                        f"N_y={physics.N_y.item():.2f}, N_z={physics.N_z.item():.2f}")
-    elif 'physics_state_dict' not in checkpoint:
-        logger.warning("⚠️ No physics_state_dict in checkpoint (legacy checkpoint?)")
-        if physics_type == 'vs_pinn_channel_flow':
-            logger.warning("⚠️ Using default VS-PINN scaling parameters - predictions may be incorrect!")
+    elif physics is not None and physics_type == 'vs_pinn_channel_flow':
+        raise KeyError("checkpoint missing VS-PINN 'physics_state_dict'")
     
     model.eval()
     return model, physics
@@ -321,17 +317,14 @@ def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray,
             pred = model(batch)
             
             # ✅ TASK-008: 反標準化回物理空間
-            if config is not None:
-                pred_physical = denormalize_output(
-                    pred.cpu().numpy(), 
-                    config, 
-                    output_norm_type='training_data_norm',
-                    verbose=False
-                )
-            else:
-                # 向後相容：無配置時不反標準化
-                logger.warning("⚠️ config 為 None，跳過反標準化（可能導致量級錯誤）")
-                pred_physical = pred.cpu().numpy()
+            if config is None:
+                raise ValueError("config is required for comprehensive evaluation to ensure proper denormalization")
+            pred_physical = denormalize_output(
+                pred.cpu().numpy(), 
+                config, 
+                output_norm_type='training_data_norm',
+                verbose=False
+            )
             
             u_list.append(pred_physical[:, 0])
             v_list.append(pred_physical[:, 1])

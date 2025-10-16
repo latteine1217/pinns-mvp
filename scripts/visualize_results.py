@@ -569,13 +569,14 @@ def main():
     # === 載入參考數據（完整場） ===
     logger.info("載入 JHTDB Channel Flow 完整場數據...")
     loader = ChannelFlowLoader(config_path=args.config)
-    channel_data = loader.load_full_field_data()
+    field_dataset = loader.load_full_field_data()
     
     # 取得完整場座標和數據
-    coords_full = torch.from_numpy(channel_data.sensor_points).float().to(device)
-    ref_u = torch.from_numpy(channel_data.sensor_data['u']).float().to(device)
-    ref_v = torch.from_numpy(channel_data.sensor_data['v']).float().to(device)
-    ref_p = torch.from_numpy(channel_data.sensor_data['p']).float().to(device)
+    coords_np, ref_fields = field_dataset.to_points(order=('x', 'y', 'z'))
+    coords_full = torch.from_numpy(coords_np).float().to(device)
+    ref_u = torch.from_numpy(ref_fields['u']).float().to(device)
+    ref_v = torch.from_numpy(ref_fields['v']).float().to(device)
+    ref_p = torch.from_numpy(ref_fields['p']).float().to(device)
     
     logger.info(f"完整場數據形狀: coords={coords_full.shape}, u={ref_u.shape}")
     

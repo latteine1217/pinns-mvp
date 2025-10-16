@@ -535,8 +535,10 @@ def create_default_config() -> Dict[str, Any]:
         'weighting': {
             'enabled': True,
             'strategies': ['gradnorm', 'adaptive'],
-            'gradnorm_alpha': 0.12,
-            'gradnorm_update_freq': 1000
+            'gradnorm': {
+                'alpha': 0.12,
+                'update_frequency': 1000
+            }
         },
         'priors': {
             'enabled': False,
@@ -546,10 +548,6 @@ def create_default_config() -> Dict[str, Any]:
             'symmetry_weight': 0.2
         }
     }
-
-
-# 向後相容性別名
-LossManager = CompleteLossManager
 
 
 __all__ = [
@@ -581,7 +579,6 @@ __all__ = [
     
     # 主要接口
     'CompleteLossManager',
-    'LossManager',
     'create_loss_manager',
     'create_default_config'
 ]

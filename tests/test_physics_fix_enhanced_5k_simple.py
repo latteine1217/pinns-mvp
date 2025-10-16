@@ -2,7 +2,7 @@
 單元測試：Enhanced 5K Curriculum 物理修正驗證 (簡化版)
 
 測試 TASK-ENHANCED-5K-PHYSICS-FIX 的兩項核心修正：
-- 修正 A1: PDE 損失雙重削弱問題（disable_extra_pde_division）
+- 修正 A1: PDE 損失雙重削弱問題（現已固定採用修正後行為）
 - 修正 A2: 邊界帶狀採樣策略（boundary_band_width）
 
 創建時間: 2025-10-15
@@ -19,25 +19,13 @@ def test_pde_loss_fix():
     
     from pinnx.physics.vs_pinn_channel_flow import VSPINNChannelFlow
     
-    # === 測試 1: 默認行為（新修正）===
-    # 使用直接參數方式（如 test_rans_integration.py）
-    physics_new = VSPINNChannelFlow()  # 使用默認配置
+    physics = VSPINNChannelFlow()  # 使用默認配置
     
-    assert hasattr(physics_new, 'disable_extra_pde_division'), \
-        "物理模組應包含 disable_extra_pde_division 屬性"
-    assert physics_new.disable_extra_pde_division is True, \
-        "默認應禁用額外 PDE 除法（修正後行為）"
-    print("✅ 測試 1 通過：默認禁用額外 PDE 除法")
+    assert not hasattr(physics, 'disable_extra_pde_division'), \
+        "legacy disable_extra_pde_division flag should be removed"
+    print("✅ 測試 1 通過：模組不再暴露 disable_extra_pde_division")
     
-    # === 測試 2: 顯式啟用舊行為（通過 loss_config 參數）===
-    loss_config_old = {'disable_extra_pde_division': False}
-    physics_old = VSPINNChannelFlow(loss_config=loss_config_old)
-    
-    assert physics_old.disable_extra_pde_division is False, \
-        "應允許顯式啟用舊行為（向後相容）"
-    print("✅ 測試 2 通過：可顯式啟用舊行為")
-    
-    # === 測試 3: 檢查 N_max_sq 計算 ===
+    # === 測試 2: 檢查 N_max_sq 計算 ===
     # 使用自定義縮放因子
     scaling_factors = {'N_x': 2.0, 'N_y': 12.0, 'N_z': 2.0}
     physics_custom = VSPINNChannelFlow(scaling_factors=scaling_factors)
@@ -52,23 +40,31 @@ def test_pde_loss_fix():
         actual_N_max_sq = physics_custom.N_max_sq
     assert abs(actual_N_max_sq - expected_N_max_sq) < 1e-5, \
         f"N_max_sq 應為 {expected_N_max_sq}，實際為 {actual_N_max_sq}"
-    print(f"✅ 測試 3 通過：N_max_sq = {actual_N_max_sq}")
+    print(f"✅ 測試 2 通過：N_max_sq = {actual_N_max_sq}")
     
-    # === 測試 4: 驗證修正後配置（模擬真實訓練場景）===
-    loss_config_fixed = {
-        'disable_extra_pde_division': True,
-        'warmup_epochs': 5
+    # === 測試 3: 驗證修正後縮放行為 ===
+    mock_losses = {
+        'momentum_x': torch.tensor(1.0),
+        'momentum_y': torch.tensor(1.0),
+        'momentum_z': torch.tensor(1.0),
+        'continuity': torch.tensor(1.0),
+        'data': torch.tensor(1.0),
+        'wall_constraint': torch.tensor(1.0)
     }
-    physics_fixed = VSPINNChannelFlow(
-        scaling_factors=scaling_factors,
-        loss_config=loss_config_fixed
-    )
+    normalized = physics_custom.normalize_loss(mock_losses)
+    expected = torch.tensor(1.0) / physics_custom.N_max_sq
+    for key in ['momentum_x', 'momentum_y', 'momentum_z', 'continuity']:
+        assert torch.isclose(normalized[key], expected, rtol=1e-5)
+    print("✅ 測試 3 通過：PDE 損失僅除以 N_max_sq")
     
-    assert physics_fixed.disable_extra_pde_division is True, \
-        "修正後配置應禁用額外 PDE 除法"
-    assert physics_fixed.warmup_epochs == 5, \
-        "warmup_epochs 應正確設為 5"
-    print("✅ 測試 4 通過：修正後配置正確應用")
+    # === 測試 4: 舊 key 立即報錯 ===
+    legacy_config = {'disable_extra_pde_division': False}
+    try:
+        VSPINNChannelFlow(scaling_factors=scaling_factors, loss_config=legacy_config)
+    except ValueError:
+        print("✅ 測試 4 通過：legacy disable_extra_pde_division 會被拒絕")
+    else:
+        raise AssertionError("legacy disable_extra_pde_division 應觸發 ValueError")
     
     return True
 
@@ -145,13 +141,11 @@ def test_config_integration():
     assert 'physics' in config, "配置應包含 physics 段落"
     assert 'vs_pinn' in config['physics'], "配置應包含 vs_pinn 段落"
     
-    # 驗證修正 A1 配置
+    # 驗證修正 A1 配置：不應再出現舊旗標
     loss_config = config['physics']['vs_pinn'].get('loss_config', {})
-    assert 'disable_extra_pde_division' in loss_config, \
-        "配置應包含 disable_extra_pde_division 參數"
-    assert loss_config['disable_extra_pde_division'] is True, \
-        "disable_extra_pde_division 應設為 True"
-    print(f"✅ 測試 1 通過：配置包含 disable_extra_pde_division = True")
+    assert 'disable_extra_pde_division' not in loss_config, \
+        "配置不應再包含 disable_extra_pde_division"
+    print("✅ 測試 1 通過：配置不包含 legacy disable_extra_pde_division")
     
     # 驗證修正 A2 配置（可選）
     boundary_config = config['physics']['vs_pinn'].get('boundary_config', {})
@@ -171,20 +165,9 @@ def test_config_integration():
 
 
 def test_backward_compatibility():
-    """測試向後相容性"""
+    """此功能已廢除，保留測試以提示更新"""
     print("\n【測試向後相容性】")
-    
-    from pinnx.physics.vs_pinn_channel_flow import VSPINNChannelFlow
-    
-    # 舊代碼方式：不提供 loss_config（應自動使用新默認值）
-    scaling_factors = {'N_x': 2.0, 'N_y': 12.0, 'N_z': 2.0}
-    physics = VSPINNChannelFlow(scaling_factors=scaling_factors)
-    
-    # 驗證默認行為（新修正）
-    assert physics.disable_extra_pde_division is True, \
-        "舊配置應自動採用新默認行為"
-    print("✅ 測試通過：舊配置自動採用新默認值（disable_extra_pde_division=True）")
-    
+    print("✅ legacy 模式已移除，請更新到最新配置格式")
     return True
 
 

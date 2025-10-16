@@ -89,32 +89,21 @@ class RWFLinear(nn.Module):
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
-        """
-        檢查點向後相容：自動轉換舊格式 (weight/bias) 到新格式 (V/s/bias)
-        
-        轉換規則：
-        - weight -> V (直接複製)
-        - s -> 初始化為 0（表示 exp(0)=1，無縮放）
-        - bias -> bias (直接複製)
-        
-        這允許舊的 nn.Linear 檢查點載入到 RWFLinear，並從訓練中學習最佳縮放。
-        """
-        # 檢查是否為舊格式（有 'weight' 鍵但沒有 'V' 鍵）
         weight_key = prefix + 'weight'
         v_key = prefix + 'V'
         s_key = prefix + 's'
-        
+
         if weight_key in state_dict and v_key not in state_dict:
-            # 舊格式轉換
-            print(f"  🔄 檢測到舊格式檢查點，轉換 {weight_key} -> {v_key}")
-            state_dict[v_key] = state_dict.pop(weight_key)
-            
-            # 初始化 s 為 0（無縮放）
-            if s_key not in state_dict:
-                state_dict[s_key] = torch.zeros(self.out_features, dtype=state_dict[v_key].dtype)
-                print(f"  ✨ 初始化 {s_key} = 0 (無縮放)")
-        
-        # 調用父類方法完成載入
+            raise KeyError(
+                f"Checkpoint contains legacy parameter '{weight_key}'. "
+                "Please migrate checkpoints to the new RWF format."
+            )
+        if s_key not in state_dict and v_key in state_dict:
+            raise KeyError(
+                f"Checkpoint missing required RWF parameter '{s_key}'. "
+                "Ensure the checkpoint was saved after the RWF migration."
+            )
+
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
                                       missing_keys, unexpected_keys, error_msgs)
     
@@ -332,6 +321,11 @@ class PINNNet(nn.Module):
         self.use_fourier = use_fourier
         self.use_input_projection = use_input_projection
         self.fourier_normalize_input = fourier_normalize_input
+        self._fourier_norm_type: Optional[str] = None
+        self._fourier_shift: Optional[torch.Tensor] = None
+        self._fourier_scale: Optional[torch.Tensor] = None
+        self._fourier_feature_range: Optional[torch.Tensor] = None
+        self._fourier_range: Optional[torch.Tensor] = None
         
         # 🔧 註冊輸入縮放因子（用於 VS-PINN 的標準化補償）
         if input_scale_factors is not None:
@@ -401,27 +395,22 @@ class PINNNet(nn.Module):
         """
         # 🔧 修復：若啟用標準化且輸入已被 VS-PINN 縮放，先還原到 [-1, 1] 範圍
         if self.use_fourier and self.fourier is not None:
+            x_fourier = x
+            if self._fourier_norm_type is not None:
+                x_fourier = self._apply_fourier_inverse_normalizer(x_fourier)
+            
             if self.fourier_normalize_input:
-                # 方法 1: 使用顯式縮放因子（若提供）
                 if self.input_scale_factors is not None:
-                    x_normalized = x / self.input_scale_factors
+                    x_fourier = x_fourier / self.input_scale_factors
                 else:
-                    # 方法 2: 自動檢測（啟發式）
-                    # 假設物理座標在 [-1, 1] 或 [0, 1] 範圍，若超出則需標準化
-                    x_abs_max = x.abs().max()
-                    if x_abs_max > 2.0:  # 檢測到異常範圍（VS-PINN 縮放的跡象）
-                        # 使用實際範圍標準化到 [-1, 1]
-                        x_min = x.min(dim=0, keepdim=True).values
-                        x_max = x.max(dim=0, keepdim=True).values
+                    x_abs_max = x_fourier.abs().max()
+                    if x_abs_max > 2.0:
+                        x_min = x_fourier.min(dim=0, keepdim=True).values
+                        x_max = x_fourier.max(dim=0, keepdim=True).values
                         x_range = x_max - x_min
-                        x_normalized = 2.0 * (x - x_min) / (x_range + 1e-8) - 1.0
-                    else:
-                        x_normalized = x
-                
-                h = self.fourier(x_normalized)
-            else:
-                # 不標準化，直接使用原始輸入（可能導致 VS-PINN 問題）
-                h = self.fourier(x)
+                        x_fourier = 2.0 * (x_fourier - x_min) / (x_range + 1e-8) - 1.0
+            
+            h = self.fourier(x_fourier)
         else:
             h = x
         
@@ -438,6 +427,95 @@ class PINNNet(nn.Module):
         output = self.output_layer(h)
         
         return output
+    
+    def _apply_fourier_inverse_normalizer(self, x: torch.Tensor) -> torch.Tensor:
+        if self._fourier_norm_type is None:
+            return x
+        
+        if self._fourier_norm_type == 'standard':
+            if self._fourier_scale is not None:
+                x = x * self._fourier_scale
+            if self._fourier_shift is not None:
+                x = x + self._fourier_shift
+            return x
+        
+        if self._fourier_norm_type in ('minmax', 'channel_flow'):
+            if (
+                self._fourier_feature_range is not None and
+                self._fourier_range is not None and
+                self._fourier_shift is not None
+            ):
+                lo, hi = self._fourier_feature_range[0], self._fourier_feature_range[1]
+                scale = hi - lo
+                x = (x - lo) / (scale + 1e-8)
+                x = x * self._fourier_range + self._fourier_shift
+            return x
+        
+        return x
+    
+    def configure_fourier_input(self, metadata: Dict[str, Any]) -> None:
+        """
+        Configure inverse-normalization for Fourier features using input normalizer stats.
+        """
+        if not self.use_fourier or self.fourier is None:
+            return
+        
+        norm_type = metadata.get('norm_type', 'none')
+        if norm_type in ('none', 'identity', None):
+            self._fourier_norm_type = None
+            self._fourier_shift = None
+            self._fourier_scale = None
+            self._fourier_feature_range = None
+            self._fourier_range = None
+            return
+        
+        device = next(self.parameters()).device if any(p.requires_grad for p in self.parameters()) else torch.device('cpu')
+        dtype = next(self.parameters()).dtype if any(p.requires_grad for p in self.parameters()) else torch.float32
+        
+        def _prepare(t: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+            if t is None:
+                return None
+            return t.to(device=device, dtype=dtype)
+        
+        self._fourier_norm_type = norm_type
+        
+        if norm_type == 'standard':
+            self._fourier_shift = _prepare(metadata.get('mean'))
+            self._fourier_scale = _prepare(metadata.get('std'))
+            if self._fourier_scale is not None:
+                self._fourier_scale = torch.clamp(self._fourier_scale, min=1e-8)
+            self._fourier_feature_range = None
+            self._fourier_range = None
+        
+        elif norm_type in ('minmax', 'channel_flow'):
+            feature_range = metadata.get('feature_range')
+            data_min = metadata.get('data_min')
+            data_range = metadata.get('data_range')
+            bounds = metadata.get('bounds')
+            
+            if data_min is None and bounds is not None:
+                data_min = bounds[:, 0].unsqueeze(0)
+            if data_range is None and bounds is not None:
+                data_range = (bounds[:, 1] - bounds[:, 0]).unsqueeze(0)
+            
+            self._fourier_shift = _prepare(data_min)
+            prepared_range = _prepare(data_range)
+            if prepared_range is not None:
+                self._fourier_range = torch.clamp(prepared_range, min=1e-8)
+            else:
+                self._fourier_range = None
+            
+            feature_tensor = feature_range.to(device=device, dtype=dtype) if isinstance(feature_range, torch.Tensor) else torch.tensor(feature_range, device=device, dtype=dtype)
+            self._fourier_feature_range = feature_tensor
+            self._fourier_scale = None
+        
+        else:
+            # 無法識別的類型：視為無需處理
+            self._fourier_norm_type = None
+            self._fourier_shift = None
+            self._fourier_scale = None
+            self._fourier_feature_range = None
+            self._fourier_range = None
     
     def get_num_params(self) -> int:
         """返回模型參數總數"""
@@ -637,12 +715,6 @@ def create_enhanced_pinn(**kwargs) -> PINNNet:
     return PINNNet(**defaults)
 
 
-# 向後相容的別名
-def fourier_pinn(in_dim: int = 3, out_dim: int = 4, **kwargs) -> PINNNet:
-    """快速建立標準 Fourier PINN 模型"""
-    return PINNNet(in_dim=in_dim, out_dim=out_dim, **kwargs)
-
-
 def multiscale_pinn(in_dim: int = 3, out_dim: int = 4, **kwargs) -> MultiScalePINNNet:
     """快速建立多尺度 PINN 模型"""
     return MultiScalePINNNet(in_dim=in_dim, out_dim=out_dim, **kwargs)
@@ -702,10 +774,6 @@ def init_siren_weights(model: PINNNet) -> None:
                 print(f"⚠️  未知的線性層類型: {type(first_linear)}")
         else:
             print("⚠️  模型未使用 Sine 激活，跳過 SIREN 初始化")
-
-
-# 向後相容：EnhancedPINNNet 別名
-EnhancedPINNNet = create_enhanced_pinn
 
 
 if __name__ == "__main__":

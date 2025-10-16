@@ -52,10 +52,11 @@ def verify_remaining_hypotheses(checkpoint_path, config_path):
     loader = ChannelFlowLoader(config_path=config_path)
     
     # 全場數據
-    channel_data = loader.load_full_field_data()
-    full_coords = torch.from_numpy(channel_data.sensor_points).float().to(device)
-    full_u = torch.from_numpy(channel_data.sensor_data['u']).float().to(device)
-    full_v = torch.from_numpy(channel_data.sensor_data['v']).float().to(device)
+    field_dataset = loader.load_full_field_data()
+    full_coords_np, full_fields = field_dataset.to_points(order=('x', 'y', 'z'))
+    full_coords = torch.from_numpy(full_coords_np).float().to(device)
+    full_u = torch.from_numpy(full_fields['u']).float().to(device)
+    full_v = torch.from_numpy(full_fields['v']).float().to(device)
     
     print(f"  ✓ 全場數據點數: {full_coords.shape[0]}")
     
@@ -82,7 +83,8 @@ def verify_remaining_hypotheses(checkpoint_path, config_path):
     high_speed_threshold = 12.0
     
     if sensor_data_with_prior.has_lowfi_prior():
-        prior_fields = sensor_data_with_prior.lowfi_prior
+        prior_samples = sensor_data_with_prior.lowfi_prior
+        prior_fields = prior_samples.values if prior_samples is not None else {}
         if prior_fields is not None and isinstance(prior_fields, dict):
             print(f"  ✓ 載入了先驗場: {list(prior_fields.keys())}")
             

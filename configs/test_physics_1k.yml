@@ -103,7 +103,6 @@ physics:
     
     # PDE 損失修正
     loss_config:
-      disable_extra_pde_division: true
       warmup_epochs: 5
     
     # 邊界採樣策略

@@ -290,29 +290,23 @@ class TestLoadCheckpoint:
         with pytest.raises(RuntimeError):
             load_checkpoint(saved_path, wrong_model)
     
-    def test_load_legacy_checkpoint_without_config(self, model_and_optimizer, temp_checkpoint_dir):
-        """測試載入舊版檢查點（不包含 config）"""
+    def test_load_checkpoint_missing_metadata_raises(self, model_and_optimizer, temp_checkpoint_dir):
+        """測試缺少必要欄位的檢查點會被拒絕"""
         model, optimizer = model_and_optimizer
         
-        # 手動創建舊版檢查點（不含 config）
         legacy_checkpoint = {
             'epoch': 50,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': 0.5
-            # 注意：沒有 'config' 鍵
         }
         
         legacy_path = Path(temp_checkpoint_dir) / "legacy_checkpoint.pth"
         torch.save(legacy_checkpoint, legacy_path)
         
-        # 載入應成功，但 config 返回 None
         new_model = SimpleModel()
-        epoch, loss, config = load_checkpoint(str(legacy_path), new_model)
-        
-        assert epoch == 50
-        assert loss == 0.5
-        assert config is None  # 舊版檢查點沒有 config
+        with pytest.raises(KeyError):
+            load_checkpoint(str(legacy_path), new_model)
 
 
 class TestCheckpointIntegration:

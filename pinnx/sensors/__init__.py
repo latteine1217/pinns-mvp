@@ -28,12 +28,35 @@ from .qr_pivot import (
     create_sensor_selector
 )
 
+from .field_selector import (
+    FieldSensorSelector,
+    FieldSensorSelection,
+    FieldSensorMetadata,
+    FeatureScaling
+)
+
+from .stratified_sampling import (
+    StratifiedChannelFlowSelector,
+    HybridChannelFlowSelector,
+    compare_sensor_strategies
+)
+
 __all__ = [
+    # QR-Pivot 系列
     'QRPivotSelector',
     'PODBasedSelector', 
     'GreedySelector',
     'MultiObjectiveSelector',
     'SensorOptimizer',
     'evaluate_sensor_placement',
-    'create_sensor_selector'
+    'create_sensor_selector',
+    'FieldSensorSelector',
+    'FieldSensorSelection',
+    'FieldSensorMetadata',
+    'FeatureScaling',
+    
+    # 分層採樣系列
+    'StratifiedChannelFlowSelector',
+    'HybridChannelFlowSelector',
+    'compare_sensor_strategies'
 ]

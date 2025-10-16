@@ -20,8 +20,11 @@ from pinnx.losses.priors import (
     physics_constraint_loss, energy_conservation_loss
 )
 from pinnx.losses.weighting import (
-    GradNorm, NTKWeighting, AdaptiveWeighting,
-    CausalWeighting, MultiObjectiveWeighting
+    GradNormWeighter,
+    NTKWeighter,
+    AdaptiveWeightScheduler,
+    CausalWeighter,
+    MultiWeightManager,
 )
 
 
@@ -280,31 +283,60 @@ class TestWeightingStrategies:
     def test_gradnorm_weighting(self):
         """測試 GradNorm 權重策略"""
         loss_names = ['data', 'pde', 'boundary']
-        gradnorm = GradNorm(
+        gradnorm = GradNormWeighter(
             self.model, loss_names, 
-            alpha=0.9, target_ratios=[1.0, 1.0, 0.5]
+            alpha=0.9, target_ratios=[1.0, 1.0, 0.5], update_frequency=1
         )
         
         # 模擬損失
+        x = torch.randn(16, 2, device=self.device)
+        output = self.model(x)
         losses = {
-            'data': torch.tensor(0.5, device=self.device),
-            'pde': torch.tensor(1.2, device=self.device),
-            'boundary': torch.tensor(0.3, device=self.device)
+            'data': (output[:, 0] ** 2).mean(),
+            'pde': (output[:, 1] - 1.0).pow(2).mean(),
+            'boundary': output[:, 2].abs().mean()
         }
         
-        # 計算總損失以觸發梯度計算
-        total_loss = sum(losses.values())
-        
-        # 更新權重
-        weights = gradnorm.update_weights(losses, total_loss)
+        weights = gradnorm.update_weights(losses, sum(losses.values()))
         
         assert len(weights) == len(loss_names)
         assert all(w > 0 for w in weights.values())
         assert all(loss_name in weights for loss_name in loss_names)
     
+    def test_gradnorm_weight_sum_and_ratio(self):
+        """GradNorm 權重應維持總和恆定且比例受限"""
+        loss_names = ['data', 'pde', 'boundary']
+        gradnorm = GradNormWeighter(
+            self.model,
+            loss_names,
+            alpha=0.5,
+            update_frequency=1,
+            max_ratio=20.0
+        )
+        
+        initial_sum = sum(gradnorm.initial_weight_values.values())
+        
+        x = torch.randn(24, 2, device=self.device)
+        output = self.model(x)
+        
+        losses = {
+            'data': (output[:, 0] ** 2).mean(),
+            'pde': (output[:, 1] - 2.0).pow(2).mean(),
+            'boundary': torch.relu(output[:, 2]).mean()
+        }
+        
+        weights = gradnorm.update_weights(losses, sum(losses.values()))
+        
+        total_weight = sum(weights.values())
+        assert pytest.approx(total_weight, rel=1e-3) == initial_sum
+        
+        max_w = max(weights.values())
+        min_w = min(weights.values())
+        assert max_w / max(min_w, 1e-12) <= gradnorm.max_ratio + 1e-6
+    
     def test_ntk_weighting(self):
         """測試 NTK 權重策略"""
-        ntk = NTKWeighting(self.model, update_freq=100, reg_param=1e-6)
+        ntk = NTKWeighter(self.model, update_freq=100, reg_param=1e-6)
         
         # 模擬訓練點
         x_train = torch.randn(20, 2, device=self.device)
@@ -322,7 +354,7 @@ class TestWeightingStrategies:
     
     def test_adaptive_weighting(self):
         """測試自適應權重策略"""
-        adaptive = AdaptiveWeighting(
+        adaptive = AdaptiveWeightScheduler(
             loss_names=['residual', 'data', 'prior'],
             adaptation_method='exponential',
             adaptation_rate=0.1
@@ -343,7 +375,7 @@ class TestWeightingStrategies:
     
     def test_causal_weighting(self):
         """測試因果權重策略"""
-        causal = CausalWeighting(
+        causal = CausalWeighter(
             time_window=5, causality_strength=1.0,
             temporal_decay=0.9
         )
@@ -357,7 +389,7 @@ class TestWeightingStrategies:
             torch.tensor(0.7, device=self.device)
         ]
         
-        weights = causal.compute_temporal_weights(time_losses)
+        weights = causal.compute_causal_weights(time_losses)
         
         assert len(weights) == len(time_losses)
         assert all(w > 0 for w in weights)
@@ -368,7 +400,7 @@ class TestWeightingStrategies:
     def test_multiobjective_weighting(self):
         """測試多目標權重策略"""
         objectives = ['accuracy', 'smoothness', 'physics']
-        moo = MultiObjectiveWeighting(
+        moo = MultiWeightManager(
             objectives, method='pareto',
             preference_weights=[0.5, 0.3, 0.2]
         )
@@ -438,7 +470,7 @@ def test_losses_integration():
     
     # 權重策略
     model = torch.nn.Linear(2, 3).to(device)
-    gradnorm = GradNorm(model, list(losses.keys()), alpha=0.9)
+    gradnorm = GradNormWeighter(model, list(losses.keys()), alpha=0.9)
     
     total_loss = sum(losses.values())
     weights = gradnorm.update_weights(losses, total_loss)
