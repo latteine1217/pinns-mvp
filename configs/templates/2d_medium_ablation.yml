@@ -112,7 +112,6 @@ physics:
       N_z: 2.0
     
     loss_config:
-      disable_extra_pde_division: true
       warmup_epochs: 5
     
     boundary_config:
