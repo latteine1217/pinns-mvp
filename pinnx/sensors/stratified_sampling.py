@@ -248,11 +248,15 @@ class StratifiedChannelFlowSelector:
             'complete': bool(has_wall and has_log and has_core)
         }
         
-        # 條件數（穩定性）
+        # 條件數（穩定性）- 使用速度場條件數而非 Gram 矩陣
         try:
             selected_data = field_data[selected_indices, :]
-            gram = selected_data @ selected_data.T
-            cond = np.linalg.cond(gram + 1e-12 * np.eye(len(selected_indices)))
+            # 使用 SVD 計算速度場條件數（避免低秩 Gram 矩陣的數值誤差放大）
+            s = np.linalg.svd(selected_data, compute_uv=False)
+            if s[-1] > 1e-15:
+                cond = s[0] / s[-1]
+            else:
+                cond = np.inf
             metrics['condition_number'] = float(cond)
         except:
             metrics['condition_number'] = np.inf

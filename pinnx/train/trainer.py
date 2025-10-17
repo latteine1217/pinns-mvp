@@ -64,6 +64,7 @@ class Trainer:
         weighters: Optional[Dict[str, Any]] = None,
         input_normalizer: Optional[InputNormalizer] = None,
         channel_data_cache: Optional[Dict[str, Any]] = None,
+        training_data: Optional[Dict[str, torch.Tensor]] = None,
     ):
         """
         初始化訓練器
@@ -77,6 +78,7 @@ class Trainer:
             weighters: 損失權重器字典（可選）
             input_normalizer: 輸入標準化器（可選）
             channel_data_cache: 通道流資料快取（可選）
+            training_data: 訓練資料（用於自動計算標準化統計量，可選）
         """
         self.model = model
         self.physics = physics
@@ -94,8 +96,12 @@ class Trainer:
         self.physics_type = config.get('physics', {}).get('type', '')
         self.is_vs_cfg = self.physics_type == 'vs_pinn_channel_flow'
         
-        # ✅ TASK-008: 初始化輸出變量標準化器
-        self.data_normalizer = DataNormalizer.from_config(config)
+        # ⭐ Phase 5: 檢測模型實際輸入維度（支援 2D/3D 混合配置）
+        self.model_input_dim = self._detect_model_input_dim(model, config)
+        logging.info(f"🔍 檢測到模型輸入維度: {self.model_input_dim}D")
+        
+        # ✅ TASK-008: 初始化輸出變量標準化器（傳遞 training_data 以支援自動計算統計量）
+        self.data_normalizer = DataNormalizer.from_config(config, training_data=training_data)
         logging.info(f"📐 DataNormalizer 初始化: {self.data_normalizer}")
         
         # 訓練狀態
@@ -135,6 +141,39 @@ class Trainer:
         self._configure_input_transform()
         
         logging.info(f"✅ Trainer 初始化完成（設備: {device}）")
+    
+    def _detect_model_input_dim(self, model: nn.Module, config: Dict[str, Any]) -> int:
+        """
+        檢測模型的實際輸入維度
+        
+        優先級：
+        1. 配置文件中的 model.in_dim
+        2. 模型 wrapper 的 input_min 長度（ManualScalingWrapper）
+        3. 基礎模型的 in_dim 屬性
+        4. 回退到物理配置的域維度檢測
+        
+        Returns:
+            int: 模型輸入維度（2 或 3）
+        """
+        # 優先：從配置文件讀取
+        model_cfg = config.get('model', {})
+        if 'in_dim' in model_cfg:
+            return int(model_cfg['in_dim'])
+        
+        # 次要：從 ManualScalingWrapper 讀取
+        if hasattr(model, 'input_min'):
+            return model.input_min.numel()
+        
+        # 第三：從基礎模型讀取
+        base_model = model.base_model if hasattr(model, 'base_model') else model
+        if hasattr(base_model, 'in_dim'):
+            return int(base_model.in_dim)
+        
+        # 回退：從物理配置推斷
+        domain_cfg = config.get('physics', {}).get('domain', {})
+        if 'z_range' in domain_cfg:
+            return 3
+        return 2
     
     def _configure_input_transform(self) -> None:
         """Propagate input normalization metadata to the model if needed."""
@@ -523,7 +562,8 @@ class Trainer:
         """
         self.optimizer.zero_grad()
         
-        # 檢查是否為 VS-PINN（3D）還是標準 PINN（2D）
+        # ⭐ Phase 5: 檢查是否為 VS-PINN 物理（用於選擇對應的殘差計算方法）
+        # 注意：座標維度已由 self.model_input_dim 控制，此 flag 僅用於 physics API 選擇
         is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
         
         # ==================== 輔助函數 ====================
@@ -560,8 +600,8 @@ class Trainer:
             return coords_physical, coords_norm, model_coords
         
         # ==================== 1. PDE 殘差損失 ====================
-        # 組合 PDE 點座標
-        if is_vs_pinn:
+        # 組合 PDE 點座標（使用模型實際輸入維度）
+        if self.model_input_dim == 3:
             coords_pde = torch.cat([data_batch['x_pde'], data_batch['y_pde'], data_batch['z_pde']], dim=1)
         else:
             coords_pde = torch.cat([data_batch['x_pde'], data_batch['y_pde']], dim=1)
@@ -631,8 +671,16 @@ class Trainer:
                     'continuity': continuity_residual,
                 }
             else:
-                # 標準 NS 2D
-                residuals = self.physics.residual(coords_pde_physical, velocity_phys, pressure_phys)
+                # 標準 NS 2D：需要 2D 座標 [x, y] + 完整 pred 張量 [u, v, p, S]
+                # ⚠️ 修復：只傳遞前 2D 座標給 2D 物理模組
+                coords_pde_2d = coords_pde_physical[:, :2]  # 取 [x, y]，忽略 z
+                
+                # 構建完整預測張量 [u, v, p, S]（NS 2D 需要 4 個分量）
+                source_term_phys = torch.zeros_like(pressure_phys)  # 假設源項為 0
+                pred_full_phys = torch.cat([velocity_phys, pressure_phys, source_term_phys], dim=1)
+                
+                # 調用 NSEquations2D.residual_unified() 方法
+                residuals = self.physics.residual_unified(coords_pde_2d, pred_full_phys)
             
             # 應用點權重（如果存在）
             pde_point_weights = data_batch.get('pde_point_weights', None)
@@ -659,7 +707,8 @@ class Trainer:
         # 2. 訓練過程中的診斷與監控
         
         # ==================== 2. 壁面邊界條件損失 ====================
-        if is_vs_pinn:
+        # 組合邊界條件座標（使用模型實際輸入維度）
+        if self.model_input_dim == 3:
             coords_bc = torch.cat([data_batch['x_bc'], data_batch['y_bc'], data_batch['z_bc']], dim=1)
         else:
             coords_bc = torch.cat([data_batch['x_bc'], data_batch['y_bc']], dim=1)
@@ -689,7 +738,8 @@ class Trainer:
                 logging.warning(f"⚠️ 未檢測到壁面邊界點！y_bc 範圍: [{y_bc.min():.6f}, {y_bc.max():.6f}]")
         
         # ==================== 3. 資料監督損失 ====================
-        if is_vs_pinn:
+        # 組合感測器座標（使用模型實際輸入維度）
+        if self.model_input_dim == 3:
             coords_sensors = torch.cat([data_batch['x_sensors'], data_batch['y_sensors'], data_batch['z_sensors']], dim=1)
         else:
             coords_sensors = torch.cat([data_batch['x_sensors'], data_batch['y_sensors']], dim=1)
@@ -717,14 +767,25 @@ class Trainer:
         u_loss = torch.mean((u_sensors_pred_phys[:, 0:1] - u_true)**2)
         v_loss = torch.mean((u_sensors_pred_phys[:, 1:2] - v_true)**2)
         
-        # w 分量損失（僅 3D）
-        if w_true is not None:
+        # ⭐ Phase 5: 根據資料與模型維度動態選擇損失計算
+        # 檢查 w 分量是否存在且有效（非空張量）
+        has_w_data = w_true is not None and w_true.numel() > 0
+        model_has_w = u_sensors_pred_phys.shape[1] >= 4  # 模型輸出至少 4 個分量
+        
+        if has_w_data and model_has_w:
+            # 完整 3D 模式：u, v, w, p
             w_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - w_true)**2)
             pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true)**2)
             velocity_loss = u_loss + v_loss + w_loss
-        else:
+        elif model_has_w and not has_w_data:
+            # 混合模式：模型輸出 4D 但資料僅有 3D（忽略 w 預測）
             w_loss = torch.tensor(0.0, device=u_loss.device)
-            pressure_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - p_true)**2)
+            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true)**2)  # ⚠️ 壓力在 index 3
+            velocity_loss = u_loss + v_loss
+        else:
+            # 標準 2D 模式：u, v, p
+            w_loss = torch.tensor(0.0, device=u_loss.device)
+            pressure_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - p_true)**2)  # 壓力在 index 2
             velocity_loss = u_loss + v_loss
         
         data_loss = velocity_loss + pressure_loss

@@ -40,121 +40,6 @@ class BaseScaler(ABC, nn.Module):
         """擬合並轉換資料"""
         return self.fit(data).transform(data)
 
-class StandardScaler(BaseScaler):
-    """
-    標準化尺度器: x_norm = (x - μ) / σ
-    使用均值和標準差進行標準化
-    """
-    
-    def __init__(self, learnable: bool = False):
-        super().__init__()
-        self.learnable = learnable
-        self.fitted = False
-        
-    def fit(self, data: torch.Tensor) -> 'StandardScaler':
-        """
-        根據資料計算均值和標準差
-        
-        Args:
-            data: 輸入資料 [batch_size, feature_dim]
-        """
-        with torch.no_grad():
-            mean = torch.mean(data, dim=0, keepdim=True)
-            std = torch.std(data, dim=0, keepdim=True)
-            
-            # 避免除零錯誤
-            std = torch.where(std < 1e-8, torch.ones_like(std), std)
-        
-        # 註冊參數 (可學習或固定)
-        self.register_parameter(
-            'mean', 
-            nn.Parameter(mean, requires_grad=self.learnable)
-        )
-        self.register_parameter(
-            'std',
-            nn.Parameter(std, requires_grad=self.learnable)  
-        )
-        
-        self.fitted = True
-        return self
-    
-    def transform(self, data: torch.Tensor) -> torch.Tensor:
-        """標準化轉換"""
-        if not self.fitted:
-            raise RuntimeError("尺度器尚未擬合，請先調用 fit() 方法")
-        
-        return (data - self.mean) / self.std
-    
-    def inverse_transform(self, data: torch.Tensor) -> torch.Tensor:
-        """逆標準化轉換"""
-        if not self.fitted:
-            raise RuntimeError("尺度器尚未擬合，請先調用 fit() 方法")
-        
-        return data * self.std + self.mean
-
-class MinMaxScaler(BaseScaler):
-    """
-    最大最小值尺度器: x_norm = (x - min) / (max - min)
-    將資料縮放到 [0, 1] 範圍
-    """
-    
-    def __init__(self, feature_range: Tuple[float, float] = (0.0, 1.0), 
-                 learnable: bool = False):
-        super().__init__()
-        self.feature_range = feature_range
-        self.learnable = learnable  
-        self.fitted = False
-        
-    def fit(self, data: torch.Tensor) -> 'MinMaxScaler':
-        """根據資料計算最大最小值"""
-        with torch.no_grad():
-            data_min = torch.min(data, dim=0, keepdim=True)[0]
-            data_max = torch.max(data, dim=0, keepdim=True)[0]
-            
-            # 避免除零錯誤
-            data_range = data_max - data_min
-            data_range = torch.where(
-                data_range < 1e-8, 
-                torch.ones_like(data_range), 
-                data_range
-            )
-        
-        self.register_parameter(
-            'data_min',
-            nn.Parameter(data_min, requires_grad=self.learnable)
-        )
-        self.register_parameter(
-            'data_range', 
-            nn.Parameter(data_range, requires_grad=self.learnable)
-        )
-        
-        self.fitted = True
-        return self
-        
-    def transform(self, data: torch.Tensor) -> torch.Tensor:
-        """最大最小值標準化"""
-        if not self.fitted:
-            raise RuntimeError("尺度器尚未擬合")
-            
-        # 標準化到 [0, 1]
-        normalized = (data - self.data_min) / self.data_range
-        
-        # 縮放到指定範圍
-        scale = self.feature_range[1] - self.feature_range[0]
-        return normalized * scale + self.feature_range[0]
-    
-    def inverse_transform(self, data: torch.Tensor) -> torch.Tensor:
-        """逆最大最小值標準化"""
-        if not self.fitted:
-            raise RuntimeError("尺度器尚未擬合")
-            
-        # 從指定範圍縮放回 [0, 1]
-        scale = self.feature_range[1] - self.feature_range[0]
-        normalized = (data - self.feature_range[0]) / scale
-        
-        # 逆標準化到原始範圍
-        return normalized * self.data_range + self.data_min
-
 class VSScaler(BaseScaler):
     """
     VS-PINN 變數尺度器
@@ -283,7 +168,7 @@ class VSScaler(BaseScaler):
 
 def create_scaler_from_data(input_data: torch.Tensor,
                           output_data: Optional[torch.Tensor] = None,
-                          scaler_type: str = "standard",
+                          scaler_type: str = "vs",
                           learnable: bool = False,
                           **kwargs) -> BaseScaler:
     """
@@ -292,21 +177,28 @@ def create_scaler_from_data(input_data: torch.Tensor,
     Args:
         input_data: 輸入資料
         output_data: 輸出資料 (可選)
-        scaler_type: 尺度器類型 ("standard", "minmax", "vs")
+        scaler_type: 尺度器類型 (僅支援 "vs")
         learnable: 是否可學習
         **kwargs: 額外參數
         
     Returns:
         已擬合的尺度器
+        
+    Note:
+        StandardScaler 和 MinMaxScaler 已棄用。
+        請使用 pinnx.utils.normalization.UnifiedNormalizer 進行資料預處理。
     """
     if scaler_type == "standard":
-        scaler = StandardScaler(learnable=learnable)
-        scaler.fit(input_data)
+        raise ValueError(
+            "StandardScaler is deprecated. Use pinnx.utils.normalization.UnifiedNormalizer "
+            "with mode='training_data_norm' for data preprocessing."
+        )
         
     elif scaler_type == "minmax":
-        feature_range = kwargs.get('feature_range', (0.0, 1.0))
-        scaler = MinMaxScaler(feature_range=feature_range, learnable=learnable)
-        scaler.fit(input_data)
+        raise ValueError(
+            "MinMaxScaler is deprecated. Use pinnx.utils.normalization.UnifiedNormalizer "
+            "with custom min/max ranges if needed."
+        )
         
     elif scaler_type == "vs":
         input_dim = input_data.shape[1]
@@ -322,7 +214,7 @@ def create_scaler_from_data(input_data: torch.Tensor,
         scaler.fit(input_data, output_data)
         
     else:
-        raise ValueError(f"不支援的尺度器類型: {scaler_type}")
+        raise ValueError(f"不支援的尺度器類型: {scaler_type}。僅支援 'vs'。")
     
     return scaler
 
@@ -336,12 +228,16 @@ def denormalize_gradients(gradients: torch.Tensor,
     
     Args:
         gradients: 標準化空間的梯度
-        scaler: 使用的尺度器
+        scaler: 使用的尺度器（僅支援 VSScaler）
         input_coords: 輸入座標
         output_vars: 輸出變數
         
     Returns:
         物理空間的梯度
+        
+    Note:
+        StandardScaler 和 MinMaxScaler 已棄用。
+        現在僅支援 VSScaler 的梯度反標準化。
     """
     if isinstance(scaler, VSScaler):
         # VS-PINN 梯度變換
@@ -352,18 +248,13 @@ def denormalize_gradients(gradients: torch.Tensor,
         scale_factor = output_scale / input_scale
         physical_gradients = gradients * scale_factor
         
-    elif isinstance(scaler, StandardScaler):
-        # 標準尺度器梯度變換
-        scale_factor = scaler.std  # 只考慮標準差縮放
-        physical_gradients = gradients / scale_factor
-        
-    elif isinstance(scaler, MinMaxScaler):
-        # 最大最小值尺度器梯度變換
-        scale_factor = scaler.data_range
-        physical_gradients = gradients * scale_factor
-        
     else:
-        # 如果不是已知的尺度器，返回原始梯度
+        # 如果不是 VSScaler，返回原始梯度（或拋出警告）
+        import warnings
+        warnings.warn(
+            f"denormalize_gradients() 僅支援 VSScaler，收到 {type(scaler).__name__}。"
+            "返回未修改的梯度。建議使用 VSScaler 或在資料預處理階段處理標準化。"
+        )
         physical_gradients = gradients
     
     return physical_gradients

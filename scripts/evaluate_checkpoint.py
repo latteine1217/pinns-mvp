@@ -42,20 +42,35 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
     if 'config' in ckpt:
         print(f"  配置已嵌入: ✅")
     
-    # 建立模型
+    # 建立模型（使用 factory 以支援所有模型類型）
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
     
-    # 從配置或檢查點中獲取模型參數
-    model_cfg = ckpt.get('config', {}).get('model', cfg.get('model', {}))
+    # 從配置或檢查點中獲取完整配置（優先檢查點內嵌配置）
+    if 'config' in ckpt:
+        full_cfg = ckpt['config']
+        print("  使用檢查點內嵌配置")
+    else:
+        full_cfg = cfg
+        print("  使用外部配置文件")
     
-    model = PINNNet(
-        in_dim=model_cfg.get('in_dim', 2),
-        out_dim=model_cfg.get('out_dim', 3),
-        width=model_cfg.get('width', 128),
-        depth=model_cfg.get('depth', 6),
-        fourier_m=model_cfg.get('fourier_m', 32),
-        fourier_sigma=model_cfg.get('fourier_sigma', 1.0)
-    ).to(device)
+    model_cfg = full_cfg.get('model', {})
+    
+    # 使用 factory 創建模型
+    from pinnx.train.factory import create_model
+    try:
+        model = create_model(full_cfg, device)
+        print(f"✅ 模型已創建（類型: {type(model).__name__}，設備: {device}）")
+    except Exception as e:
+        print(f"❌ 使用 factory 創建模型失敗: {e}")
+        print("⚠️  回退到簡單 PINNNet...")
+        model = PINNNet(
+            in_dim=model_cfg.get('in_dim', 2),
+            out_dim=model_cfg.get('out_dim', 3),
+            width=model_cfg.get('width', 128),
+            depth=model_cfg.get('depth', 6),
+            fourier_m=model_cfg.get('fourier_m', 32),
+            fourier_sigma=model_cfg.get('fourier_sigma', 1.0)
+        ).to(device)
     
     # 載入權重
     if 'model_state_dict' in ckpt:
@@ -66,42 +81,17 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
         print("⚠️  無法找到模型權重")
         return
     
-    # 檢測是否包含 ManualScalingWrapper 的緩衝區
-    has_scaling_buffers = any(k in state_dict for k in ['input_min', 'input_max', 'output_min', 'output_max'])
-    has_base_prefix = any(k.startswith('base_model.') for k in state_dict.keys())
-    
-    if has_scaling_buffers:
-        print("  檢測到尺度化緩衝區，使用 ManualScalingWrapper...")
-        # 建立佔位範圍（會被 state_dict 覆蓋）
-        in_dim = model_cfg.get('in_dim', 2)
-        out_dim = model_cfg.get('out_dim', 3)
-        in_ranges = {f'in_{i}': (0.0, 1.0) for i in range(in_dim)}
-        out_ranges = {f'out_{i}': (0.0, 1.0) for i in range(out_dim)}
-        
-        wrapper = ManualScalingWrapper(base_model=model, input_ranges=in_ranges, output_ranges=out_ranges).to(device)
-        
-        # 處理鍵映射
-        if not has_base_prefix:
-            mapped_state = {}
-            for k, v in state_dict.items():
-                if k in ['input_min', 'input_max', 'output_min', 'output_max']:
-                    mapped_state[k] = v
-                else:
-                    mapped_state[f'base_model.{k}'] = v
-            state_dict = mapped_state
-        
-        wrapper.load_state_dict(state_dict, strict=False)
-        model = wrapper
-        print("  ✅ ManualScalingWrapper 載入成功")
-    else:
-        # 處理可能的 base_model 前綴
-        if has_base_prefix:
-            state_dict = {k.replace('base_model.', ''): v for k, v in state_dict.items() 
-                         if k not in ['input_min', 'input_max', 'output_min', 'output_max']}
-        
+    # 載入狀態字典
+    try:
         model.load_state_dict(state_dict, strict=False)
+        print("  ✅ 模型權重載入成功")
+    except Exception as e:
+        print(f"  ⚠️  權重載入警告: {e}")
+        print("  嘗試部分載入...")
+        model.load_state_dict(state_dict, strict=False)
+    
     model.eval()
-    print(f"✅ 模型已載入（設備: {device}）")
+    print(f"✅ 模型已準備完成")
     
     # 載入測試數據
     if data_path is None:

@@ -16,7 +16,7 @@ from pinnx.physics.ns_2d import (
     check_conservation_laws
 )
 from pinnx.physics.scaling import (
-    StandardScaler, MinMaxScaler, VSScaler,
+    VSScaler,
     create_scaler_from_data, denormalize_gradients
 )
 
@@ -170,38 +170,6 @@ class TestConservationLaws:
 class TestScalers:
     """測試縮放器模組"""
     
-    def test_standard_scaler(self):
-        """測試標準縮放器"""
-        data = torch.randn(50, 3)
-        scaler = StandardScaler()
-        
-        # 擬合和轉換
-        scaler.fit(data)
-        scaled_data = scaler.transform(data)
-        
-        # 標準化後應該零均值單位方差
-        assert torch.allclose(scaled_data.mean(dim=0), torch.zeros(3), atol=1e-5)
-        assert torch.allclose(scaled_data.std(dim=0), torch.ones(3), atol=1e-5)
-        
-        # 逆轉換
-        reconstructed = scaler.inverse_transform(scaled_data)
-        assert torch.allclose(data, reconstructed, atol=1e-5)
-    
-    def test_minmax_scaler(self):
-        """測試最大最小值縮放器"""
-        data = torch.rand(30, 2) * 10 + 5  # [5, 15] 範圍
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        
-        scaler.fit(data)
-        scaled_data = scaler.transform(data)
-        
-        # 應該在 [0, 1] 範圍內
-        assert scaled_data.min() >= 0
-        assert scaled_data.max() <= 1
-        
-        # 逆轉換
-        reconstructed = scaler.inverse_transform(scaled_data)
-        assert torch.allclose(data, reconstructed, atol=1e-5)
     
     def test_vspinn_scaler(self):
         """測試 VS-PINN 縮放器"""
@@ -259,10 +227,10 @@ def test_integration_physics_modules():
     # 守恆定律檢查
     conservation = check_conservation_laws(coords, predictions[:, :2], predictions[:, 2:3])
     
-    # 縮放測試
-    scaler = StandardScaler()
-    scaler.fit(predictions)
-    scaled_predictions = scaler.transform(predictions)
+    # 縮放測試 (使用 VSScaler)
+    scaler = VSScaler(input_dim=2, output_dim=3, learnable=False)
+    scaler.fit(torch.randn(10, 2), predictions)  # 用隨機輸入數據初始化
+    scaled_predictions = scaler.transform_output(predictions)
     
     print(f"殘差計算完成，共 {len(residuals)} 項")
     print(f"渦量範圍: [{vorticity.min():.3f}, {vorticity.max():.3f}]")

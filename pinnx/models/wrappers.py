@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple, Callable, Union
 import numpy as np
 
 from .fourier_mlp import PINNNet, MultiScalePINNNet
-from ..physics.scaling import VSScaler, StandardScaler, MinMaxScaler
+from ..physics.scaling import VSScaler
 
 
 class ManualScalingWrapper(nn.Module):
@@ -182,8 +182,8 @@ class ScaledPINNWrapper(nn.Module):
     
     def __init__(self, 
                  base_model: nn.Module,
-                 input_scaler: Optional[Union[VSScaler, StandardScaler, MinMaxScaler]] = None,
-                 output_scaler: Optional[Union[VSScaler, StandardScaler, MinMaxScaler]] = None,
+                 input_scaler: Optional[VSScaler] = None,
+                 output_scaler: Optional[VSScaler] = None,
                  variable_names: Optional[List[str]] = None):
         """
         Args:
@@ -564,10 +564,9 @@ def create_scaled_pinn(model_config: Dict,
         if 'input' in scaler_config:
             input_cfg = scaler_config['input']
             if input_cfg['type'] == 'standard':
-                input_scaler = StandardScaler(
-                    input_cfg.get('mean', 0.0),
-                    input_cfg.get('std', 1.0),
-                    learnable=input_cfg.get('learnable', False)
+                raise ValueError(
+                    "StandardScaler is deprecated. Use 'vs' type with VSScaler or handle normalization "
+                    "in data preprocessing with UnifiedNormalizer from pinnx.utils.normalization"
                 )
             elif input_cfg['type'] == 'vs':
                 input_scaler = VSScaler(
@@ -581,10 +580,9 @@ def create_scaled_pinn(model_config: Dict,
         if 'output' in scaler_config:
             output_cfg = scaler_config['output']
             if output_cfg['type'] == 'standard':
-                output_scaler = StandardScaler(
-                    output_cfg.get('mean', 0.0),
-                    output_cfg.get('std', 1.0),
-                    learnable=output_cfg.get('learnable', False)
+                raise ValueError(
+                    "StandardScaler is deprecated. Use 'vs' type with VSScaler or handle normalization "
+                    "in data preprocessing with UnifiedNormalizer from pinnx.utils.normalization"
                 )
             elif output_cfg['type'] == 'vs':
                 output_scaler = VSScaler(

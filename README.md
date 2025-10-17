@@ -249,21 +249,31 @@ pinns-mvp/
 │   ├── sensors/                # QR-pivot sensor selection
 │   ├── losses/                 # Physics-informed loss functions
 │   ├── dataio/                 # Data I/O and preprocessing
+│   ├── train/                  # Training management (Trainer, ensemble, config)
 │   └── evals/                  # Evaluation metrics
 ├── 📊 scripts/                 # Training and evaluation scripts
 │   ├── train.py               # Main training script
-│   ├── evaluate_training_result.py  # Result evaluation
+│   ├── evaluate*.py           # Result evaluation tools
+│   ├── visualize_qr_sensors.py ⭐ # QR-Pivot sensor visualization
 │   ├── k_scan_experiment.py   # Sensor count experiments
+│   ├── debug/                 # Diagnostic tools
+│   │   ├── diagnose_piratenet_failure.py ⭐ # Training failure diagnosis
+│   │   └── diagnose_*.py      # Various diagnostic scripts
 │   └── validation/            # Physics validation scripts
 ├── ⚙️ configs/                # Configuration files
 │   ├── main.yml               # Base configuration
 │   ├── templates/             # Standardized templates (4)
+│   ├── colab_piratenet_2d_slice_fixed_v2.yml ⭐ # Fixed PirateNet config
 │   ├── ablation_sensor_*.yml  # Sensor ablation studies
 │   └── curriculum_*.yml       # Curriculum learning configs
 ├── 🧪 tests/                  # Unit tests and validation
 ├── 📈 results/                # Experimental results
+├── 📚 docs/                   # Documentation
+│   ├── TECHNICAL_DOCUMENTATION.md
+│   ├── PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md ⭐ # Training diagnostic guide
+│   └── QR_SENSOR_VISUALIZATION_GUIDE.md ⭐ # Sensor visualization guide
 ├── 🗃️ deprecated/             # Archived files (RANS, old experiments)
-└── 📚 Documentation          # Technical guides and analysis
+└── 🔧 context/tasks/          # Task management and decision logs
 ```
 
 ---
@@ -317,6 +327,69 @@ python scripts/k_scan_experiment.py
 python scripts/validation/physics_validation.py
 ```
 
+### 🛠️ **Diagnostic Tools** ⭐
+
+#### **標準化效果快速驗證** 🎯
+
+驗證資料標準化對訓練穩定性的影響（**強烈建議執行此驗證**）：
+
+```bash
+# 快速驗證標準化效果（約 2 分鐘）
+python scripts/quick_validation_normalization.py
+
+# 輸出位置：
+# - 訓練對比圖：results/quick_validation_normalization/training_comparison.png
+# - JSON 報告：results/quick_validation_normalization/quick_validation_report.json
+```
+
+**實測效果**（基於 2D 通道流，200 epochs）：
+- **損失下降**：95-98% ↓（0.0193 → 0.0004）
+- **訓練成本**：幾乎無增加（+3%）
+- **收斂速度**：標準化在 32 epochs 達到 baseline 200+ epochs 仍無法達到的損失（0.001）
+- **數值穩定性**：無 NaN，收斂穩定
+
+> 💡 **結論**：所有訓練任務建議啟用標準化（`normalization.type: training_data_norm`）  
+> 📚 **詳細指南**：[`docs/NORMALIZATION_USER_GUIDE.md`](docs/NORMALIZATION_USER_GUIDE.md#-快速驗證結果實際效果證明)  
+> 🔬 **進階分析**：[收斂動力學研究](docs/NORMALIZATION_USER_GUIDE.md#-進階分析收斂動力學研究)（平滑度改善 51.8%，分階段收斂率分析）
+
+---
+
+#### **Training Failure Diagnosis**
+```bash
+# Diagnose PirateNet training failures
+python scripts/debug/diagnose_piratenet_failure.py \
+  --checkpoint checkpoints/piratenet_2d/epoch_100.pth \
+  --config configs/colab_piratenet_2d_slice.yml \
+  --output results/diagnosis/
+
+# 完整診斷流程請參閱: docs/PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md
+```
+
+#### **QR-Pivot Sensor Visualization**
+```bash
+# Visualize sensor placement and quality
+python scripts/visualize_qr_sensors.py \
+  --input data/jhtdb/sensors_K50.npz \
+  --output results/sensor_analysis/
+
+# From JHTDB data with strategy comparison
+python scripts/visualize_qr_sensors.py \
+  --jhtdb-data data/jhtdb/channel_flow.h5 \
+  --n-sensors 50 --compare-strategies \
+  --output results/comparison/
+
+# 詳細使用指南: docs/QR_SENSOR_VISUALIZATION_GUIDE.md
+```
+
+#### **Diagnostic Workflow**
+```
+訓練失敗 → diagnose_piratenet_failure.py (檢查點/損失/配置分析)
+    ↓
+感測點問題 → visualize_qr_sensors.py (分佈/品質/策略比較)
+    ↓
+根因識別 → 修正配置/重新訓練
+```
+
 ---
 
 ## 📚 Documentation
@@ -324,8 +397,10 @@ python scripts/validation/physics_validation.py
 | Document | Purpose |
 |----------|---------|
 | **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)** | Complete technical details and architecture |
-| **[context/decisions_log.md](context/decisions_log.md)** | Development decisions and milestones |
+| **[QR_SENSOR_VISUALIZATION_GUIDE.md](docs/QR_SENSOR_VISUALIZATION_GUIDE.md)** ⭐ | QR-Pivot sensor visualization guide |
+| **[PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md](docs/PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md)** ⭐ | Training failure diagnostic workflow |
 | **[AGENTS.md](AGENTS.md)** | Development workflow and guidelines |
+| **[context/decisions_log.md](context/decisions_log.md)** | Development decisions and milestones |
 | **[deprecated/README.md](deprecated/README.md)** | Archived files and legacy experiments |
 
 ---

@@ -20,6 +20,7 @@
 
 from .qr_pivot import (
     QRPivotSelector,
+    PhysicsGuidedQRPivotSelector,
     PODBasedSelector,
     GreedySelector,
     MultiObjectiveSelector,
@@ -44,6 +45,7 @@ from .stratified_sampling import (
 __all__ = [
     # QR-Pivot 系列
     'QRPivotSelector',
+    'PhysicsGuidedQRPivotSelector',
     'PODBasedSelector', 
     'GreedySelector',
     'MultiObjectiveSelector',

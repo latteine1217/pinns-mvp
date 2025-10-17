@@ -117,6 +117,9 @@ physics:
     boundary_config:
       boundary_band_width: 5.0e-3
     
+    # ⚠️ 梯度檢查點配置（必須禁用以避免高階導數衝突）
+    use_gradient_checkpointing: false  # 禁用以兼容 PINNs 高階導數
+    
     enable_rans: false
   
   channel_flow:

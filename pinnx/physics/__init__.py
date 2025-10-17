@@ -60,8 +60,6 @@ from .turbulence import (
 
 from .scaling import (
     VSScaler,
-    StandardScaler, 
-    MinMaxScaler,
     create_scaler_from_data,
     denormalize_gradients
 )
@@ -130,7 +128,7 @@ __all__ = [
     'rans_momentum_residual', 'continuity_residual', 'k_epsilon_residuals', 'RANSEquations2D',
     
     # 尺度化相關
-    'VSScaler', 'StandardScaler', 'MinMaxScaler', 
+    'VSScaler', 
     'create_scaler_from_data', 'denormalize_gradients',
     
     # VS-PINN通道流

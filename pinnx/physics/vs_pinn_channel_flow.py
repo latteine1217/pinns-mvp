@@ -143,7 +143,7 @@ class VSPINNChannelFlow(nn.Module):
         loss_config: Optional[Dict[str, Any]] = None,  # 🔴 新增：接收損失配置
         enable_rans: bool = False,  # ✅ TASK-008: RANS 啟用開關
         rans_model: str = "k_epsilon",  # ✅ TASK-008: RANS 模型類型
-        use_gradient_checkpointing: bool = True,  # ⚡ TASK-PERF-001: 梯度檢查點開關
+        use_gradient_checkpointing: bool = False,  # ⚠️ audit-003: 禁用以兼容 PINNs 高階導數（避免 RuntimeError）
     ):
         super().__init__()
         

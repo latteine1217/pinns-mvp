@@ -5,12 +5,15 @@ TASK-010: Z-score 標準化回歸測試
 1. 恆等變換：normalize → denormalize = identity
 2. 統計特性：標準化後 mean ≈ 0, std ≈ 1
 3. 邊界情況處理
+
+更新日期：2025-10-17 (Phase 1 Refactor)
+API 更新：DataNormalizer → OutputTransform + OutputNormConfig
 """
 
 import pytest
 import torch
 import numpy as np
-from pinnx.utils.normalization import DataNormalizer
+from pinnx.utils.normalization import OutputTransform, OutputNormConfig
 
 
 class TestZScoreNormalization:
@@ -47,11 +50,12 @@ class TestZScoreNormalization:
     
     def test_identity_transformation_numpy(self, jhtdb_stats):
         """測試 numpy 恆等變換：normalize → denormalize = identity"""
-        normalizer = DataNormalizer(
+        config = OutputNormConfig(
             norm_type='training_data_norm',
-            scales=jhtdb_stats['stds'],
-            means=jhtdb_stats['means']
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
         )
+        normalizer = OutputTransform(config)
         
         original_values = {
             'u': 12.5,
@@ -72,11 +76,12 @@ class TestZScoreNormalization:
     
     def test_identity_transformation_torch(self, jhtdb_stats):
         """測試 PyTorch 張量恆等變換"""
-        normalizer = DataNormalizer(
+        config = OutputNormConfig(
             norm_type='training_data_norm',
-            scales=jhtdb_stats['stds'],
-            means=jhtdb_stats['means']
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
         )
+        normalizer = OutputTransform(config)
         
         original_values = {
             'u': torch.tensor([10.0, 15.0, 8.0]),
@@ -106,11 +111,12 @@ class TestZScoreNormalization:
     
     def test_batch_normalization(self, jhtdb_stats, sample_data):
         """測試批次標準化與反標準化"""
-        normalizer = DataNormalizer(
+        config = OutputNormConfig(
             norm_type='training_data_norm',
-            scales=jhtdb_stats['stds'],
-            means=jhtdb_stats['means']
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
         )
+        normalizer = OutputTransform(config)
         
         # 轉為 PyTorch 張量
         batch = {
@@ -146,11 +152,12 @@ class TestZScoreNormalization:
     
     def test_normalized_statistics(self, jhtdb_stats, sample_data):
         """測試標準化後統計特性：mean ≈ 0, std ≈ 1"""
-        normalizer = DataNormalizer(
+        config = OutputNormConfig(
             norm_type='training_data_norm',
-            scales=jhtdb_stats['stds'],
-            means=jhtdb_stats['means']
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
         )
+        normalizer = OutputTransform(config)
         
         for var_name in ['u', 'v', 'w', 'p']:
             original = sample_data[var_name]
@@ -174,11 +181,12 @@ class TestZScoreNormalization:
     
     def test_edge_cases(self, jhtdb_stats):
         """測試邊界情況"""
-        normalizer = DataNormalizer(
+        config = OutputNormConfig(
             norm_type='training_data_norm',
-            scales=jhtdb_stats['stds'],
-            means=jhtdb_stats['means']
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
         )
+        normalizer = OutputTransform(config)
         
         # 測試零值
         normalized_zero = normalizer.normalize(0.0, 'u')
@@ -197,21 +205,29 @@ class TestZScoreNormalization:
     
     def test_metadata_roundtrip(self, jhtdb_stats):
         """測試 metadata 序列化與反序列化"""
-        normalizer = DataNormalizer(
+        config = OutputNormConfig(
             norm_type='training_data_norm',
-            scales=jhtdb_stats['stds'],
-            means=jhtdb_stats['means']
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
         )
+        normalizer = OutputTransform(config)
         
         # 獲取 metadata
         metadata = normalizer.get_metadata()
         
-        # 確認包含 means 和 scales
+        # 確認包含 means 和 stds
         assert 'means' in metadata, "metadata 應包含 'means'"
-        assert 'scales' in metadata, "metadata 應包含 'scales'"
+        assert 'stds' in metadata, "metadata 應包含 'stds'"
         
-        # 從 metadata 重建
-        new_normalizer = DataNormalizer.from_metadata(metadata)
+        # 從 metadata 重建（舊方式：手動建立 config）
+        new_config = OutputNormConfig(
+            norm_type=metadata['norm_type'],
+            variable_order=metadata['variable_order'],
+            means=metadata['means'],
+            stds=metadata['stds'],
+            params=metadata.get('params', {})
+        )
+        new_normalizer = OutputTransform(new_config)
         
         # 測試功能一致
         test_value = 12.5
@@ -219,6 +235,88 @@ class TestZScoreNormalization:
         new_norm = new_normalizer.normalize(test_value, 'u')
         
         assert abs(float(original_norm) - float(new_norm)) < 1e-10
+    
+    def test_from_metadata_convenience_method(self, jhtdb_stats):
+        """測試新的 from_metadata() 便利方法"""
+        # 建立原始 normalizer
+        config = OutputNormConfig(
+            norm_type='training_data_norm',
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
+        )
+        original_normalizer = OutputTransform(config)
+        
+        # 模擬從 checkpoint 獲取 metadata
+        metadata = original_normalizer.get_metadata()
+        
+        # 使用新的 from_metadata() 方法重建
+        restored_normalizer = OutputTransform.from_metadata(metadata)
+        
+        # 驗證參數完全一致
+        assert restored_normalizer.norm_type == original_normalizer.norm_type
+        assert restored_normalizer.variable_order == original_normalizer.variable_order
+        
+        for var_name in ['u', 'v', 'w', 'p']:
+            assert abs(restored_normalizer.means[var_name] - original_normalizer.means[var_name]) < 1e-10
+            assert abs(restored_normalizer.stds[var_name] - original_normalizer.stds[var_name]) < 1e-10
+        
+        # 驗證功能一致
+        test_values = torch.tensor([10.0, 15.0, 8.0])
+        original_norm = original_normalizer.normalize(test_values, 'u')
+        restored_norm = restored_normalizer.normalize(test_values, 'u')
+        
+        diff = torch.abs(original_norm - restored_norm)
+        assert diff.max().item() < 1e-10
+    
+    def test_from_metadata_error_handling(self):
+        """測試 from_metadata() 的錯誤處理"""
+        # 測試缺少必要欄位
+        invalid_metadata = {
+            'norm_type': 'training_data_norm',
+            # 缺少 'means' 和 'stds'
+        }
+        
+        with pytest.raises(KeyError) as excinfo:
+            OutputTransform.from_metadata(invalid_metadata)
+        
+        assert 'means' in str(excinfo.value) or 'stds' in str(excinfo.value)
+        
+        # 測試空 metadata
+        with pytest.raises(KeyError):
+            OutputTransform.from_metadata({})
+    
+    def test_from_metadata_with_checkpoint_format(self, jhtdb_stats):
+        """測試真實 checkpoint 格式的 metadata"""
+        # 模擬真實的 checkpoint metadata 結構
+        checkpoint_metadata = {
+            'norm_type': 'training_data_norm',
+            'variable_order': ['u', 'v', 'p'],  # 2D 場（無 w）
+            'means': {
+                'u': jhtdb_stats['means']['u'],
+                'v': jhtdb_stats['means']['v'],
+                'p': jhtdb_stats['means']['p']
+            },
+            'stds': {
+                'u': jhtdb_stats['stds']['u'],
+                'v': jhtdb_stats['stds']['v'],
+                'p': jhtdb_stats['stds']['p']
+            },
+            'params': {'source': 'auto_computed_from_data'}
+        }
+        
+        # 從 checkpoint metadata 重建
+        normalizer = OutputTransform.from_metadata(checkpoint_metadata)
+        
+        # 驗證變量順序正確（應為 2D）
+        assert normalizer.variable_order == ['u', 'v', 'p']
+        assert 'w' not in normalizer.means
+        
+        # 驗證功能正常
+        test_value = 12.5
+        normalized = normalizer.normalize(test_value, 'u')
+        recovered = normalizer.denormalize(normalized, 'u')
+        
+        assert abs(float(recovered) - test_value) < 1e-6
     
     def test_from_data_zscore(self):
         """測試從數據直接計算 Z-score 參數"""
@@ -230,7 +328,7 @@ class TestZScoreNormalization:
             'p': torch.randn(1000) * 10.0 - 20.0
         }
         
-        normalizer = DataNormalizer.from_data(torch_data)
+        normalizer = OutputTransform.from_data(torch_data)
         
         # 標準化後檢查統計量（逐個變量）
         for var_name in ['u', 'v', 'w', 'p']:
@@ -247,15 +345,16 @@ class TestZScoreNormalization:
             assert abs(std - 1.0) < 0.05, f"{var_name}: std = {std:.4f}"
     
     def test_backward_compatibility(self):
-        """測試向後兼容：舊格式（僅 scales）應該發出警告"""
-        # 模擬舊格式 metadata（只有 scales，沒有 means）
-        old_metadata = {
-            'type': 'training_data_norm',
-            'scales': {'u': 4.5, 'v': 0.33, 'w': 3.8, 'p': 28.0}
-        }
+        """測試向後兼容：舊格式（僅 scales）應該能載入"""
+        # 模擬舊格式 metadata（只有 stds，沒有 means）
+        old_config = OutputNormConfig(
+            norm_type='training_data_norm',
+            stds={'u': 4.5, 'v': 0.33, 'w': 3.8, 'p': 28.0},
+            means={}  # 空 means
+        )
         
-        # 應該能載入（使用零均值）
-        normalizer = DataNormalizer.from_metadata(old_metadata)
+        # 應該能載入（自動使用零均值）
+        normalizer = OutputTransform(old_config)
         
         # 檢查降級為僅縮放模式（均值為 0）
         assert normalizer.means.get('u', 0.0) == 0.0
@@ -263,11 +362,12 @@ class TestZScoreNormalization:
     
     def test_correct_zscore_formula(self, jhtdb_stats):
         """明確驗證 Z-score 公式：(x - μ) / σ"""
-        normalizer = DataNormalizer(
+        config = OutputNormConfig(
             norm_type='training_data_norm',
-            scales=jhtdb_stats['stds'],
-            means=jhtdb_stats['means']
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
         )
+        normalizer = OutputTransform(config)
         
         x = 15.0
         var_name = 'u'
@@ -290,28 +390,18 @@ class TestZScoreNormalization:
     
     def test_config_based_initialization(self, jhtdb_stats):
         """測試從配置文件格式初始化"""
-        config = {
-            'normalization': {
-                'type': 'training_data_norm',
-                'params': {
-                    'u_mean': jhtdb_stats['means']['u'],
-                    'u_std': jhtdb_stats['stds']['u'],
-                    'v_mean': jhtdb_stats['means']['v'],
-                    'v_std': jhtdb_stats['stds']['v'],
-                    'w_mean': jhtdb_stats['means']['w'],
-                    'w_std': jhtdb_stats['stds']['w'],
-                    'p_mean': jhtdb_stats['means']['p'],
-                    'p_std': jhtdb_stats['stds']['p']
-                }
-            }
-        }
-        
-        normalizer = DataNormalizer.from_config(config)
+        # 新 API：直接使用 OutputNormConfig
+        config = OutputNormConfig(
+            norm_type='training_data_norm',
+            means=jhtdb_stats['means'],
+            stds=jhtdb_stats['stds']
+        )
+        normalizer = OutputTransform(config)
         
         # 驗證參數正確載入
         assert normalizer.norm_type == 'training_data_norm'
         assert abs(normalizer.means['u'] - jhtdb_stats['means']['u']) < 1e-6
-        assert abs(normalizer.scales['u'] - jhtdb_stats['stds']['u']) < 1e-6
+        assert abs(normalizer.stds['u'] - jhtdb_stats['stds']['u']) < 1e-6
         
         # 驗證功能正常
         test_value = 12.5

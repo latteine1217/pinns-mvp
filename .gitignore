@@ -4,7 +4,9 @@ results/
 
 # Model checkpoints and arrays
 *.pt
+*.pth
 *.npz
+checkpoints/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
@@ -20,6 +22,9 @@ context/
 tasks/
 archive/
 legacy/
+
+# External dependencies (nested git repos)
+external/
 
 # macOS system files
 .DS_Store

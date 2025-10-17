@@ -117,6 +117,9 @@ physics:
     boundary_config:
       boundary_band_width: 5.0e-3
     
+    # ⚠️ 梯度檢查點配置（必須禁用以避免高階導數衝突）
+    use_gradient_checkpointing: false  # 禁用以兼容 PINNs 高階導數
+    
     # ⚠️ 可選：啟用 RANS prior（低保真引導）
     enable_rans: false  # 設為 true 並提供 RANS 資料路徑
   

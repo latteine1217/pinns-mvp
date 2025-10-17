@@ -1,0 +1,208 @@
+# Phase 5 Integration Testing - Standard PINN Configuration
+# 用途：驗證 DataNormalizer API 與訓練流程（不使用 VS-PINN）
+# 預期時間：2-3 分鐘（10 epochs）
+
+# =============================================================================
+# 基本實驗設定
+# =============================================================================
+experiment:
+  name: "phase5_standard_pinn_test"
+  version: "v1.0"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Phase 5 integration test with standard PINN"
+
+# =============================================================================
+# 重現性設定
+# =============================================================================
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# =============================================================================
+# 資料配置（2D 切片）
+# =============================================================================
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000) - 2D 切片"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']  # ⭐ 保持完整變數
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+
+# 資料標準化配置（⭐ Phase 5 測試重點）
+normalization:
+  type: 'training_data_norm'  # 自動從訓練資料計算 Z-score
+  params: {}  # 留空以測試自動計算
+  noise_sigma: 0.01
+  dropout_prob: 0.05
+  
+  slice_config:
+    plane: "xy"
+    z_position: 4.71
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# =============================================================================
+# 感測點配置
+# =============================================================================
+sensors:
+  K: 50
+  selection_method: "qr_pivot"
+  spatial_coverage: "optimal"
+
+# =============================================================================
+# 模型架構（標準 PINN - 不使用 Fourier）
+# =============================================================================
+model:
+  type: "fourier_mlp"  # 標準架構
+  in_dim: 3  # ⭐ 保持 3D（配合資料格式）
+  out_dim: 4  # ⭐ 保持 4D（u, v, w, p）
+  width: 128
+  depth: 4
+  activation: "sine"
+  
+  # 關閉 Fourier 特徵（簡化測試）
+  fourier_features:
+    type: "none"
+  
+  # 啟用手動縮放（避免飽和）
+  scaling:
+    output_norm: "auto"  # ⭐ 使用自動範圍
+
+# =============================================================================
+# 物理設定（標準 NS 方程）
+# =============================================================================
+physics:
+  type: "ns_2d"  # ⭐ 使用標準 2D NS 方程（factory 支援）
+  nu: 5.0e-5
+  rho: 1.0
+  
+  # 2D NS 方程參數（但保留 3D 座標以配合資料格式）
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]  # ⭐ 保留 z 範圍（配合 3D 資料）
+    
+  boundary_conditions:
+    # 2D 邊界條件（wall + periodic）
+    wall_bc: true
+    periodic_x: true
+
+# =============================================================================
+# 損失函數權重（簡化配置 - 2D NS）
+# =============================================================================
+losses:
+  data_weight: 5.0
+  boundary_weight: 5.0
+  
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 0.0  # ⭐ 2D 模式：關閉 z 方向動量
+  continuity_weight: 1.0
+  
+  wall_constraint_weight: 10.0
+  periodicity_weight: 0.0
+  
+  prior_weight: 0.0
+  source_l1: 0.0
+  gradient_penalty: 0.0
+  
+  adaptive_weighting: false
+  causal_weighting: false
+
+# =============================================================================
+# 訓練設定（極簡模式 - 僅 10 epochs）
+# =============================================================================
+training:
+  optimizer: "adam"
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  
+  lr_scheduler:
+    type: "constant"  # 固定學習率
+  
+  epochs: 10  # ⭐ 僅 10 epochs（快速驗證）
+  max_epochs: 10
+  batch_size: 512
+  validation_freq: 5
+  checkpoint_freq: 5  # ⭐ 每 5 epochs 保存檢查點
+  log_interval: 1
+  
+  early_stopping:
+    enabled: false  # 關閉早停（確保跑完 10 epochs）
+  
+  sampling:
+    pde_points: 512  # 減少計算量
+    boundary_points: 256
+    wall_clustering: 0.2
+  
+  gradient_clip: 1.0
+  
+  amp:
+    enabled: false
+
+curriculum:
+  enable: false
+
+ensemble:
+  enable: false
+
+# =============================================================================
+# 評估設定
+# =============================================================================
+evaluation:
+  grid_resolution: [32, 16, 16]
+  
+  metrics:
+    - "relative_l2"
+    - "mass_conservation"
+  
+  thresholds:
+    l2_error: 1.0  # 非常寬鬆（僅驗證穩定性）
+    mass_conservation_error: 1.0
+
+# =============================================================================
+# 日誌與儲存
+# =============================================================================
+logging:
+  level: "info"
+  log_freq: 1
+  save_predictions: true
+  tensorboard: false
+  wandb: false
+
+output:
+  checkpoint_dir: "./checkpoints/phase5_standard_pinn_test"
+  results_dir: "./results/phase5_standard_pinn_test"
+  visualization_dir: "./results/phase5_standard_pinn_test/visualizations"
+
+# =============================================================================
+# Phase 5 驗收標準
+# =============================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+  
+  normalization:
+    - auto_compute_stats: true  # ⭐ 驗證自動計算統計量
+    - checkpoint_contains_metadata: true  # ⭐ 驗證檢查點包含 metadata
+    - checkpoint_loadable: true  # ⭐ 驗證檢查點可載入

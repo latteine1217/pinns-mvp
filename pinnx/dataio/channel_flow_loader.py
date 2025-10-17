@@ -179,10 +179,14 @@ class ChannelFlowLoader:
         """
         # 構建快取檔案名（允許自定義覆蓋）
         if sensor_file is not None:
-            cache_filename = sensor_file
+            # 如果提供絕對路徑，直接使用；否則相對於 cache_dir
+            cache_path = Path(sensor_file)
+            if not cache_path.is_absolute():
+                cache_path = self.cache_dir / sensor_file
         else:
+            # 否則使用 cache_dir + 自動生成的檔名
             cache_filename = f"sensors_K{K}_{strategy}.npz"
-        cache_path = self.cache_dir / cache_filename
+            cache_path = self.cache_dir / cache_filename
         
         if not cache_path.exists():
             raise FileNotFoundError(
@@ -195,25 +199,84 @@ class ChannelFlowLoader:
         # 載入 NPZ 資料
         data = np.load(cache_path, allow_pickle=True)
         
-        # 提取感測點資訊
-        sensor_points = data['sensor_points']
-        
-        # 處理 sensor_data (可能是物件或分離的陣列)
-        if 'sensor_data' in data:
-            sensor_data_raw = data['sensor_data'].item() if data['sensor_data'].ndim == 0 else data['sensor_data']
+        # 提取感測點資訊（支援多種鍵名）
+        if 'sensor_points' in data:
+            sensor_points = data['sensor_points']
+        elif 'coords' in data:
+            sensor_points = data['coords']  # ⭐ 新格式：使用 'coords' 鍵
+        elif 'coords_2d' in data:
+            # 2D 座標需要擴展到 3D (x, y) → (x, y, z_slice)
+            coords_2d = data['coords_2d']
+            z_slice = self.config.get('normalization', {}).get('slice_config', {}).get('z_position', 4.71)
+            sensor_points = np.column_stack([
+                coords_2d[:, 0],  # x
+                coords_2d[:, 1],  # y
+                np.full(len(coords_2d), z_slice)  # z (constant)
+            ])
         else:
+            raise KeyError(f"Cannot find sensor coordinates in {cache_path}. Expected 'sensor_points', 'coords', or 'coords_2d'")
+        
+        # 處理 sensor_data (可能是物件、分離的陣列、或直接的 2D ndarray)
+        if 'sensor_data' in data:
+            sensor_data_raw = data['sensor_data']
+            
+            # 情況 1: 0 維物件（包含字典）
+            if sensor_data_raw.ndim == 0:
+                sensor_data_raw = sensor_data_raw.item()
+            
+            # 情況 2: 2D ndarray (K, n_vars) - 直接儲存速度分量
+            elif sensor_data_raw.ndim == 2:
+                # 從 metadata 或預設變數名稱提取欄位
+                if 'metadata' in data:
+                    metadata = data['metadata'].item() if data['metadata'].ndim == 0 else data['metadata']
+                    variables = metadata.get('variables', ['u', 'v', 'w'])
+                else:
+                    # 根據欄位數判斷
+                    n_vars = sensor_data_raw.shape[1]
+                    if n_vars == 2:
+                        variables = ['u', 'v']
+                    elif n_vars == 3:
+                        variables = ['u', 'v', 'w']
+                    elif n_vars == 4:
+                        variables = ['u', 'v', 'w', 'p']
+                    else:
+                        raise ValueError(f"Cannot infer variable names for {n_vars} columns")
+                
+                # 將 ndarray 轉換為字典格式
+                sensor_data_raw = {
+                    var: sensor_data_raw[:, i]
+                    for i, var in enumerate(variables)
+                }
+        else:
+            # 情況 3: 分離的欄位（sensor_u, sensor_v 等 或直接 u, v, w, p）
             sensor_data_raw = {}
-            for field in ['u', 'v', 'p', 'w']:
-                key = f'sensor_{field}'
-                if key in data:
-                    sensor_data_raw[field] = data[key]
+            
+            # 優先檢查 'sensor_*' 格式
+            for field in ['u', 'v', 'w', 'p']:
+                key_sensor = f'sensor_{field}'
+                if key_sensor in data:
+                    sensor_data_raw[field] = data[key_sensor]
+            
+            # ⭐ 若無 'sensor_*'，嘗試直接鍵名（新格式）
+            if not sensor_data_raw:
+                for field in ['u', 'v', 'w', 'p']:
+                    if field in data:
+                        sensor_data_raw[field] = data[field]
+            
+            if not sensor_data_raw:
+                raise KeyError(f"Cannot find velocity/pressure data in {cache_path}. Expected 'sensor_data', 'sensor_u/v/w/p', or 'u/v/w/p'")
         
         sensor_values = {
             field: np.asarray(values).reshape(-1)
             for field, values in sensor_data_raw.items()
         }
         
-        sensor_indices = np.asarray(data['sensor_indices'])
+        # 提取 sensor_indices (可能不存在，生成預設索引)
+        if 'sensor_indices' in data:
+            sensor_indices = np.asarray(data['sensor_indices'])
+        else:
+            # 如果沒有 indices，生成連續索引
+            sensor_indices = np.arange(len(sensor_points))
         
         # 提取選擇資訊
         if 'selection_info' in data:

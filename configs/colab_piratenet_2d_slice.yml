@@ -84,7 +84,7 @@ sensors:
 model:
   type: "enhanced_fourier_mlp"
   
-  in_dim: 2   # ✅ 2D 切片：(x, y)
+  in_dim: 3   # 🔧 修復：實際輸入為 3D（x, y, z），即使是 2D 切片也需要 z 座標
   out_dim: 4  # (u, v, w, p)
   depth: 6    # PirateNet: 2 residual blocks × 3 layers
   width: 768  # PirateNet 標準寬度

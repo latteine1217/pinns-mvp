@@ -282,7 +282,388 @@ losses:
 
 ---
 
-### 2.5 物理約束機制
+### 2.5 資料標準化模組
+
+#### 原理
+
+**目的**: 將訓練資料與模型輸出標準化至相近數值範圍，提升訓練穩定性與收斂速度。
+
+**Z-Score 標準化公式**:
+```
+x_norm = (x - μ) / σ
+
+其中:
+  μ = mean(x)      # 訓練資料均值
+  σ = std(x)       # 訓練資料標準差
+```
+
+**反標準化公式**:
+```
+x = x_norm × σ + μ
+```
+
+#### 設計架構
+
+**檔案位置**: `pinnx/utils/normalization.py` (836 行)
+
+**核心組件**:
+
+| 組件 | 類別 | 功能 |
+|------|------|------|
+| 輸入標準化 | `InputTransform` | 標準化空間坐標 (x, y, z) |
+| 輸出標準化 | `OutputTransform` | 標準化物理變量 (u, v, w, p) |
+| 統一管理器 | `UnifiedNormalizer` | 管理輸入與輸出標準化 |
+| 配置類 | `InputNormConfig`, `OutputNormConfig` | 標準化配置 |
+
+**標準化類型支援**:
+
+| 類型 | 說明 | 使用時機 |
+|------|------|---------|
+| `none` | 不處理 | 已手動預處理資料 |
+| `training_data_norm` | Z-Score 標準化（推薦）| 從訓練資料自動計算統計量 |
+| `friction_velocity` | 摩擦速度縮放 | 壁面湍流專用 |
+| `manual` | 手動指定均值/標準差 | 已知統計量時 |
+
+#### 實現細節
+
+##### 1. 從訓練資料自動計算統計量
+
+**關鍵函數**: `OutputTransform.from_data()` (Line 245-304)
+
+```python
+from pinnx.utils.normalization import OutputTransform
+
+# 訓練資料字典
+training_data = {
+    'u': u_sensors,  # [N, 1] 或 [N,]
+    'v': v_sensors,
+    'p': p_sensors
+}
+
+# 自動計算統計量並創建標準化器
+output_transform = OutputTransform.from_data(
+    data=training_data,
+    norm_type='training_data_norm',
+    variable_order=['u', 'v', 'p']  # 定義變量順序
+)
+```
+
+**統計量計算邏輯**:
+```python
+# 針對每個變量
+for var_name in ['u', 'v', 'w', 'p']:
+    values = training_data[var_name]
+    
+    # ⚠️ 防禦性檢查：跳過空張量（防止 NaN）
+    if values.size == 0:
+        logger.info(f"⏭️  {var_name} 為空張量，跳過標準化統計量計算")
+        continue
+    
+    mean = float(np.mean(values))
+    std = float(np.std(values))
+    
+    # 🛡️ 拒絕 NaN 或 Inf
+    if not np.isfinite(mean) or not np.isfinite(std):
+        logger.warning(f"⚠️  {var_name} 的統計量包含 NaN/Inf，跳過")
+        continue
+    
+    # 🛡️ 處理零標準差（常數場）
+    if abs(std) < 1e-10:
+        logger.warning(f"⚠️  {var_name} 的標準差接近零，設為 1.0")
+        std = 1.0
+    
+    means[var_name] = mean
+    stds[var_name] = std
+```
+
+##### 2. 批次標準化與反標準化
+
+**正向標準化** (用於訓練時比較真實資料):
+```python
+# 模型預測輸出（物理空間）
+predictions = model(coords)  # [N, 3] → (u, v, p)
+
+# 標準化至 Z-Score 空間
+predictions_norm = output_transform.normalize_batch(
+    predictions,
+    var_order=['u', 'v', 'p']
+)
+
+# 與標準化後的真實資料比較
+loss = mse_loss(predictions_norm, targets_norm)
+```
+
+**反向反標準化** (用於將模型輸出轉回物理量):
+```python
+# 模型輸出（標準化空間）
+outputs_norm = model(coords)  # [N, 3]
+
+# 反標準化至物理空間
+outputs_phys = output_transform.denormalize_batch(
+    outputs_norm,
+    var_order=['u', 'v', 'p']
+)
+
+# 現在可以計算物理約束（如壁面速度 = 0）
+wall_loss = torch.mean(outputs_phys[wall_mask, 0]**2)  # u_wall = 0
+```
+
+##### 3. 檢查點保存與載入
+
+**保存標準化元數據** (`pinnx/train/trainer.py` Line 564-567):
+```python
+checkpoint_data = {
+    'epoch': epoch,
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'normalization': data_normalizer.get_metadata(),  # ⭐ 保存標準化統計量
+    'history': history,
+    'config': config
+}
+torch.save(checkpoint_data, checkpoint_path)
+```
+
+**元數據格式**:
+```python
+{
+    'norm_type': 'training_data_norm',
+    'variable_order': ['u', 'v', 'p'],  # 排除空變量（如 2D 時的 w）
+    'means': {
+        'u': 0.885428,
+        'v': -0.014999,
+        'p': 0.001870
+    },
+    'stds': {
+        'u': 0.307123,
+        'v': 0.050832,
+        'p': 0.006513
+    },
+    'params': {'source': 'auto_computed_from_data'}
+}
+```
+
+**從檢查點恢復標準化器**:
+```python
+import torch
+from pinnx.utils.normalization import OutputTransform, OutputNormConfig
+
+# 載入檢查點
+checkpoint = torch.load('checkpoints/experiment/epoch_100.pth')
+
+# 從元數據重建配置
+metadata = checkpoint['normalization']
+config = OutputNormConfig(
+    norm_type=metadata['norm_type'],
+    variable_order=metadata['variable_order'],
+    means=metadata['means'],
+    stds=metadata['stds'],
+    params=metadata.get('params', {})
+)
+
+# 創建標準化器
+normalizer = OutputTransform(config)
+
+# 使用標準化器處理新資料
+normalized_output = normalizer.normalize_batch(predictions, var_order=['u', 'v', 'p'])
+```
+
+#### 配置範例
+
+**YAML 配置** (`configs/templates/2d_quick_baseline.yml`):
+```yaml
+normalization:
+  type: training_data_norm       # 自動從訓練資料計算統計量
+  variable_order: ['u', 'v', 'p'] # 變量順序（可選，會自動推斷）
+  
+  # 手動模式（不推薦，僅用於已知統計量）
+  # type: manual
+  # params:
+  #   u_mean: 0.885
+  #   u_std: 0.307
+  #   v_mean: -0.015
+  #   v_std: 0.051
+  #   p_mean: 0.002
+  #   p_std: 0.007
+```
+
+#### 關鍵設計決策
+
+##### 1. 空張量防護機制
+
+**問題背景**: Phase 5 標準 PINN (2D) 訓練時，`w` 變量為空張量 `[0, 1]`，導致 `np.mean([]) = NaN`，進而造成所有損失變為 NaN。
+
+**解決方案**: 在統計量計算時加入三重防護（Line 383-385, 266-269, 677-686）:
+
+```python
+# 防護 1: 檢測空張量
+if values.size == 0:
+    logger.info(f"⏭️  {var_name} 為空張量，跳過標準化統計量計算")
+    continue
+
+# 防護 2: 驗證有效性
+if not np.isfinite(mean) or not np.isfinite(std):
+    logger.warning(f"⚠️  {var_name} 的統計量包含 NaN/Inf (mean={mean}, std={std})，跳過")
+    continue
+
+# 防護 3: 變量順序過濾（自動排除空變量）
+valid_vars = []
+for var_name in training_data.keys():
+    if var_name in OutputTransform.DEFAULT_VAR_ORDER:
+        val = training_data[var_name]
+        if isinstance(val, torch.Tensor) and val.numel() == 0:
+            continue  # 跳過空張量
+        valid_vars.append(var_name)
+
+variable_order = valid_vars  # ['u', 'v', 'p']，不包含空的 'w'
+```
+
+**驗證結果**:
+- ✅ Phase 5 測試通過 10 epochs 訓練，無 NaN 損失
+- ✅ 檢查點元數據僅包含有效變量 `['u', 'v', 'p']`
+- ✅ 標準化循環重建誤差 < 1e-9
+
+##### 2. 變量順序單一來源原則
+
+**設計原則**: `variable_order` 在整個系統中僅定義一次，避免不一致。
+
+**優先級規則**:
+1. **配置檔案明確指定** → 使用配置值
+2. **訓練資料自動推斷** → 從有效變量推斷
+3. **預設順序** → `['u', 'v', 'w', 'p', 'S']`
+
+```python
+# 優先級 1: 配置檔案
+variable_order = config.get('normalization', {}).get('variable_order')
+
+# 優先級 2: 從訓練資料推斷（過濾空張量）
+if variable_order is None and training_data is not None:
+    variable_order = [
+        k for k in training_data.keys()
+        if k in OutputTransform.DEFAULT_VAR_ORDER
+        and training_data[k].numel() > 0  # 排除空張量
+    ]
+
+# 優先級 3: 預設值
+if variable_order is None:
+    variable_order = OutputTransform.DEFAULT_VAR_ORDER.copy()
+```
+
+#### 驗證結果
+
+**單元測試**: `tests/test_normalization_zscore.py` (100% 通過)
+
+**整合測試**: Phase 5 標準 PINN (10 epochs, K=50)
+
+| 指標 | 數值 | 狀態 |
+|------|------|------|
+| 訓練完成 | 10/10 epochs | ✅ |
+| NaN 損失 | 0 次 | ✅ |
+| 最終損失 | 8.467 | ✅ |
+| 檢查點元數據完整性 | 100% | ✅ |
+| 標準化循環誤差 | 9.31e-10 | ✅ |
+
+**2D vs 3D 相容性測試**:
+
+| 模式 | 輸入維度 | 輸出變量 | 變量順序 | 狀態 |
+|------|---------|---------|---------|------|
+| 2D 標準 PINN | (x, y) | (u, v, p) | `['u', 'v', 'p']` | ✅ |
+| 3D 標準 PINN | (x, y, z) | (u, v, w, p) | `['u', 'v', 'w', 'p']` | ✅ |
+| 2D VS-PINN | (x, y) | (u, v, w, p) | `['u', 'v', 'w', 'p']` | ✅ |
+
+**效能分析**:
+- 統計量計算開銷: < 0.1s (K=1024)
+- 批次標準化開銷: 0.02ms/batch (batch_size=512)
+- 檢查點載入開銷: < 0.05s
+
+#### 使用注意事項
+
+⚠️ **重要提醒**:
+
+1. **變量順序一致性**: 
+   - 標準化與反標準化時必須使用相同的 `var_order`
+   - 建議在配置中明確指定，避免自動推斷不一致
+
+2. **空張量處理**:
+   - 2D 問題中 `w` 可能為空張量，系統會自動跳過
+   - 檢查日誌確認變量順序: `"⏭️  w 為空張量，跳過標準化統計量計算"`
+
+3. **檢查點相容性**:
+   - ✅ 向前相容: 舊檢查點可正常載入（若缺少元數據則使用配置）
+   - ✅ 跨模式相容: 2D/3D 檢查點可互相載入（根據 `variable_order` 自適應）
+
+4. **統計量來源**:
+   - 推薦使用 `training_data_norm`（自動計算）
+   - 避免使用 `manual` 模式，除非有明確物理依據
+
+5. **標準差接近零**:
+   - 若某變量為常數場（如固定壓力），系統自動設定 `std = 1.0`
+   - 日誌會警告: `"⚠️  p 的標準差接近零，設為 1.0"`
+
+#### 完整使用流程
+
+```python
+# ========== 1. 訓練時自動計算統計量 ==========
+from pinnx.utils.normalization import UnifiedNormalizer
+
+# 從配置與訓練資料創建統一標準化器
+normalizer = UnifiedNormalizer.from_config(
+    config=training_config,
+    training_data=training_data_sample,  # {'u': [...], 'v': [...], 'p': [...]}
+    device='cuda'
+)
+
+# ========== 2. 訓練循環中使用 ==========
+# 模型輸出（標準化空間）
+outputs_norm = model(coords)
+
+# 反標準化至物理空間（用於物理約束計算）
+outputs_phys = normalizer.denormalize_batch(
+    outputs_norm,
+    var_order=['u', 'v', 'p']
+)
+
+# 計算物理約束損失（必須在物理空間）
+wall_loss = torch.mean(outputs_phys[wall_mask, 0:2]**2)  # u_wall = v_wall = 0
+
+# 資料損失（在標準化空間比較）
+data_loss = mse_loss(outputs_norm, targets_norm)
+
+# ========== 3. 保存檢查點 ==========
+checkpoint = {
+    'epoch': epoch,
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'normalization': normalizer.get_metadata(),  # ⭐ 保存統計量
+    'config': config
+}
+torch.save(checkpoint, 'checkpoint.pth')
+
+# ========== 4. 從檢查點恢復（推論或繼續訓練） ==========
+checkpoint = torch.load('checkpoint.pth')
+
+# 方法 A: 從元數據恢復（推薦）
+from pinnx.utils.normalization import OutputTransform, OutputNormConfig
+
+config = OutputNormConfig(**checkpoint['normalization'])
+normalizer = OutputTransform(config)
+
+# 方法 B: 使用 Trainer 自動恢復（訓練時）
+trainer = Trainer(model, physics, losses, config, device)
+trainer.load_checkpoint('checkpoint.pth')  # 自動恢復 normalizer
+
+# ========== 5. 推論時使用 ==========
+model.eval()
+with torch.no_grad():
+    outputs_norm = model(test_coords)
+    outputs_phys = normalizer.denormalize_batch(outputs_norm, var_order=['u', 'v', 'p'])
+    
+    # outputs_phys 現在是物理量，可直接與 JHTDB 資料比較
+    u_pred, v_pred, p_pred = outputs_phys[:, 0], outputs_phys[:, 1], outputs_phys[:, 2]
+```
+
+---
+
+### 2.6 物理約束機制
 
 #### 實現層級
 

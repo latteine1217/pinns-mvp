@@ -42,7 +42,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pinnx.dataio.jhtdb_client import JHTDBManager, JHTDBConfig
 from pinnx.sensors import FieldSensorSelector
 from pinnx.dataio.lowfi_loader import LowFiData
-from pinnx.physics.scaling import VSScaler
 
 
 @dataclass

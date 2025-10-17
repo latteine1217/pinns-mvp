@@ -1,0 +1,295 @@
+# ⚡ 消融實驗 3：Wall-Clustered 移除中心層感測點
+# 目的：驗證 Wall-Clustered 在無中心層感測點時是否依賴 PDE 補償
+# 策略：壁面層 52% + 對數層 48% + 中心層 0%（與 QR-Pivot 分佈相同）
+# 預期時間：5-10 分鐘（100 epochs）
+# 驗收標準：中心層誤差是否接近 QR-Pivot（~12.9%）
+
+# =============================================================================
+# 基本實驗設定
+# =============================================================================
+experiment:
+  name: "ablation_exp3_wall_no_center"
+  version: "v1.0"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Ablation Exp3: Wall-clustered without center layer sensors"
+
+# =============================================================================
+# 重現性設定
+# =============================================================================
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# =============================================================================
+# 資料配置（2D 切片）
+# =============================================================================
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000) - 2D XY 切片"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']
+  
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+
+# 資料標準化配置
+normalization:
+  type: 'training_data_norm'
+  params: {}
+  noise_sigma: 0.01
+  dropout_prob: 0.05
+  
+  # 2D 切片配置
+  slice_config:
+    plane: "xy"
+    z_position: 4.71  # 中心位置 (z_max/2)
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# =============================================================================
+# 感測點配置（壁面聚集 - 無中心層）
+# =============================================================================
+sensors:
+  K: 50
+  selection_method: "wall_no_center"  # ⭐ 無中心層策略
+  sensor_file: "./data/jhtdb/channel_flow_re1000/sensors_K50_wall_no_center.npz"  # ⭐ 實驗 3 專用感測點
+  
+  # 分層策略（與 QR-Pivot 相同分佈）
+  stratified_layers:
+    wall_layer:
+      y_range: [[0.95, 1.0], [-1.0, -0.95]]  # 壁面附近 Δy=0.05
+      fraction: 0.52  # 52% 點數 (26 點)
+    log_layer:
+      y_range: [[0.3, 0.95], [-0.95, -0.3]]  # 對數層 Δy=0.65
+      fraction: 0.48  # 48% 點數 (24 點)
+    center:
+      y_range: [[-0.3, 0.3]]  # 中心層 Δy=0.6
+      fraction: 0.0  # 0% 點數 (0 點) ⚠️ 關鍵差異
+  
+  # x 方向：中心聚集（高斯分佈）
+  x_clustering:
+    type: "gaussian"
+    center: 12.565  # L_x/2
+    sigma: 4.0      # 涵蓋 ±2σ ≈ 95% 點數
+  
+  spatial_coverage: "physics_informed"
+  use_pressure_data: false
+
+# =============================================================================
+# 模型架構（與 QR-Pivot 相同）
+# =============================================================================
+model:
+  type: "enhanced_fourier_mlp"
+  in_dim: 3  # x, y, z
+  out_dim: 4  # u, v, w, p
+  width: 128
+  depth: 4
+  activation: "sine"
+  
+  # Fourier 特徵（簡化）
+  fourier_features:
+    type: "axis_selective"
+    axes_config: {x: [1, 2], y: [], z: [1, 2]}
+    full_axes_config: {x: [1, 2, 4], y: [], z: [1, 2, 4]}
+    domain_lengths: {x: 25.13, y: 2.0, z: 9.42}
+    fourier_m: 16
+    fourier_sigma: 5.0
+  
+  # VS-PINN 縮放
+  scaling:
+    learnable: true
+    input_norm: "channel_flow"
+    output_norm: "friction_velocity"
+    friction_velocity: 0.04997
+    channel_half_height: 1.0
+    viscous_length: 1.0e-3
+
+# =============================================================================
+# 物理設定
+# =============================================================================
+physics:
+  type: "vs_pinn_channel_flow"
+  nu: 5.0e-5
+  rho: 1.0
+  
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
+    
+    loss_config:
+      warmup_epochs: 5
+    
+    boundary_config:
+      boundary_band_width: 5.0e-3
+    
+    enable_rans: false  # 基準測試不使用 RANS
+    use_gradient_checkpointing: false  # ⚡ 關閉梯度檢查點（VS-PINN 二階導數不兼容）
+  
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 39998.0
+    u_tau: 0.04997
+    pressure_gradient: 0.0025
+    
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+    
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    periodic_z: true
+    pressure_driven: true
+    mean_pressure_gradient: 0.0025
+
+# =============================================================================
+# 損失函數權重（與 QR-Pivot 相同）
+# =============================================================================
+losses:
+  # ⭐ 僅監督速度場
+  data_weight: 5.0
+  data_variables: ['u', 'v', 'w']  # 不包含壓力
+  
+  boundary_weight: 5.0
+  
+  # PDE 項（平衡）
+  momentum_x_weight: 5.0
+  momentum_y_weight: 5.0
+  momentum_z_weight: 5.0
+  continuity_weight: 5.0
+  
+  # 約束
+  wall_constraint_weight: 10.0
+  periodicity_weight: 2.0
+  pressure_gradient_weight: 1.0
+  
+  # 正則化（輕量）
+  prior_weight: 0.1
+  source_l1: 1.0e-7
+  gradient_penalty: 1.0e-5
+  
+  # 關閉自適應權重（減少變數）
+  adaptive_weighting: false
+  causal_weighting: false
+
+# =============================================================================
+# 訓練設定（快速模式）
+# =============================================================================
+training:
+  optimizer: "adam"
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  
+  lr_scheduler:
+    type: "warmup_cosine"
+    min_lr: 1.0e-5
+    warmup_epochs: 10
+    T_max: 100
+  
+  epochs: 100
+  max_epochs: 100
+  batch_size: 512
+  validation_freq: 25
+  checkpoint_freq: 50
+  log_interval: 10
+  
+  early_stopping:
+    enabled: true
+    patience: 50
+    min_delta: 1.0e-6
+  
+  # 採樣配置
+  sampling:
+    pde_points: 1024
+    boundary_points: 500
+    wall_clustering: 0.2
+  
+  gradient_clip: 1.0
+  
+  # 關閉 AMP（簡化除錯）
+  amp:
+    enabled: false
+
+# 關閉課程學習
+curriculum:
+  enable: false
+
+# 關閉 Ensemble
+ensemble:
+  enable: false
+
+# =============================================================================
+# 評估設定
+# =============================================================================
+evaluation:
+  grid_resolution: [64, 32, 32]
+  
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "mass_conservation"
+    - "mean_velocity_profile"
+  
+  # 放寬門檻（快速測試）
+  thresholds:
+    l2_error: 0.50
+    mass_conservation_error: 1.0e-2
+    wall_shear_stress_error: 0.50
+    mean_profile_correlation: 0.70
+
+# =============================================================================
+# 日誌與儲存
+# =============================================================================
+logging:
+  level: "info"
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+
+output:
+  checkpoint_dir: "./checkpoints/ablation_exp3_wall_no_center"
+  results_dir: "./results/ablation_exp3_wall_no_center"
+  visualization_dir: "./results/ablation_exp3_wall_no_center/visualizations"
+
+# =============================================================================
+# 驗收標準（驗證 PDE 補償假設）
+# =============================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+    - gradient_norm_max: 100.0
+  
+  performance:
+    - u_l2_error_target: 0.50
+    - loss_converged: true
+    - pde_loss_ratio_min: 0.10
+  
+  # ⭐ 實驗 3 驗證目標
+  hypothesis_validation:
+    expected_center_layer_error: "~12.9%"  # 應接近 QR-Pivot
+    comparison_baseline: "QR-Pivot (12.87%)"
+    mechanism_validation: "PDE constraint compensation effect"

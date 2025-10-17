@@ -24,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.models.fourier_mlp import PINNNet, create_enhanced_pinn, init_siren_weights
 from pinnx.models.wrappers import ScaledPINNWrapper
-from pinnx.physics.scaling import VSScaler
 from pinnx.physics.ns_2d import NSEquations2D
 from pinnx.physics import create_vs_pinn_channel_flow, VSPINNChannelFlow  # VS-PINN
 from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
@@ -860,7 +859,14 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
     
     # 🆕 檢查是否為 3D 案例（決定是否請求 w 分量）
     is_3d = config.get('physics', {}).get('type') == 'vs_pinn_channel_flow'
-    target_fields = ['u', 'v', 'w', 'p'] if is_3d else ['u', 'v', 'p']
+    
+    # 🆕 從配置讀取 data_variables（損失函數中定義的監督變數）
+    if 'data_variables' in config.get('losses', {}):
+        # 使用配置中明確指定的變數（例如：僅速度場訓練）
+        target_fields = config['losses']['data_variables']
+    else:
+        # 預設行為：包含壓力場
+        target_fields = ['u', 'v', 'w', 'p'] if is_3d else ['u', 'v', 'p']
     
     training_bundle = load_channel_flow(
         config_path=config_path,  # ⭐ 傳遞配置路徑給 ChannelFlowLoader
@@ -913,7 +919,12 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
     
     u_sensors = sensor_data['u']
     v_sensors = sensor_data['v']
-    p_sensors = sensor_data['p']
+    
+    # 🆕 壓力場可能不存在（僅速度場訓練）
+    p_sensors = sensor_data.get('p')
+    if p_sensors is None:
+        # 如果沒有壓力數據，初始化為零（由 PINN 從速度場推導）
+        p_sensors = torch.zeros_like(u_sensors)
     
     # 🆕 如果是 VS-PINN，添加 w 分量（假設為 0 或從數據中獲取）
     if is_vs_pinn:
@@ -1162,7 +1173,7 @@ def main():
         print(f"🔧 Auto-configured model dimensions: {logger_msg}")
     
     # 設置日誌
-    logger = setup_logging(config['logging']['level'])
+    logger = setup_logging(config['logging'].get('log_level', config['logging'].get('level', 'INFO')))
     logger.info("=" * 60)
     logger.info("PINNs Inverse Reconstruction Training")
     logger.info("=" * 60)
@@ -1233,10 +1244,11 @@ def main():
             # 創建動態權重器（GradNorm/Causal/Curriculum）
             member_weighters = create_weighters(config, member_model, device, physics=physics)
             
-            # 使用 Trainer 訓練
+            # 使用 Trainer 訓練（傳遞 training_data 以支援自動計算標準化統計量）
             trainer = Trainer(member_model, physics, losses, config, device,
                                weighters=member_weighters,
-                               input_normalizer=input_normalizer)
+                               input_normalizer=input_normalizer,
+                               training_data=training_data_sample)
             trainer.training_data = training_data_sample
             
             # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）
@@ -1278,7 +1290,8 @@ def main():
         weighters = create_weighters(config, model, device, physics=physics)
         trainer = Trainer(model, physics, losses, config, device,
                           weighters=weighters,
-                          input_normalizer=input_normalizer)
+                          input_normalizer=input_normalizer,
+                          training_data=training_data_sample)
         trainer.training_data = training_data_sample
         
         # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）

@@ -37,6 +37,20 @@ import struct
 import base64
 from abc import ABC, abstractmethod
 
+# 載入環境變數（支援 .env 文件）
+try:
+    from dotenv import load_dotenv
+    # 在專案根目錄尋找 .env 文件
+    project_root = Path(__file__).parent.parent.parent
+    env_file = project_root / '.env'
+    if env_file.exists():
+        load_dotenv(env_file)
+        logging.getLogger(__name__).debug(f"已載入環境變數文件: {env_file}")
+except ImportError:
+    # 如果沒有安裝 python-dotenv，僅使用系統環境變數
+    logging.getLogger(__name__).debug("python-dotenv 未安裝，僅使用系統環境變數")
+    pass
+
 try:
     import pyJHTDB
     PYJHTDB_AVAILABLE = True
@@ -976,15 +990,72 @@ class HTTPJHTDBClient(BaseJHTDBClient):
         
         return data
     
+    def _physical_to_grid(self, dataset: str, 
+                         start: List[float], 
+                         end: List[float]) -> Tuple[List[int], List[int]]:
+        """
+        將物理座標轉換為網格索引（1-based）
+        
+        Args:
+            dataset: 資料集名稱
+            start: 起始物理座標 [x, y, z]
+            end: 結束物理座標 [x, y, z]
+            
+        Returns:
+            (start_indices, end_indices): 1-based 網格索引
+        """
+        dataset_config = JHTDBConfig.DATASETS.get(dataset, {})
+        domain = dataset_config.get('domain', {'x': [0, 8*np.pi], 'y': [-1, 1], 'z': [0, 3*np.pi]})
+        resolution = dataset_config.get('resolution', {'x': 2048, 'y': 512, 'z': 1536})
+        
+        # 物理域範圍
+        L = [domain['x'][1] - domain['x'][0],
+             domain['y'][1] - domain['y'][0],
+             domain['z'][1] - domain['z'][0]]
+        
+        # 網格解析度
+        N = [resolution['x'], resolution['y'], resolution['z']]
+        
+        # 轉換為網格索引（0-based）
+        start_grid = []
+        end_grid = []
+        
+        for i in range(3):
+            # 計算在域內的相對位置 [0, 1]
+            axis_key = ['x', 'y', 'z'][i]
+            domain_min = domain[axis_key][0]
+            
+            # 轉換為 [0, 1] 範圍
+            start_norm = (start[i] - domain_min) / L[i]
+            end_norm = (end[i] - domain_min) / L[i]
+            
+            # 轉換為網格索引（0-based）
+            start_idx_0 = int(start_norm * N[i])
+            end_idx_0 = int(end_norm * N[i])
+            
+            # 轉換為 1-based（JHTDB 要求）
+            start_grid.append(start_idx_0 + 1)
+            end_grid.append(end_idx_0 + 1)
+        
+        logger.debug(f"座標轉換: physical {start} -> {end} => grid {start_grid} -> {end_grid}")
+        
+        return start_grid, end_grid
+    
     def _call_get_any_cutout_web(self, dataset: str, field: str, 
                                  start: List[float], end: List[float], 
                                  timestep: int) -> np.ndarray:
         """調用 GetAnyCutoutWeb API（替代已棄用的 GetRawVelocity）"""
         
         # 將物理座標轉換為 1-based 網格索引
-        # 注意：JHTDB 從 2023年9月16日起使用 1-based 索引
-        start_int = [max(1, int(s) + 1) for s in start]
-        end_int = [max(1, int(e) + 1) for e in end]
+        start_int, end_int = self._physical_to_grid(dataset, start, end)
+        
+        # 確保索引在有效範圍內（1-based）
+        dataset_config = JHTDBConfig.DATASETS.get(dataset, {})
+        resolution = dataset_config.get('resolution', {'x': 2048, 'y': 512, 'z': 1536})
+        res_list = [resolution['x'], resolution['y'], resolution['z']]
+        
+        start_int = [max(1, min(s, res_list[i])) for i, s in enumerate(start_int)]
+        end_int = [max(1, min(e, res_list[i])) for i, e in enumerate(end_int)]
         
         # 構建 SOAP 請求 - 使用正確的 GetAnyCutoutWeb API 格式
         soap_request = f"""<?xml version="1.0" encoding="utf-8"?>

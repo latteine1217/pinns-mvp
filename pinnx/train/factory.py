@@ -811,8 +811,9 @@ def create_physics(config: Dict[str, Any], device: torch.device):
         enable_rans = vs_pinn_cfg.get('enable_rans', False)
         rans_model = vs_pinn_cfg.get('rans_model', 'k_epsilon')
         
-        # ⚡ 提取梯度檢查點配置（默認啟用）
-        use_gradient_checkpointing = vs_pinn_cfg.get('use_gradient_checkpointing', True)
+        # ⚡ 提取梯度檢查點配置（從 model 區塊讀取，默認 False 以避免 autograd 衝突）
+        model_cfg = config.get('model', {})
+        use_gradient_checkpointing = model_cfg.get('use_gradient_checkpointing', False)
         
         physics = create_vs_pinn_channel_flow(
             N_x=scaling_cfg.get('N_x', 2.0),
