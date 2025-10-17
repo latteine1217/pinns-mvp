@@ -1173,10 +1173,23 @@ def main():
         print(f"🔧 Auto-configured model dimensions: {logger_msg}")
     
     # 設置日誌
-    logger = setup_logging(config['logging'].get('log_level', config['logging'].get('level', 'INFO')))
+    # 從配置讀取日誌目錄，若未指定則使用預設
+    log_dir = config.get('logging', {}).get('log_dir', './log')
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 生成日誌檔案路徑
+    exp_name = config['experiment']['name']
+    log_file = os.path.join(log_dir, 'training.log')
+    
+    # 設置日誌系統
+    log_level = config['logging'].get('log_level', config['logging'].get('level', 'INFO'))
+    logger = setup_logging(level=log_level, log_file=log_file)
     logger.info("=" * 60)
     logger.info("PINNs Inverse Reconstruction Training")
     logger.info("=" * 60)
+    logger.info(f"Experiment: {exp_name}")
+    logger.info(f"Log directory: {log_dir}")
+    logger.info(f"Log file: {log_file}")
     
     # 設置重現性
     set_random_seed(
