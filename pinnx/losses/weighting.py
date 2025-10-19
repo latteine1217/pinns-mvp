@@ -42,7 +42,7 @@ class GradNormWeighter:
     def __init__(self,
                  model: nn.Module,
                  loss_names: List[str],
-                 alpha: float = 0.12,
+                 alpha: float = 1.5,
                  update_frequency: int = 1000,
                  initial_weights: Optional[Dict[str, float]] = None,
                  target_gradient_ratio: float = 1.0,
@@ -55,7 +55,7 @@ class GradNormWeighter:
         Args:
             model: PINN 模型
             loss_names: 損失項名稱列表 ['data', 'residual', 'boundary', 'prior']
-            alpha: 梯度平衡的更新率 (0.12 為論文建議值)
+            alpha: 梯度平衡的更新率 (1.5 為推薦值，配合低頻更新提升響應強度)
             update_frequency: 權重更新頻率 (每多少步更新一次)
             initial_weights: 初始權重字典
             target_gradient_ratio: 目標梯度比例

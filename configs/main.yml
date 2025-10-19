@@ -214,8 +214,8 @@ losses:
   
   # 動態權重配置
   adaptive_weighting: true            # 是否啟用自適應權重（GradNorm）
-  weight_update_freq: 100             # 權重更新頻率（每 N 步）
-  grad_norm_alpha: 0.15               # GradNorm 超參數（0.1-0.2）
+  weight_update_freq: 1000            # 權重更新頻率（每 N 步，配合 VS-PINN 使用低頻更新）
+  grad_norm_alpha: 1.5                # GradNorm 超參數（推薦 1.5，配合低頻更新提升響應強度）
   
   causal_weighting: false             # 因果權重（時間演化問題）
 
