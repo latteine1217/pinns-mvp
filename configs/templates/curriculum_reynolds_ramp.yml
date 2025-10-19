@@ -1,0 +1,448 @@
+# 🎓 Reynolds 數遞增 Curriculum Learning 模板
+# 策略：Re_b: 100 → 1000 逐步提升，配合 Fourier σ=2-5 強化壁面高頻
+# 目的：穩定收斂、避免高 Re 數直接訓練的數值不穩定
+# 預期時間：2-4 小時（3000-5000 epochs，3-4 階段）
+
+# =============================================================================
+# 基本實驗設定
+# =============================================================================
+experiment:
+  name: "curriculum_reynolds_ramp_v1"  # ⚠️ 修改為你的實驗名稱
+  version: "v1.0"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+  description: "Reynolds number curriculum: Re_b 100→1000 with Fourier sigma=2-5"
+
+# =============================================================================
+# 重現性設定
+# =============================================================================
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# =============================================================================
+# 資料配置（3D Channel Flow）
+# =============================================================================
+data:
+  source: "jhtdb"
+  dataset: "channel"
+
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    description: "通道流 (Re_tau=1000) - Reynolds Curriculum"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range: [0.0, 26.0]
+    dt: 0.0065
+    variables: ['u', 'v', 'w', 'p']
+
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+
+normalization:
+  type: 'training_data_norm'
+  params: {}
+  noise_sigma: 0.01  # 降低雜訊以利低 Re 訓練
+  dropout_prob: 0.05
+
+  slice_config:
+    plane: "3d_slab"
+    z_range: [4.0, 5.5]
+    steady_state: true
+    time_average_window: [20.0, 26.0]
+
+# =============================================================================
+# 感測點配置
+# =============================================================================
+sensors:
+  K: 200  # 較多感測點以穩定訓練
+  selection_method: "qr_pivot"
+  spatial_coverage: "optimal"
+
+# =============================================================================
+# 模型架構（Fourier σ=2-5 強化壁面高頻）
+# =============================================================================
+model:
+  type: "enhanced_fourier_mlp"
+  in_dim: 3
+  out_dim: 4
+  width: 256
+  depth: 6
+  activation: "sine"
+
+  # ⭐ Fourier Features: σ=2-5 強化壁面高頻結構
+  fourier_features:
+    type: "standard"
+    fourier_m: 64  # 增加 Fourier 特徵數以捕捉高頻
+    fourier_sigma: 3.0  # 推薦範圍中間值 (2-5)
+    fourier_trainable: false
+
+  scaling:
+    learnable: true
+    input_norm: "channel_flow"
+    output_norm: "friction_velocity"
+    friction_velocity: 0.04997
+    channel_half_height: 1.0
+    viscous_length: 1.0e-3
+
+# =============================================================================
+# 物理配置（基礎參數，各階段會覆蓋 nu）
+# =============================================================================
+physics:
+  type: "vs_pinn_channel_flow"
+
+  # VS-PINN 縮放係數（y 方向壁面剛性最大）
+  scaling_factors:
+    N_x: 2.0
+    N_y: 12.0
+    N_z: 2.0
+
+  # 基礎物理參數（Re_tau=1000 對應）
+  Re_tau: 1000.0
+  Re_bulk: 39998.0
+  nu: 5.0e-5  # 初始值，各階段會調整
+  dP_dx: 0.0025  # 壓力梯度（驅動流動）
+  rho: 1.0
+
+  domain:
+    x: [0, 25.13]
+    y: [-1.0, 1.0]
+    z: [0, 9.42]
+
+  boundary_conditions:
+    walls: "no_slip"
+    periodic_directions: ["x", "z"]
+
+# =============================================================================
+# 損失權重配置（各階段會調整）
+# =============================================================================
+losses:
+  # 基礎權重
+  data_weight: 10.0
+  momentum_x_weight: 2.0
+  momentum_y_weight: 2.0
+  momentum_z_weight: 2.0
+  continuity_weight: 2.0
+  wall_constraint_weight: 10.0
+  periodicity_weight: 5.0
+
+  # GradNorm 動態平衡
+  adaptive_weighting: true
+  weight_update_freq: 1000  # 配合 VS-PINN 使用低頻更新
+  grad_norm_alpha: 1.5  # 提升響應強度
+
+# =============================================================================
+# ⭐ Reynolds 數遞增 Curriculum（Re_b: 100 → 1000）
+# =============================================================================
+curriculum:
+  enable: true
+
+  stages:
+    # ================================================================
+    # 階段 1: 低 Reynolds 數暖啟 (Re_b ≈ 100, Re_tau ≈ 25)
+    # 目的：建立基本流場結構，避免高 Re 數值不穩定
+    # ================================================================
+    - name: "Stage1_LowReynolds_Warmup"
+      epoch_range: [0, 800]
+
+      # ⭐ 低 Reynolds 數配置
+      Re_tau: 25.0  # Re_b = 25 * 2 * 2 ≈ 100
+      Re_bulk: 100.0
+      nu: 2.0e-3  # ν = 1 / Re_tau ≈ 0.04 / 25 = 0.0016
+      pressure_gradient: 0.004  # 調整壓力梯度以維持流動
+
+      lr: 1.0e-3
+
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 3.0  # 低 Re 時黏性項主導
+        momentum_y: 3.0
+        momentum_z: 3.0
+        continuity: 3.0
+        wall_constraint: 15.0  # 強制壁面條件
+        periodicity: 5.0
+
+      sampling:
+        pde_points: 1024  # 低 Re 可用較少點
+        boundary_points: 800
+        wall_clustering: 0.4  # 強化壁面採樣
+
+      stage_goals:
+        pde_ratio_min: 0.20
+        tau_w_ratio_min: 0.5
+        loss_reduction_factor: 0.3
+
+    # ================================================================
+    # 階段 2: 中等 Reynolds 數過渡 (Re_b ≈ 400, Re_tau ≈ 100)
+    # 目的：逐步引入湍流特性
+    # ================================================================
+    - name: "Stage2_MediumReynolds_Transition"
+      epoch_range: [800, 1800]
+
+      # ⭐ 中等 Reynolds 數配置
+      Re_tau: 100.0  # Re_b = 100 * 2 * 2 = 400
+      Re_bulk: 400.0
+      nu: 5.0e-4  # ν = 1 / Re_tau ≈ 0.04 / 100 = 0.0004
+      pressure_gradient: 0.003
+
+      lr: 5.0e-4  # 降低學習率
+
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 5.0  # 對流項開始重要
+        momentum_y: 5.0
+        momentum_z: 5.0
+        continuity: 5.0
+        wall_constraint: 12.0
+        periodicity: 5.0
+
+      sampling:
+        pde_points: 2048  # 增加採樣點
+        boundary_points: 1000
+        wall_clustering: 0.35
+
+      stage_goals:
+        pde_ratio_min: 0.25
+        tau_w_ratio_min: 1.0
+        u_l2_target: 0.30
+
+    # ================================================================
+    # 階段 3: 高 Reynolds 數精煉 (Re_b ≈ 1000, Re_tau ≈ 250)
+    # 目的：接近目標 Re 數，強化湍流結構
+    # ================================================================
+    - name: "Stage3_HighReynolds_Refinement"
+      epoch_range: [1800, 3000]
+
+      # ⭐ 接近目標 Reynolds 數
+      Re_tau: 250.0  # Re_b = 250 * 2 * 2 = 1000
+      Re_bulk: 1000.0
+      nu: 2.0e-4  # ν = 1 / Re_tau ≈ 0.04 / 250 = 0.00016
+      pressure_gradient: 0.0025
+
+      lr: 3.0e-4
+
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 8.0  # PDE 主導
+        momentum_y: 8.0
+        momentum_z: 8.0
+        continuity: 8.0
+        wall_constraint: 10.0
+        periodicity: 5.0
+
+      sampling:
+        pde_points: 4096  # 高 Re 需要更多點
+        boundary_points: 1200
+        wall_clustering: 0.30
+
+      stage_goals:
+        pde_ratio_min: 0.30
+        tau_w_ratio_min: 3.0
+        u_l2_target: 0.20
+        mass_conservation_target: 1.0e-3
+
+    # ================================================================
+    # 階段 4: 目標 Reynolds 數收斂 (Re_b ≈ 40000, Re_tau = 1000)
+    # 目的：達到 JHTDB 實際 Re 數，最終收斂
+    # ================================================================
+    - name: "Stage4_TargetReynolds_Convergence"
+      epoch_range: [3000, 5000]
+
+      # ⭐ 目標 Reynolds 數（JHTDB Re_tau=1000）
+      Re_tau: 1000.0
+      Re_bulk: 39998.0
+      nu: 5.0e-5  # JHTDB 實際黏度
+      pressure_gradient: 0.0025
+
+      lr: 1.0e-4  # 微調學習率
+
+      weights:
+        data: 8.0  # 略降資料權重
+        boundary: 8.0
+        momentum_x: 10.0  # PDE 主導
+        momentum_y: 10.0
+        momentum_z: 10.0
+        continuity: 10.0
+        wall_constraint: 10.0
+        periodicity: 5.0
+
+      sampling:
+        pde_points: 8192  # 最大採樣密度
+        boundary_points: 1500
+        wall_clustering: 0.25
+
+      stage_goals:
+        pde_ratio_min: 0.35
+        tau_w_ratio_min: 5.0
+        u_l2_target: 0.15
+        mass_conservation_target: 5.0e-4
+        wall_shear_stress_error: 0.20
+
+# =============================================================================
+# 訓練配置
+# =============================================================================
+training:
+  epochs: 5000
+  batch_size: 8192
+
+  optimizer:
+    type: "adam"
+    lr: 1.0e-3  # 階段 1 初始值
+    betas: [0.9, 0.999]
+    weight_decay: 0.0
+
+  scheduler:
+    type: "cosine_annealing"
+    T_max: 5000
+    eta_min: 1.0e-6
+
+  gradient_clip_val: 1.0
+  use_amp: true  # 自動混合精度
+
+# =============================================================================
+# 採樣配置（階段 1 初始值）
+# =============================================================================
+sampling:
+  pde_points: 1024
+  boundary_points: 800
+  data_points: -1
+  ic_points: 0
+
+  wall_clustering: 0.4
+  adaptive_sampling:
+    enabled: false
+
+# =============================================================================
+# 評估設定
+# =============================================================================
+evaluation:
+  grid_resolution: [128, 64, 16]
+
+  metrics:
+    - "relative_l2"
+    - "wall_shear_stress"
+    - "mass_conservation"
+    - "mean_velocity_profile"
+    - "turbulent_kinetic_energy"
+    - "reynolds_stress"
+
+  thresholds:
+    l2_error: 0.15
+    mass_conservation_error: 5.0e-4
+    wall_shear_stress_error: 0.20
+    mean_profile_correlation: 0.95
+
+# =============================================================================
+# 物理驗證（診斷模式）
+# =============================================================================
+physics_validation:
+  enabled: true
+  strict_mode: false  # 診斷模式，不拒絕保存
+  save_metrics: true
+  thresholds:
+    mass_conservation: 1.0e-2
+    momentum_conservation: 1.0e-1
+    boundary_condition: 1.0e-3
+
+# =============================================================================
+# 輸出配置
+# =============================================================================
+output:
+  checkpoint_dir: "./checkpoints/curriculum_reynolds_ramp_v1"
+  results_dir: "./results/curriculum_reynolds_ramp_v1"
+  visualization_dir: "./results/curriculum_reynolds_ramp_v1/visualizations"
+  log_dir: "./log/curriculum_reynolds_ramp_v1"
+
+# =============================================================================
+# 日誌配置
+# =============================================================================
+logging:
+  frequency: 50
+  print_freq: 10
+  save_freq: 200
+  save_stage_checkpoints: true  # 每階段結束時保存
+
+  wandb:
+    enabled: false
+    project: "pinns-mvp-curriculum"
+    entity: "your-wandb-username"
+    tags: ["curriculum", "reynolds_ramp", "channel_flow"]
+
+  tensorboard:
+    enabled: true
+    log_dir: "./runs/curriculum_reynolds_ramp_v1"
+
+  curriculum:
+    log_stage_transitions: true
+    log_physics_params: true
+
+# =============================================================================
+# 使用說明
+# =============================================================================
+usage_notes: |
+  ⭐ Reynolds 數遞增 Curriculum 訓練策略
+
+  📋 訓練流程：
+  1. Stage 1 (0-800 epochs): Re_b ≈ 100
+     - 低 Reynolds 數暖啟，建立基本流場
+     - 黏性項主導，數值穩定
+
+  2. Stage 2 (800-1800 epochs): Re_b ≈ 400
+     - 逐步引入對流項
+     - 湍流特性開始顯現
+
+  3. Stage 3 (1800-3000 epochs): Re_b ≈ 1000
+     - 接近目標 Re 數
+     - 強化湍流結構捕捉
+
+  4. Stage 4 (3000-5000 epochs): Re_tau = 1000
+     - 目標 JHTDB Re 數
+     - 最終精煉收斂
+
+  🎯 Fourier Features 策略：
+  - σ = 3.0 (推薦範圍 2-5)
+  - 強化壁面高頻結構捕捉
+  - 配合 wall_clustering=0.25-0.4
+
+  ⚙️ 執行命令：
+  python scripts/train.py --cfg configs/templates/curriculum_reynolds_ramp.yml
+
+  📊 監控指標：
+  - PDE Loss Ratio ≥ 30% (最終階段 ≥ 35%)
+  - Wall Shear Stress Error < 20%
+  - Mass Conservation Error < 0.05%
+
+  ⚠️  注意事項：
+  - 訓練時間約 2-4 小時（取決於硬體）
+  - 建議使用 GPU + AMP 加速
+  - 每階段結束會自動保存檢查點
+  - 可根據實際情況調整 Re 數遞增速度
+
+# =============================================================================
+# 參考文獻與理論依據
+# =============================================================================
+references:
+  - title: "Variable-Scaling Physics-Informed Neural Networks"
+    arxiv: "arXiv:2308.08468"
+    note: "VS-PINN 縮放策略"
+
+  - title: "Curriculum Learning for Physics-Informed Neural Networks"
+    note: "Reynolds 數遞增策略理論依據"
+
+  - title: "JHTDB Channel Flow Re_tau=1000"
+    note: "目標數據集與物理參數"
+
+  - title: "Fourier Features for High-Frequency Reconstruction"
+    note: "σ=2-5 壁面高頻結構捕捉"
