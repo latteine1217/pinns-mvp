@@ -12,6 +12,8 @@ import torch.nn as nn
 from torch.optim import Optimizer
 import logging
 
+from pinnx.physics.validators import compute_physics_metrics
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,5 +191,114 @@ def load_checkpoint(
     config = checkpoint.get('config', None)
     
     logger.info(f"檢查點載入完成 - Epoch: {epoch}, Loss: {loss:.6f}")
-    
+
     return epoch, loss, config
+
+
+def validate_physics_before_save(
+    model: nn.Module,
+    coords: torch.Tensor,
+    config: Dict[str, Any],
+    device: torch.device
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    在保存檢查點前執行物理一致性驗證
+
+    Args:
+        model: PINN 模型
+        coords: 驗證點座標 [N, 2] 或 [N, 3]
+        config: 訓練配置
+        device: 計算設備
+
+    Returns:
+        (驗證是否通過, 物理指標字典)
+    """
+    # 檢查是否啟用物理驗證
+    physics_val_cfg = config.get('physics_validation', {})
+    if not physics_val_cfg.get('enabled', True):
+        logger.info("物理驗證已禁用，跳過驗證")
+        return True, {}
+
+    # 獲取驗證閾值
+    thresholds = physics_val_cfg.get('thresholds', {
+        'mass_conservation': 1e-2,
+        'momentum_conservation': 1e-1,
+        'boundary_condition': 1e-3
+    })
+
+    # 獲取物理參數
+    physics_params = {
+        'nu': config.get('physics', {}).get('nu', 5e-5),
+        'wall_positions': config.get('domain', {}).get('wall_positions', (0.0, 2.0))
+    }
+
+    # 確保座標在正確的設備上且需要梯度
+    coords = coords.to(device)
+    if not coords.requires_grad:
+        coords = coords.clone().detach().requires_grad_(True)
+
+    try:
+        # 使用模型進行預測
+        model.eval()
+        with torch.no_grad():
+            predictions_raw = model(coords)
+
+        # 重新預測以計算梯度（用於物理驗證）
+        model.eval()
+        coords_grad = coords.clone().detach().requires_grad_(True)
+        predictions_grad = model(coords_grad)
+
+        # 提取預測場（支援 2D 和 3D）
+        if predictions_grad.shape[1] == 3:  # 2D: u, v, p
+            u, v, p = predictions_grad[:, 0:1], predictions_grad[:, 1:2], predictions_grad[:, 2:3]
+            predictions = {'u': u, 'v': v, 'p': p}
+        elif predictions_grad.shape[1] == 4:  # 3D: u, v, w, p
+            u, v, w, p = predictions_grad[:, 0:1], predictions_grad[:, 1:2], predictions_grad[:, 2:3], predictions_grad[:, 3:4]
+            predictions = {'u': u, 'v': v, 'w': w, 'p': p}
+        else:
+            logger.warning(f"未知的輸出維度: {predictions_grad.shape[1]}，跳過物理驗證")
+            return True, {}
+
+        # 計算物理指標
+        metrics = compute_physics_metrics(
+            coords_grad,
+            predictions,
+            physics_params=physics_params,
+            validation_thresholds=thresholds
+        )
+
+        # 檢查驗證結果
+        validation_passed = metrics['validation_passed']
+
+        if not validation_passed:
+            logger.warning("=" * 60)
+            logger.warning("⚠️  物理驗證失敗，檢查點保存被拒絕")
+            logger.warning("=" * 60)
+            logger.warning(f"質量守恆誤差: {metrics['mass_conservation_error']:.6e} "
+                          f"(閾值: {thresholds['mass_conservation']:.6e}) "
+                          f"[{'✓' if metrics['mass_conservation_passed'] else '✗'}]")
+            logger.warning(f"動量守恆誤差: {metrics['momentum_conservation_error']:.6e} "
+                          f"(閾值: {thresholds['momentum_conservation']:.6e}) "
+                          f"[{'✓' if metrics['momentum_conservation_passed'] else '✗'}]")
+            logger.warning(f"邊界條件誤差: {metrics['boundary_condition_error']:.6e} "
+                          f"(閾值: {thresholds['boundary_condition']:.6e}) "
+                          f"[{'✓' if metrics['boundary_condition_passed'] else '✗'}]")
+            logger.warning("=" * 60)
+            logger.warning("建議除錯步驟：")
+            logger.warning("  1. 檢查學習率是否過高（建議降低 2-5 倍）")
+            logger.warning("  2. 啟用梯度裁剪（training.gradient_clip_val: 1.0）")
+            logger.warning("  3. 檢查 PDE Loss Ratio 是否 < 30%（若是，增加 GradNorm alpha）")
+            logger.warning("  4. 檢查網格解析度是否足夠（增加 collocation points）")
+            logger.warning("=" * 60)
+        else:
+            logger.info("✓ 物理驗證通過")
+            logger.info(f"  質量守恆誤差: {metrics['mass_conservation_error']:.6e}")
+            logger.info(f"  動量守恆誤差: {metrics['momentum_conservation_error']:.6e}")
+            logger.info(f"  邊界條件誤差: {metrics['boundary_condition_error']:.6e}")
+
+        return validation_passed, metrics
+
+    except Exception as e:
+        logger.error(f"物理驗證過程中發生錯誤: {str(e)}")
+        logger.warning("由於驗證錯誤，將允許保存檢查點（請手動檢查模型）")
+        return True, {'validation_error': str(e)}

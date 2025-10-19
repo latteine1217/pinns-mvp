@@ -1288,14 +1288,51 @@ class Trainer:
     ):
         """
         保存檢查點
-        
+
         Args:
             epoch: 當前 epoch
             metrics: 評估指標（可選）
             is_best: 是否為最佳模型
         """
+        # ✅ 物理驗證：在保存前檢查模型物理一致性
+        from pinnx.train.checkpointing import validate_physics_before_save
+
+        # 生成驗證點座標（從域邊界均勻採樣）
+        validation_n_points = 1000  # 驗證點數量
+        domain = self.config['domain']
+
+        if self.model_input_dim == 2:
+            x = torch.linspace(domain['x_min'], domain['x_max'], 32, device=self.device)
+            y = torch.linspace(domain['y_min'], domain['y_max'], 32, device=self.device)
+            X, Y = torch.meshgrid(x, y, indexing='ij')
+            validation_coords = torch.stack([X.flatten(), Y.flatten()], dim=1)
+        elif self.model_input_dim == 3:
+            x = torch.linspace(domain['x_min'], domain['x_max'], 10, device=self.device)
+            y = torch.linspace(domain['y_min'], domain['y_max'], 10, device=self.device)
+            z = torch.linspace(domain.get('z_min', 0.0), domain.get('z_max', 1.0), 10, device=self.device)
+            X, Y, Z = torch.meshgrid(x, y, z, indexing='ij')
+            validation_coords = torch.stack([X.flatten(), Y.flatten(), Z.flatten()], dim=1)
+        else:
+            logging.warning(f"未知的模型輸入維度: {self.model_input_dim}，跳過物理驗證")
+            validation_coords = None
+
+        # 執行物理驗證
+        physics_metrics = {}
+        if validation_coords is not None:
+            validation_passed, physics_metrics = validate_physics_before_save(
+                self.model,
+                validation_coords,
+                self.config,
+                self.device
+            )
+
+            # 如果驗證失敗，拒絕保存檢查點
+            if not validation_passed:
+                logging.error("❌ 檢查點保存被拒絕：物理驗證失敗")
+                return  # 提前返回，不保存檢查點
+
         checkpoint_path = self.checkpoint_dir / f"epoch_{epoch}.pth"
-        
+
         checkpoint_data = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -1303,30 +1340,35 @@ class Trainer:
             'history': self.history,
             'config': self.config,
         }
-        
+
         # 🆕 保存 physics 的 state_dict（VS-PINN 縮放參數等）
         if self.physics is not None and hasattr(self.physics, 'state_dict'):
             checkpoint_data['physics_state_dict'] = self.physics.state_dict()
             logging.debug(f"💾 Physics state saved: {list(self.physics.state_dict().keys())}")
-        
+
         # ✅ TASK-008: 保存標準化 metadata
         checkpoint_data['normalization'] = self.data_normalizer.get_metadata()
         logging.debug(f"💾 Normalization metadata saved: type={self.data_normalizer.norm_type}")
-        
+
         # ⭐ P0.2: 保存 GradScaler 狀態（AMP）
         if self.use_amp and hasattr(self, 'scaler'):
             checkpoint_data['scaler_state_dict'] = self.scaler.state_dict()
             logging.debug(f"💾 GradScaler state saved: scale={self.scaler.get_scale():.0f}")
-        
+
+        # ✅ 保存物理驗證指標
+        if physics_metrics:
+            checkpoint_data['physics_metrics'] = physics_metrics
+            logging.debug(f"💾 Physics metrics saved: validation_passed={physics_metrics.get('validation_passed', False)}")
+
         if metrics:
             checkpoint_data['metrics'] = metrics
-        
+
         if self.lr_scheduler:
             checkpoint_data['lr_scheduler_state_dict'] = self.lr_scheduler.state_dict()
-        
+
         torch.save(checkpoint_data, checkpoint_path)
         logging.info(f"💾 檢查點已保存: {checkpoint_path}")
-        
+
         if is_best:
             best_path = self.checkpoint_dir / "best_model.pth"
             torch.save(checkpoint_data, best_path)

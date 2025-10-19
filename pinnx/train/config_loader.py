@@ -220,8 +220,29 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
     model_cfg.setdefault('fourier_m', 32)
     model_cfg.setdefault('fourier_sigma', 1.0)
     model_cfg.setdefault('fourier_trainable', False)
-    
+
     config['model'] = model_cfg
+
+    # ✅ 設置 physics_validation 預設值
+    if 'physics_validation' not in config:
+        config['physics_validation'] = {}
+
+    physics_val_cfg = config['physics_validation']
+    physics_val_cfg.setdefault('enabled', True)  # 預設啟用物理驗證
+
+    if 'thresholds' not in physics_val_cfg:
+        physics_val_cfg['thresholds'] = {}
+
+    thresholds = physics_val_cfg['thresholds']
+    thresholds.setdefault('mass_conservation', 1.0e-2)
+    thresholds.setdefault('momentum_conservation', 1.0e-1)
+    thresholds.setdefault('boundary_condition', 1.0e-3)
+
+    physics_val_cfg.setdefault('save_metrics', True)  # 預設保存驗證指標
+
+    logging.debug(f"✅ Physics validation 配置: enabled={physics_val_cfg['enabled']}, "
+                  f"thresholds={physics_val_cfg['thresholds']}")
+
     return config
 
 
