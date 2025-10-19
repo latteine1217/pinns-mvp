@@ -1299,7 +1299,61 @@ class Trainer:
 
         # 生成驗證點座標（從域邊界均勻採樣）
         validation_n_points = 1000  # 驗證點數量
-        domain = self.config['domain']
+        
+        # 嘗試從配置中獲取 domain 資訊（支援多種配置格式）
+        domain = None
+        
+        # 優先順序 1: physics.domain
+        physics_config = self.config.get('physics', {})
+        if 'domain' in physics_config:
+            domain_data = physics_config['domain']
+            if 'x_range' in domain_data:
+                # 格式: x_range: [min, max]
+                domain = {
+                    'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
+                    'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
+                    'z_min': domain_data.get('z_range', [0, 1])[0],
+                    'z_max': domain_data.get('z_range', [0, 1])[1],
+                }
+        
+        # 優先順序 2: data.jhtdb_config.domain
+        if domain is None:
+            data_config = self.config.get('data', {})
+            jhtdb_config = data_config.get('jhtdb_config', {})
+            if 'domain' in jhtdb_config:
+                domain_data = jhtdb_config['domain']
+                # 格式: x: [min, max]
+                domain = {
+                    'x_min': domain_data.get('x', [0, 1])[0],
+                    'x_max': domain_data.get('x', [0, 1])[1],
+                    'y_min': domain_data.get('y', [-1, 1])[0],
+                    'y_max': domain_data.get('y', [-1, 1])[1],
+                    'z_min': domain_data.get('z', [0, 1])[0] if 'z' in domain_data else 0.0,
+                    'z_max': domain_data.get('z', [0, 1])[1] if 'z' in domain_data else 1.0,
+                }
+        
+        # 優先順序 3: 頂層 domain
+        if domain is None:
+            domain_data = self.config.get('domain', None)
+            if domain_data is not None:
+                if 'x_range' in domain_data:
+                    domain = {
+                        'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
+                        'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
+                        'z_min': domain_data.get('z_range', [0, 1])[0],
+                        'z_max': domain_data.get('z_range', [0, 1])[1],
+                    }
+                elif 'x_min' in domain_data:
+                    domain = domain_data
+        
+        # 預設值（通道流標準域）
+        if domain is None:
+            logging.warning("配置中未找到 domain 資訊，使用預設值（通道流 Re_tau=1000）")
+            domain = {
+                'x_min': 0.0, 'x_max': 25.13,
+                'y_min': -1.0, 'y_max': 1.0,
+                'z_min': 0.0, 'z_max': 9.42
+            }
 
         if self.model_input_dim == 2:
             x = torch.linspace(domain['x_min'], domain['x_max'], 32, device=self.device)
@@ -1309,7 +1363,7 @@ class Trainer:
         elif self.model_input_dim == 3:
             x = torch.linspace(domain['x_min'], domain['x_max'], 10, device=self.device)
             y = torch.linspace(domain['y_min'], domain['y_max'], 10, device=self.device)
-            z = torch.linspace(domain.get('z_min', 0.0), domain.get('z_max', 1.0), 10, device=self.device)
+            z = torch.linspace(domain['z_min'], domain['z_max'], 10, device=self.device)
             X, Y, Z = torch.meshgrid(x, y, z, indexing='ij')
             validation_coords = torch.stack([X.flatten(), Y.flatten(), Z.flatten()], dim=1)
         else:
@@ -1326,10 +1380,20 @@ class Trainer:
                 self.device
             )
 
-            # 如果驗證失敗，拒絕保存檢查點
+            # 物理診斷完成（記錄但不拒絕保存）
+            # 注意：validate_physics_before_save 已修改為診斷模式
+            # 僅在 strict_mode=True 且檢測到 trivial solution 時才返回 False
             if not validation_passed:
-                logging.error("❌ 檢查點保存被拒絕：物理驗證失敗")
-                return  # 提前返回，不保存檢查點
+                # 檢查是否是因為 trivial solution 被拒絕（strict mode）
+                if physics_metrics.get('trivial_solution', {}).get('is_trivial', False):
+                    strict_mode = self.config.get('physics_validation', {}).get('strict_mode', False)
+                    if strict_mode:
+                        logging.error("❌ Strict Mode: 檢測到 Trivial Solution，拒絕保存")
+                        return  # 僅在此情況下拒絕
+
+                # 其他情況：物理約束未滿足（訓練初期正常）
+                logging.info("ℹ️  物理診斷完成，指標已記錄至檢查點元數據")
+                # 繼續保存，讓使用者根據診斷資訊判斷
 
         checkpoint_path = self.checkpoint_dir / f"epoch_{epoch}.pth"
 

@@ -228,19 +228,22 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
         config['physics_validation'] = {}
 
     physics_val_cfg = config['physics_validation']
-    physics_val_cfg.setdefault('enabled', True)  # 預設啟用物理驗證
+    physics_val_cfg.setdefault('enabled', True)  # 預設啟用物理診斷
+    physics_val_cfg.setdefault('strict_mode', False)  # 預設診斷模式（不拒絕保存）
 
     if 'thresholds' not in physics_val_cfg:
         physics_val_cfg['thresholds'] = {}
 
     thresholds = physics_val_cfg['thresholds']
+    # 預設閾值設定為參考值（用於診斷，非強制）
     thresholds.setdefault('mass_conservation', 1.0e-2)
     thresholds.setdefault('momentum_conservation', 1.0e-1)
     thresholds.setdefault('boundary_condition', 1.0e-3)
 
-    physics_val_cfg.setdefault('save_metrics', True)  # 預設保存驗證指標
+    physics_val_cfg.setdefault('save_metrics', True)  # 預設保存診斷指標
 
     logging.debug(f"✅ Physics validation 配置: enabled={physics_val_cfg['enabled']}, "
+                  f"strict_mode={physics_val_cfg['strict_mode']}, "
                   f"thresholds={physics_val_cfg['thresholds']}")
 
     return config

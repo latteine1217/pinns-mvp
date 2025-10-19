@@ -250,6 +250,92 @@ def validate_boundary_conditions(
         return False, float('inf')
 
 
+def detect_trivial_solution(
+    predictions: Dict[str, torch.Tensor],
+    epsilon: float = 1e-6
+) -> Dict[str, Any]:
+    """
+    檢測 trivial solution（全零解或常數解）
+
+    Args:
+        predictions: 預測場字典，包含 'u', 'v', 'p', 'w' (可選)
+        epsilon: 判定為零的閾值
+
+    Returns:
+        檢測結果字典：
+        {
+            'is_trivial': bool,
+            'type': str,  # 'zero', 'constant', 'none'
+            'details': {...}
+        }
+    """
+    u = predictions['u']
+    v = predictions['v']
+    p = predictions['p']
+    w = predictions.get('w', None)
+
+    # 檢查全零解
+    u_max = torch.max(torch.abs(u)).item()
+    v_max = torch.max(torch.abs(v)).item()
+    p_max = torch.max(torch.abs(p)).item()
+
+    if u_max < epsilon and v_max < epsilon:
+        return {
+            'is_trivial': True,
+            'type': 'zero',
+            'details': {
+                'u_max': u_max,
+                'v_max': v_max,
+                'p_max': p_max
+            }
+        }
+
+    # 檢查常數解（變異數接近零）
+    u_std = torch.std(u).item()
+    v_std = torch.std(v).item()
+    p_std = torch.std(p).item()
+
+    if u_std < epsilon and v_std < epsilon:
+        return {
+            'is_trivial': True,
+            'type': 'constant',
+            'details': {
+                'u_std': u_std,
+                'v_std': v_std,
+                'p_std': p_std,
+                'u_mean': torch.mean(u).item(),
+                'v_mean': torch.mean(v).item()
+            }
+        }
+
+    # 檢查動態範圍
+    u_range = u_max
+    v_range = v_max
+    total_range = u_range + v_range
+
+    if total_range < epsilon:
+        return {
+            'is_trivial': True,
+            'type': 'near_zero',
+            'details': {
+                'u_range': u_range,
+                'v_range': v_range,
+                'total_range': total_range
+            }
+        }
+
+    return {
+        'is_trivial': False,
+        'type': 'none',
+        'details': {
+            'u_std': u_std,
+            'v_std': v_std,
+            'u_range': u_range,
+            'v_range': v_range
+        }
+    }
+
+
 def compute_physics_metrics(
     coords: torch.Tensor,
     predictions: Dict[str, torch.Tensor],
@@ -317,6 +403,9 @@ def compute_physics_metrics(
         threshold=validation_thresholds['boundary_condition']
     )
 
+    # 檢測 trivial solution
+    trivial_check = detect_trivial_solution(predictions)
+
     # 整合結果
     metrics = {
         'mass_conservation_error': mass_error,
@@ -325,7 +414,8 @@ def compute_physics_metrics(
         'mass_conservation_passed': mass_passed,
         'momentum_conservation_passed': momentum_passed,
         'boundary_condition_passed': bc_passed,
-        'validation_passed': mass_passed and momentum_passed and bc_passed
+        'trivial_solution': trivial_check,
+        'validation_passed': mass_passed and momentum_passed and bc_passed and not trivial_check['is_trivial']
     }
 
     return metrics

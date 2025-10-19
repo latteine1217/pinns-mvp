@@ -269,34 +269,62 @@ def validate_physics_before_save(
 
         # 檢查驗證結果
         validation_passed = metrics['validation_passed']
+        trivial_solution = metrics.get('trivial_solution', {})
 
+        # === 診斷性輸出（記錄但不拒絕） ===
+        logger.info("=" * 60)
+        logger.info("📊 物理診斷報告")
+        logger.info("=" * 60)
+
+        # 質量守恆
+        mass_status = "✓" if metrics['mass_conservation_passed'] else "✗"
+        logger.info(f"質量守恆誤差: {metrics['mass_conservation_error']:.6e} "
+                   f"(閾值: {thresholds['mass_conservation']:.6e}) [{mass_status}]")
+
+        # 動量守恆
+        momentum_status = "✓" if metrics['momentum_conservation_passed'] else "✗"
+        logger.info(f"動量守恆誤差: {metrics['momentum_conservation_error']:.6e} "
+                   f"(閾值: {thresholds['momentum_conservation']:.6e}) [{momentum_status}]")
+
+        # 邊界條件
+        bc_status = "✓" if metrics['boundary_condition_passed'] else "✗"
+        logger.info(f"邊界條件誤差: {metrics['boundary_condition_error']:.6e} "
+                   f"(閾值: {thresholds['boundary_condition']:.6e}) [{bc_status}]")
+
+        # Trivial Solution 檢測（這個是嚴重警告）
+        if trivial_solution.get('is_trivial', False):
+            logger.warning("=" * 60)
+            logger.warning("🚨 警告：檢測到 Trivial Solution！")
+            logger.warning(f"   類型: {trivial_solution['type']}")
+            logger.warning(f"   詳情: {trivial_solution['details']}")
+            logger.warning("=" * 60)
+            logger.warning("建議檢查：")
+            logger.warning("  1. PDE Loss Ratio 是否過低（< 10%）")
+            logger.warning("  2. 資料損失權重是否過高（壓制物理約束）")
+            logger.warning("  3. 學習率是否過低（無法逃離局部最小值）")
+            logger.warning("  4. 初始化是否合理（檢查 Fourier features）")
+            logger.warning("=" * 60)
+
+        # 整體評估
         if not validation_passed:
-            logger.warning("=" * 60)
-            logger.warning("⚠️  物理驗證失敗，檢查點保存被拒絕")
-            logger.warning("=" * 60)
-            logger.warning(f"質量守恆誤差: {metrics['mass_conservation_error']:.6e} "
-                          f"(閾值: {thresholds['mass_conservation']:.6e}) "
-                          f"[{'✓' if metrics['mass_conservation_passed'] else '✗'}]")
-            logger.warning(f"動量守恆誤差: {metrics['momentum_conservation_error']:.6e} "
-                          f"(閾值: {thresholds['momentum_conservation']:.6e}) "
-                          f"[{'✓' if metrics['momentum_conservation_passed'] else '✗'}]")
-            logger.warning(f"邊界條件誤差: {metrics['boundary_condition_error']:.6e} "
-                          f"(閾值: {thresholds['boundary_condition']:.6e}) "
-                          f"[{'✓' if metrics['boundary_condition_passed'] else '✗'}]")
-            logger.warning("=" * 60)
-            logger.warning("建議除錯步驟：")
-            logger.warning("  1. 檢查學習率是否過高（建議降低 2-5 倍）")
-            logger.warning("  2. 啟用梯度裁剪（training.gradient_clip_val: 1.0）")
-            logger.warning("  3. 檢查 PDE Loss Ratio 是否 < 30%（若是，增加 GradNorm alpha）")
-            logger.warning("  4. 檢查網格解析度是否足夠（增加 collocation points）")
-            logger.warning("=" * 60)
+            if trivial_solution.get('is_trivial', False):
+                logger.warning("⚠️  物理診斷：Trivial Solution（建議立即檢查）")
+            else:
+                logger.info("ℹ️  物理診斷：約束未滿足（訓練初期正常）")
         else:
-            logger.info("✓ 物理驗證通過")
-            logger.info(f"  質量守恆誤差: {metrics['mass_conservation_error']:.6e}")
-            logger.info(f"  動量守恆誤差: {metrics['momentum_conservation_error']:.6e}")
-            logger.info(f"  邊界條件誤差: {metrics['boundary_condition_error']:.6e}")
+            logger.info("✓ 物理診斷：約束滿足")
 
-        return validation_passed, metrics
+        logger.info("=" * 60)
+
+        # 僅在 strict_mode 時才拒絕保存
+        strict_mode = config.get('physics_validation', {}).get('strict_mode', False)
+
+        if strict_mode and trivial_solution.get('is_trivial', False):
+            logger.error("❌ Strict Mode: 檢測到 Trivial Solution，拒絕保存")
+            return False, metrics
+
+        # 預設：總是允許保存（僅診斷）
+        return True, metrics
 
     except Exception as e:
         logger.error(f"物理驗證過程中發生錯誤: {str(e)}")
