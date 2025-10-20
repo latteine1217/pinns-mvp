@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-from pinnx.models.fourier_mlp import PINNNet, create_enhanced_pinn, init_siren_weights
+from pinnx.models import PINNNet, create_pinn_model, init_siren_weights
 from pinnx.physics.ns_2d import NSEquations2D
 from pinnx.physics.vs_pinn_channel_flow import create_vs_pinn_channel_flow
 

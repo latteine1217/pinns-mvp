@@ -14,7 +14,7 @@ import yaml
 # 添加專案根目錄到路徑
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pinnx.models.fourier_mlp import create_enhanced_pinn
+from pinnx.models import create_pinn_model
 from pinnx.models.wrappers import ManualScalingWrapper
 from pinnx.dataio.channel_flow_loader import prepare_training_data
 
@@ -31,19 +31,22 @@ def load_model_and_config():
     checkpoint = torch.load(model_path, map_location='cpu')
     
     # 重建模型架構（必須與訓練時完全一致）
-    base_model = create_enhanced_pinn(
-        in_dim=2, out_dim=3,
-        width=256, depth=6,
-        activation='sine',
-        use_fourier=True,
-        fourier_m=48,
-        fourier_sigma=3.0,
-        # 關鍵：禁用額外層以匹配檢查點
-        use_layer_norm=False,
-        use_input_projection=False,
-        use_residual=False,
-        dropout=0.0
-    )
+    base_model_cfg = {
+        'type': 'fourier_vs_mlp',
+        'in_dim': 2,
+        'out_dim': 3,
+        'width': 256,
+        'depth': 6,
+        'activation': 'sine',
+        'use_fourier': True,
+        'fourier_m': 48,
+        'fourier_sigma': 3.0,
+        'use_layer_norm': False,
+        'use_input_projection': False,
+        'use_residual': False,
+        'dropout': 0.0
+    }
+    base_model = create_pinn_model(base_model_cfg)
     
     # 應用標準化包裝器
     model = ManualScalingWrapper(

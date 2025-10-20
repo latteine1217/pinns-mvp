@@ -15,7 +15,7 @@ import json
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pinnx.models.fourier_mlp import create_enhanced_pinn
+from pinnx.models import create_pinn_model
 from pinnx.train.config_loader import load_config
 
 
@@ -94,7 +94,7 @@ def create_model_from_checkpoint(checkpoint, config_path, device='mps'):
             vs_pinn_cfg.get('N_y', 1.0),
             vs_pinn_cfg.get('N_z', 1.0)
         ]
-        input_scale_factors = torch.tensor(scale_factors, dtype=torch.float32)
+        input_scale_factors = scale_factors
         print(f"🔧 VS-PINN 縮放因子 (vs_pinn.scaling_factors): {scale_factors}")
     elif 'scaling' in physics_cfg and physics_cfg['scaling'].get('use_scaling', False):
         scale_factors = [
@@ -102,7 +102,7 @@ def create_model_from_checkpoint(checkpoint, config_path, device='mps'):
             physics_cfg['scaling'].get('N_y', 1.0),
             physics_cfg['scaling'].get('N_z', 1.0)
         ]
-        input_scale_factors = torch.tensor(scale_factors, dtype=torch.float32)
+        input_scale_factors = scale_factors
         print(f"🔧 VS-PINN 縮放因子 (scaling.*): {scale_factors}")
     
     # 🔧 處理 Fourier 特徵配置（支援多種格式）
@@ -123,18 +123,25 @@ def create_model_from_checkpoint(checkpoint, config_path, device='mps'):
     print(f"🌊 Fourier 特徵: M={fourier_m}, σ={fourier_sigma}")
     print(f"🎭 激活函數: {model_cfg.get('activation')}")
     
-    # 使用 create_enhanced_pinn，它會處理所有預設值
-    model = create_enhanced_pinn(
-        in_dim=3,
-        out_dim=4,
-        width=model_cfg.get('width', model_cfg.get('hidden_dim', 256)),
-        depth=model_cfg.get('depth', model_cfg.get('num_layers', 4)),
-        activation=model_cfg.get('activation', 'swish'),
-        fourier_m=fourier_m,
-        fourier_sigma=fourier_sigma,
-        use_rwf=model_cfg.get('use_rwf', False),  # 🔧 預設改為 False（與檢查點一致）
-        input_scale_factors=input_scale_factors
-    )
+    model_config = {
+        'type': model_cfg.get('type', 'fourier_vs_mlp'),
+        'in_dim': model_cfg.get('in_dim', 3),
+        'out_dim': model_cfg.get('out_dim', 4),
+        'width': model_cfg.get('width', model_cfg.get('hidden_dim', 256)),
+        'depth': model_cfg.get('depth', model_cfg.get('num_layers', 4)),
+        'activation': model_cfg.get('activation', 'swish'),
+        'fourier_m': fourier_m,
+        'fourier_sigma': fourier_sigma,
+        'use_fourier': model_cfg.get('use_fourier', True),
+        'use_rwf': model_cfg.get('use_rwf', False),
+        'rwf_scale_std': model_cfg.get('rwf_scale_std', 0.1),
+        'rwf_scale_mean': model_cfg.get('rwf_scale_mean', 0.0),
+    }
+
+    if input_scale_factors is not None:
+        model_config['input_scale_factors'] = input_scale_factors
+
+    model = create_pinn_model(model_config)
     
     # 🔧 防禦性載入：過濾不相容的鍵
     state_dict = checkpoint['model_state_dict']

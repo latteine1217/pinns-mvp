@@ -21,7 +21,7 @@ matplotlib.use('Agg')  # 無顯示模式
 # 添加專案根目錄到路徑
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pinnx.models.fourier_mlp import PINNNet, create_enhanced_pinn
+from pinnx.models import PINNNet, create_pinn_model
 from pinnx.models.wrappers import ManualScalingWrapper
 
 
@@ -59,18 +59,13 @@ def create_model_from_config(config: Dict[str, Any], device: torch.device) -> nn
     fourier_sigma = fourier_cfg.get('fourier_sigma', model_cfg.get('fourier_sigma', 1.0))
     
     if model_cfg.get('type') == 'fourier_vs_mlp':
-        base_model = create_enhanced_pinn(
-            in_dim=model_cfg['in_dim'],
-            out_dim=model_cfg['out_dim'],
-            width=model_cfg['width'],
-            depth=model_cfg['depth'],
-            activation=model_cfg['activation'],
-            use_fourier=True,
-            fourier_m=fourier_m,
-            fourier_sigma=fourier_sigma,
-            use_rwf=model_cfg.get('use_rwf', False),
-            rwf_scale_std=model_cfg.get('rwf_scale_std', 0.1)
-        ).to(device)
+        base_model_cfg = {
+            **model_cfg,
+            'fourier_m': fourier_m,
+            'fourier_sigma': fourier_sigma,
+            'use_fourier': model_cfg.get('use_fourier', True)
+        }
+        base_model = create_pinn_model(base_model_cfg).to(device)
     else:
         base_model = PINNNet(
             in_dim=model_cfg['in_dim'],
