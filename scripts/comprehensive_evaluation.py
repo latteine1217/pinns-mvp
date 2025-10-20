@@ -257,6 +257,24 @@ def load_jhtdb_reference(data_path: Path) -> Dict[str, np.ndarray]:
     # 檢查數據維度（2D 或 3D）
     is_3d = 'z' in data and 'w' in data
     
+    # 檢查是否需要 reshape（1D flatten 格式）
+    if 'grid_shape' in data and data['u'].ndim == 1:
+        grid_shape = data['grid_shape']
+        logger.info(f"🔄 Reshaping 1D data to grid: {grid_shape}")
+        
+        # Reshape 流場變數
+        result = {key: data[key] for key in data.files}
+        for var in ['u', 'v', 'w', 'p']:
+            if var in data:
+                result[var] = data[var].reshape(*grid_shape, 1)  # (nx, ny, 1)
+        
+        domain_info = (f"domain: x[{data['x'].min():.2f}, {data['x'].max():.2f}], "
+                      f"y[{data['y'].min():.2f}, {data['y'].max():.2f}], "
+                      f"z[{data['z']:.2f}, {data['z']:.2f}]")
+        logger.info(f"✅ Loaded reference data (reshaped): u{result['u'].shape}, {domain_info}")
+        return result
+    
+    # 原有邏輯（3D 或 2D）
     if is_3d:
         required_fields = ['u', 'v', 'w', 'p', 'x', 'y', 'z']
         domain_info = (f"domain: x[{data['x'].min():.2f}, {data['x'].max():.2f}], "
@@ -279,16 +297,19 @@ def load_jhtdb_reference(data_path: Path) -> Dict[str, np.ndarray]:
 
 def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray, 
                     device: torch.device, batch_size: int = 10000, 
-                    physics=None, config: Dict = None) -> Dict[str, np.ndarray]:
+                    physics=None, config: Dict = None, checkpoint_path: str = None) -> Dict[str, np.ndarray]:
     """在網格上進行預測
     
     Args:
         model: 訓練好的模型
         physics: VS-PINN physics 模組（用於座標縮放）
         config: 配置字典（用於反標準化，TASK-008）
+        checkpoint_path: checkpoint 路徑（用於載入標準化統計量）
         ...
     """
-    logger.info(f"🔮 Predicting on grid: {len(x)}×{len(y)}×{len(z)} = {len(x)*len(y)*len(z)} points")
+    # 處理標量 z（2D slice）
+    z_array = np.atleast_1d(z)
+    logger.info(f"🔮 Predicting on grid: {len(x)}×{len(y)}×{len(z_array)} = {len(x)*len(y)*len(z_array)} points")
     
     # 🆕 檢查是否使用 VS-PINN 縮放
     use_vs_pinn = physics is not None and hasattr(physics, 'scale_coordinates')
@@ -298,7 +319,7 @@ def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray,
         logger.info(f"🔧 Using direct model inference (no scaling)")
     
     # 生成網格點
-    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+    X, Y, Z = np.meshgrid(x, y, z_array, indexing='ij')
     points = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
     n_points = points.shape[0]
     
@@ -323,7 +344,8 @@ def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray,
                 pred.cpu().numpy(), 
                 config, 
                 output_norm_type='training_data_norm',
-                verbose=False
+                verbose=True,  # 🔍 啟用詳細日誌
+                checkpoint_path=checkpoint_path
             )
             
             u_list.append(pred_physical[:, 0])
@@ -335,7 +357,7 @@ def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray,
                 logger.info(f"  Progress: {i+len(batch)}/{n_points} ({100*(i+len(batch))/n_points:.1f}%)")
     
     # 重塑為 3D 網格
-    shape = (len(x), len(y), len(z))
+    shape = (len(x), len(y), len(z_array))
     
     results = {
         'u': np.concatenate(u_list).reshape(shape),
@@ -344,7 +366,7 @@ def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray,
         'p': np.concatenate(p_list).reshape(shape),
         'x': x,
         'y': y,
-        'z': z
+        'z': z_array
     }
     
     logger.info(f"✅ Prediction complete")
@@ -1125,7 +1147,8 @@ def main():
             device, 
             batch_size=args.batch_size,
             physics=physics,  # 🆕 傳遞 physics
-            config=config     # ✅ TASK-008: 傳遞 config 用於反標準化
+            config=config,    # ✅ TASK-008: 傳遞 config 用於反標準化
+            checkpoint_path=args.checkpoint  # ✅ TASK-008: 傳遞 checkpoint 路徑
         )
     else:
         # 2D slice: 使用固定 z 值（從配置或參考資料推斷）
@@ -1146,7 +1169,8 @@ def main():
             device, 
             batch_size=args.batch_size,
             physics=physics,
-            config=config
+            config=config,
+            checkpoint_path=args.checkpoint  # ✅ TASK-008: 傳遞 checkpoint 路徑
         )
     
     # 保存預測場

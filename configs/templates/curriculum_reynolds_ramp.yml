@@ -72,7 +72,7 @@ sensors:
 # 模型架構（Fourier σ=2-5 強化壁面高頻）
 # =============================================================================
 model:
-  type: "enhanced_fourier_mlp"
+  type: "fourier_vs_mlp"
   in_dim: 3
   out_dim: 4
   width: 256

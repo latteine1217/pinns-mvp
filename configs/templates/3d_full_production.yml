@@ -73,7 +73,7 @@ sensors:
 # 模型架構（加強版）
 # =============================================================================
 model:
-  type: "enhanced_fourier_mlp"
+  type: "fourier_vs_mlp"
   in_dim: 3
   out_dim: 4
   width: 256  # 可選：512 for better accuracy
@@ -146,16 +146,16 @@ physics:
 # 損失函數權重（基礎配置）
 # =============================================================================
 losses:
-  data_weight: 5.0
-  boundary_weight: 5.0
+  data_weight: 10.0
+  boundary_weight: 10.0
   
-  momentum_x_weight: 5.0
-  momentum_y_weight: 5.0
-  momentum_z_weight: 5.0
-  continuity_weight: 5.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
   
   wall_constraint_weight: 10.0
-  periodicity_weight: 2.0
+  periodicity_weight: 10.0
   pressure_gradient_weight: 1.0
   
   prior_weight: 0.3  # ⚠️ 若啟用 RANS，建議 0.1-0.5
@@ -164,7 +164,7 @@ losses:
   
   # ⭐ 啟用自適應權重
   adaptive_weighting: true
-  weight_update_freq: 50
+  weight_update_freq: 1000
   grad_norm_alpha: 1.5
   
   adaptive_loss_terms:
@@ -182,15 +182,19 @@ losses:
 # 訓練設定（生產級）
 # =============================================================================
 training:
-  optimizer: "adam"  # Stage1-2 使用 Adam
+  optimizer:
+    type: "soap"
+    lr: 1.0e-3
+    weight_decay: 1.0e-5
+    precondition_frequency: 2
+    shampoo_beta: -1
   lr: 1.0e-3
   weight_decay: 1.0e-5
   
   lr_scheduler:
-    type: "warmup_cosine"
-    min_lr: 1.0e-7  # 更小最低 LR
-    warmup_epochs: 100
-    T_max: 5000
+    type: "step"
+    step_size: 1000
+    gamma: 0.9
   
   epochs: 5000
   max_epochs: 5000
@@ -205,8 +209,8 @@ training:
     min_delta: 1.0e-8
   
   sampling:
-    pde_points: 4096  # 加倍碰撞點
-    boundary_points: 2000  # 加倍邊界點
+    pde_points: 10000  # 加倍碰撞點
+    boundary_points: 5000  # 加倍邊界點
     wall_clustering: 0.4
   
   gradient_clip: 1.0
@@ -236,98 +240,82 @@ curriculum:
   
   stages:
     # ================================
-    # 階段 1: 強 PDE 暖啟（Epochs 0-1000）
+    # 階段 1: 低 Re_tau 穩定啟動 (Epochs 0-1500)
     # ================================
-    - name: "Stage1_Foundation"
-      epoch_range: [0, 1000]
-      Re_tau: 1000.0
-      nu: 5.0e-5
-      pressure_gradient: 0.0025
+    - name: "Stage1_Low_Re"
+      epoch_range: [0, 1500]
+      Re_tau: 500.0
+      nu: 1.0e-4  # nu = (1000 * 5e-5) / 500
+      pressure_gradient: 0.00125 # Scaled linearly
       lr: 1.0e-3
       
       weights:
-        data: 5.0
-        boundary: 5.0
-        momentum_x: 5.0
-        momentum_y: 5.0
-        momentum_z: 5.0
-        continuity: 5.0
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
         wall_constraint: 10.0
-        periodicity: 2.0
+        periodicity: 10.0
         pressure_gradient: 1.0
       
       sampling:
-        pde_points: 4096
-        boundary_points: 2000
-        wall_clustering: 0.4
+        pde_points: 10000
+        boundary_points: 5000
+        wall_clustering: 0.3
+
+    # ================================
+    # 階段 2: 中等 Re_tau 過渡 (Epochs 1500-3500)
+    # ================================
+    - name: "Stage2_Mid_Re"
+      epoch_range: [1500, 3500]
+      Re_tau: 750.0
+      nu: 6.67e-5 # nu = (1000 * 5e-5) / 750
+      pressure_gradient: 0.001875 # Scaled linearly
+      lr: 0.9e-3  # Decayed once
       
-      stage_goals:
-        pde_ratio_min: 0.25
-        tau_w_ratio_min: 1.0
-        loss_reduction_factor: 0.6
-    
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
+        wall_constraint: 10.0
+        periodicity: 10.0
+        pressure_gradient: 1.0
+      
+      sampling:
+        pde_points: 10000
+        boundary_points: 5000
+        wall_clustering: 0.4
+
     # ================================
-    # 階段 2: PDE 主導（Epochs 1000-3000）
+    # 階段 3: 目標 Re_tau 精煉 (Epochs 3500-5000)
     # ================================
-    - name: "Stage2_PDEDominance"
-      epoch_range: [1000, 3000]
+    - name: "Stage3_High_Re_Refinement"
+      epoch_range: [3500, 5000]
       Re_tau: 1000.0
       nu: 5.0e-5
       pressure_gradient: 0.0025
-      lr: 5.0e-4  # 降低 LR
+      lr: 0.729e-3 # Decayed three times (0.9^3)
       
       weights:
-        data: 5.0
-        boundary: 5.0
-        momentum_x: 8.0
-        momentum_y: 8.0
-        momentum_z: 8.0
-        continuity: 8.0
-        wall_constraint: 12.0  # 進一步強化壁面
-        periodicity: 2.0
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
+        wall_constraint: 10.0
+        periodicity: 10.0
         pressure_gradient: 1.0
       
       sampling:
-        pde_points: 4096
-        boundary_points: 2000
-        wall_clustering: 0.4
-      
-      stage_goals:
-        pde_ratio_min: 0.35
-        tau_w_ratio_min: 5.0
-        u_l2_target: 0.20
-    
-    # ================================
-    # 階段 3: 精煉優化（Epochs 3000-5000）
-    # ================================
-    - name: "Stage3_Refinement"
-      epoch_range: [3000, 5000]
-      Re_tau: 1000.0
-      nu: 5.0e-5
-      pressure_gradient: 0.0025
-      lr: 1.0e-4  # 極低 LR
-      
-      weights:
-        data: 5.0
-        boundary: 5.0
-        momentum_x: 10.0  # 最大 PDE 權重
-        momentum_y: 10.0
-        momentum_z: 10.0
-        continuity: 10.0
-        wall_constraint: 15.0
-        periodicity: 2.0
-        pressure_gradient: 1.0
-      
-      sampling:
-        pde_points: 4096
-        boundary_points: 2000
-        wall_clustering: 0.5  # 最大壁面聚集
-      
-      stage_goals:
-        pde_ratio_min: 0.40
-        tau_w_ratio_min: 10.0
-        u_l2_target: 0.15
-        mass_conservation_target: 1.0e-4
+        pde_points: 10000
+        boundary_points: 5000
+        wall_clustering: 0.5
 
 # ⚠️ 可選：啟用 Ensemble（不確定性量化）
 ensemble:

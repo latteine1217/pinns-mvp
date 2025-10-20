@@ -12,15 +12,15 @@ import numpy as np
 import sys
 sys.path.append('/Users/latteine/Documents/coding/pinns-mvp')
 
-from pinnx.physics.scaling_simplified import NonDimensionalizer, create_channel_flow_nondimensionalizer
+from pinnx.physics.scaling import NonDimensionalizer
 from pinnx.physics.ns_2d import NSEquations2D
 
 def test_integration_with_physics():
     """測試與 NSE 物理方程的整合"""
     print("🔧 測試 NonDimensionalizer 與 NSE 物理方程整合...")
     
-    # 1. 創建無量綱化器
-    nondim = create_channel_flow_nondimensionalizer()
+    # 1. 創建無量綱化器（使用默認 Channel Flow 參數）
+    nondim = NonDimensionalizer()
     
     # 2. 合成 JHTDB 類似的通道流數據
     torch.manual_seed(42)
@@ -114,7 +114,7 @@ def test_error_reduction_potential():
     
     # 使用無量綱化後的改善估算
     # 假設無量綱化能改善數值條件數，減少梯度消失/爆炸
-    nondim = create_channel_flow_nondimensionalizer()
+    nondim = NonDimensionalizer()
     
     # 擬合統計量 (使用合成數據)
     coords_dummy = torch.randn(100, 2)

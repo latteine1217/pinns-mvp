@@ -59,7 +59,7 @@ data:
 # 模型配置（PirateNet 架構）
 # ========================================
 model:
-  type: "enhanced_fourier_mlp"
+  type: "fourier_vs_mlp"
   
   # 網路結構
   in_dim: 3   # (x, y, z)

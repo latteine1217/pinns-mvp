@@ -760,8 +760,8 @@ class UnifiedNormalizer:
             norm_type = norm_cfg.get('type', 'none')
             params = norm_cfg.get('params', {})
             
-            # 變量順序：優先從配置讀取，否則從資料推斷
-            variable_order = norm_cfg.get('variable_order')
+            # 變量順序：優先從配置讀取（兼容 'variable_order' 和 'variables' 鍵），否則從資料推斷
+            variable_order = norm_cfg.get('variable_order') or norm_cfg.get('variables')
             if variable_order is None and training_data is not None:
                 # 從訓練資料的 keys 推斷（按預設順序排序）
                 # 🛡️ 過濾掉空張量（只保留有效資料的變量）
@@ -779,6 +779,19 @@ class UnifiedNormalizer:
                 if data_vars:
                     variable_order = sorted(data_vars, key=lambda x: OutputTransform.DEFAULT_VAR_ORDER.index(x))
                     logger.info(f"📋 從資料推斷變量順序（已過濾空張量）: {variable_order}")
+            
+            # 🛡️ 驗證 variable_order 與物理模組一致性
+            if variable_order:
+                expected_order = ['u', 'v', 'w', 'p']
+                # 過濾出實際存在的變量
+                expected_filtered = [v for v in expected_order if v in variable_order]
+                if variable_order != expected_filtered:
+                    logger.warning(
+                        f"⚠️  檢測到 variable_order 可能不一致：\n"
+                        f"    實際順序: {variable_order}\n"
+                        f"    預期順序: {expected_filtered}\n"
+                        f"    這可能導致反標準化錯誤！"
+                    )
             
             # 根據類型提取標準化係數
             if norm_type == 'training_data_norm':
@@ -919,38 +932,5 @@ DataNormalizer = OutputTransform
 # 配置兼容
 NormalizationConfig = InputNormConfig
 
-
-def create_normalizer_from_checkpoint(checkpoint_path: str) -> OutputTransform:
-    """
-    向後兼容：從 checkpoint 創建舊版 DataNormalizer
-    
-    ⚠️ 已棄用，請使用 UnifiedNormalizer.from_metadata()
-    """
-    import torch
-    
-    if not torch.cuda.is_available():
-        ckpt = torch.load(checkpoint_path, map_location='cpu')
-    else:
-        ckpt = torch.load(checkpoint_path)
-    
-    if 'normalization' not in ckpt:
-        logger.warning("⚠️  Checkpoint 中未找到 'normalization' metadata，使用默認 (type='none')")
-        return OutputTransform(OutputNormConfig(norm_type='none'))
-    
-    # 嘗試新格式（UnifiedNormalizer）
-    norm_meta = ckpt['normalization']
-    if 'output' in norm_meta:
-        output_meta = norm_meta['output']
-    else:
-        # 舊格式（DataNormalizer）
-        output_meta = norm_meta
-    
-    config = OutputNormConfig(
-        norm_type=output_meta.get('type', 'none'),
-        variable_order=output_meta.get('variable_order', OutputTransform.DEFAULT_VAR_ORDER.copy()),
-        means=output_meta.get('means', {}),
-        stds=output_meta.get('stds', {}),
-        params=output_meta.get('params', {})
-    )
-    
-    return OutputTransform(config)
+# Note (2025-10-20): create_normalizer_from_checkpoint() 已移除
+# 請使用 UnifiedNormalizer.from_metadata() 或 OutputTransform(OutputNormConfig(...))

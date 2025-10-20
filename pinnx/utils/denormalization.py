@@ -52,7 +52,9 @@ def _load_normalization_metadata(checkpoint_path: str) -> Optional[Dict]:
         
         if 'normalization' in checkpoint:
             metadata = checkpoint['normalization']
-            logger.info(f"✅ 從 checkpoint 讀取 normalization metadata: type={metadata.get('type')}")
+            # 🐛 修正：checkpoint 中的鍵是 'norm_type'，不是 'type'
+            norm_type = metadata.get('norm_type') or metadata.get('type')
+            logger.info(f"✅ 從 checkpoint 讀取 normalization metadata: type={norm_type}")
             return metadata
         else:
             logger.warning("⚠️  Checkpoint 中未找到 'normalization' metadata")
@@ -226,7 +228,7 @@ def _denormalize_training_data(
         metadata = _load_normalization_metadata(checkpoint_path)
         if metadata is not None:
             means = metadata.get('means', None)
-            stds = metadata.get('scales', None)  # scales 是 stds
+            stds = metadata.get('stds', None)  # 修正：使用 'stds' 而非 'scales'
             if means and stds and verbose:
                 logger.info(f"📦 使用 checkpoint 的 Z-score 係數:")
                 logger.info(f"   means={means}")
@@ -306,8 +308,17 @@ def _denormalize_training_data(
     u_mean, v_mean, w_mean, p_mean = means['u'], means['v'], means['w'], means['p']
     u_std, v_std, w_std, p_std = stds['u'], stds['v'], stds['w'], stds['p']
     
+    # 🆕 檢查 variable_order（從 checkpoint metadata）
+    variable_order = None
+    if checkpoint_path is not None:
+        metadata = _load_normalization_metadata(checkpoint_path)
+        if metadata is not None:
+            variable_order = metadata.get('variable_order', None)
+    
     if verbose:
         logger.info("🔧 執行 Z-score 反標準化 (x * std + mean)")
+        if variable_order:
+            logger.info(f"📋 Variable order: {variable_order}")
         logger.info(f"📐 u: mean={u_mean:.4f}, std={u_std:.4f}")
         logger.info(f"📐 v: mean={v_mean:.6f}, std={v_std:.4f}")
         logger.info(f"📐 w: mean={w_mean:.6f}, std={w_std:.4f}")
@@ -316,14 +327,39 @@ def _denormalize_training_data(
     result = predictions.copy()
     out_dim = predictions.shape[-1]
     
-    if out_dim == 3:
+    # 🔍 DEBUG: 強制輸出變數順序資訊（無論 verbose）
+    logger.info(f"🔍 DEBUG denormalization:")
+    logger.info(f"  - variable_order: {variable_order}")
+    logger.info(f"  - out_dim: {out_dim}")
+    logger.info(f"  - 條件檢查: variable_order is not None = {variable_order is not None}")
+    logger.info(f"  - 條件檢查: len(variable_order) == out_dim = {len(variable_order) == out_dim if variable_order else 'N/A'}")
+    logger.info(f"  - 預測範圍（標準化）: [{predictions.min():.6f}, {predictions.max():.6f}]")
+    
+    # 🆕 使用 variable_order 動態處理（如果可用）
+    if variable_order is not None and len(variable_order) == out_dim:
+        logger.info(f"✅ 使用 variable_order 動態分支: {variable_order}")
+        var_map = {'u': (u_mean, u_std), 'v': (v_mean, v_std), 
+                   'w': (w_mean, w_std), 'p': (p_mean, p_std)}
+        for i, var_name in enumerate(variable_order):
+            if var_name in var_map:
+                mean, std = var_map[var_name]
+                before_val = result[0, i] if len(result) > 0 else None
+                result[:, i] = result[:, i] * std + mean
+                after_val = result[0, i] if len(result) > 0 else None
+                logger.info(f"  - 變數 {i} ({var_name}): {before_val:.6f} * {std:.6f} + {mean:.6f} = {after_val:.6f}")
+            # 其他變數（如 S）不處理
+    
+    # 回退到硬編碼順序（向後相容）
+    elif out_dim == 3:
+        logger.warning(f"⚠️ 使用硬編碼順序 (u, v, p)（可能不正確！）")
         # (u, v, p) - 2D 通道流
         result[:, 0] = result[:, 0] * u_std + u_mean
         result[:, 1] = result[:, 1] * v_std + v_mean
         result[:, 2] = result[:, 2] * p_std + p_mean
         
     elif out_dim == 4:
-        # (u, v, w, p) - 3D 通道流
+        logger.warning(f"⚠️ 使用硬編碼順序 (u, v, w, p)（可能不正確！）")
+        # (u, v, w, p) - 3D 通道流（預設順序）
         result[:, 0] = result[:, 0] * u_std + u_mean
         result[:, 1] = result[:, 1] * v_std + v_mean
         result[:, 2] = result[:, 2] * w_std + w_mean
@@ -340,10 +376,14 @@ def _denormalize_training_data(
     else:
         raise ValueError(f"不支持的輸出維度: {out_dim} (預期 3, 4, 或 5)")
     
+    # 🔍 DEBUG: 強制輸出反標準化後的統計
+    logger.info(f"🔍 反標準化後範圍: [{result.min():.6f}, {result.max():.6f}]")
+    var_names = variable_order if variable_order else ['u', 'v', 'w', 'p', 'S'][:out_dim]
+    for i in range(out_dim):
+        name = var_names[i] if i < len(var_names) else f'var{i}'
+        logger.info(f"  {name}: mean={result[:, i].mean():.6f}, [{result[:, i].min():.6f}, {result[:, i].max():.6f}]")
+    
     if verbose:
-        logger.info(f"📊 反標準化後範圍: min={result.min():.4f}, max={result.max():.4f}")
-        for i, name in enumerate(['u', 'v', 'w', 'p', 'S'][:out_dim]):
-            logger.info(f"  {name}: [{result[:, i].min():.2f}, {result[:, i].max():.2f}]")
         logger.info("✅ Z-score 反標準化完成")
     
     return result

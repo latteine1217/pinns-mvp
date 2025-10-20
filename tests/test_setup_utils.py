@@ -119,13 +119,13 @@ class TestGetDevice:
         else:
             assert device.type == "cpu"
     
-    def test_cuda_fallback_to_cpu(self):
+    def test_setup_cuda_fallback_to_cpu(self):
         """測試 CUDA 不可用時回退到 CPU"""
         if not torch.cuda.is_available():
             device = get_device("cuda")
             assert device.type == "cpu"
     
-    def test_mps_fallback_to_cpu(self):
+    def test_setup_mps_fallback_to_cpu(self):
         """測試 MPS 不可用時回退到 CPU"""
         if not torch.backends.mps.is_available():
             device = get_device("mps")

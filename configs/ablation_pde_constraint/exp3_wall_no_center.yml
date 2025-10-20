@@ -96,7 +96,7 @@ sensors:
 # 模型架構（與 QR-Pivot 相同）
 # =============================================================================
 model:
-  type: "enhanced_fourier_mlp"
+  type: "fourier_vs_mlp"
   in_dim: 3  # x, y, z
   out_dim: 4  # u, v, w, p
   width: 128

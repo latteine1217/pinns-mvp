@@ -3,7 +3,7 @@
 評估感測點策略對比實驗結果
 
 本腳本專為 ablation_sensor_qr_K50 與 ablation_sensor_stratified_K50 實驗設計，
-使用工廠方法正確載入 enhanced_fourier_mlp 模型，並生成完整的對比分析。
+使用工廠方法正確載入 fourier_vs_mlp 模型，並生成完整的對比分析。
 
 功能：
 1. 從配置文件動態創建模型（支援所有模型類型）

@@ -7,33 +7,22 @@ PINNs 逆重建主訓練腳本
 import argparse
 import logging
 import os
-import random
 import sys
-import time
-import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
-import numpy as np
 import torch
 import torch.nn as nn
-import yaml
 
 # 添加專案根目錄到 Python 路徑
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pinnx.models.fourier_mlp import PINNNet, create_enhanced_pinn, init_siren_weights
-from pinnx.models.wrappers import ScaledPINNWrapper
-from pinnx.physics.ns_2d import NSEquations2D
-from pinnx.physics import create_vs_pinn_channel_flow, VSPINNChannelFlow  # VS-PINN
 from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
 from pinnx.losses.priors import PriorLossManager
 from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
 from pinnx.losses import MeanConstraintLoss  # ⭐ Phase 6C: 均值約束損失
-from pinnx.train.loop import TrainingLoopManager, apply_point_weights_to_loss  # 自適應採樣管理器
 from pinnx.train.trainer import Trainer  # 新的訓練器類
 from pinnx.utils.normalization import InputNormalizer, NormalizationConfig
-from pinnx.evals.metrics import relative_L2
 
 # 從重構模組導入配置、檢查點與工廠函數
 from pinnx.train.config_loader import (
@@ -1096,26 +1085,23 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
         p_ic = torch.empty(0, 1, device=device)
     
     # 提取低保真先驗資料 (如果有)
+    # ⚠️ 重要：變量順序必須與物理模組輸出順序一致 ['u', 'v', 'w', 'p']
     training_dict = {
         'x_pde': x_pde, 'y_pde': y_pde, 'z_pde': z_pde, 't_pde': t_pde,  # 🆕 添加 z_pde
         'x_bc': x_bc, 'y_bc': y_bc, 'z_bc': z_bc, 't_bc': t_bc,  # 🆕 添加 z_bc
         'x_sensors': x_sensors, 'y_sensors': y_sensors, 'z_sensors': z_sensors, 't_sensors': t_sensors,  # 🆕 添加 z_sensors
-        'u_sensors': u_sensors, 'v_sensors': v_sensors, 'p_sensors': p_sensors,
+        'u_sensors': u_sensors,
+        'v_sensors': v_sensors,
+        'w_sensors': w_sensors if (is_vs_pinn and w_sensors is not None) else torch.empty(0, 1, device=device),
+        'p_sensors': p_sensors,
         'x_ic': x_ic, 'y_ic': y_ic, 'z_ic': z_ic, 't_ic': t_ic,  # 🆕 添加 z_ic
-        'u_ic': u_ic, 'v_ic': v_ic, 'p_ic': p_ic
+        'u_ic': u_ic,
+        'v_ic': v_ic,
+        'w_ic': w_ic if is_vs_pinn else torch.empty(0, 1, device=device),
+        'p_ic': p_ic,
+        'metadata': training_data.get('metadata', {}),
+        'statistics': training_data.get('statistics', {})
     }
-    
-    # 🆕 如果是 VS-PINN，添加 w 分量到訓練字典
-    if is_vs_pinn:
-        training_dict['w_sensors'] = w_sensors if w_sensors is not None else torch.zeros_like(u_sensors)
-        training_dict['w_ic'] = w_ic
-    else:
-        # 2D 情況下不需要 w，但為了統一性可以添加空張量
-        training_dict['w_sensors'] = torch.empty(0, 1, device=device)
-        training_dict['w_ic'] = torch.empty(0, 1, device=device)
-
-    training_dict['metadata'] = training_data.get('metadata', {})
-    training_dict['statistics'] = training_data.get('statistics', {})
     
     # 添加低保真先驗資料到批次 (如果可用)
     if training_data['has_prior']:

@@ -13,7 +13,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from pinnx.evals.metrics import conservation_error
 from pinnx.models.wrappers import ManualScalingWrapper
-from pinnx.models.enhanced_fourier_mlp import EnhancedFourierMLP
+from pinnx.models.fourier_mlp import PINNNet
 
 def main():
     """主測試"""

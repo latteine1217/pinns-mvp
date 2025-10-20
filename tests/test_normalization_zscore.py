@@ -344,7 +344,7 @@ class TestZScoreNormalization:
             assert abs(mean) < 0.05, f"{var_name}: mean = {mean:.4f}"
             assert abs(std - 1.0) < 0.05, f"{var_name}: std = {std:.4f}"
     
-    def test_backward_compatibility(self):
+    def test_zscore_backward_compatibility(self):
         """測試向後兼容：舊格式（僅 scales）應該能載入"""
         # 模擬舊格式 metadata（只有 stds，沒有 means）
         old_config = OutputNormConfig(

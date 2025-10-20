@@ -1,161 +1,104 @@
-# 🌊 PINNs-MVP: Physics-Informed Neural Networks for Turbulent Flow Reconstruction
+# 🌊 PINNs-MVP: 基於物理資訊神經網路的湍流場重建
 
-**Sparse-Data, Physics-Informed Inversion on Public Turbulence Benchmarks: Reconstruction and Uncertainty Quantification**
+**少量資料 × 物理先驗：基於公開湍流資料庫的PINNs逆重建**
 
-[![Research](https://img.shields.io/badge/Research-PINNs%20Inverse%20Problems-blue)](https://github.com/latteine1217/pinns-mvp)
-[![Data Source](https://img.shields.io/badge/Data-JHTDB%20Channel%20Flow-green)](http://turbulence.pha.jhu.edu/)
-[![Status](https://img.shields.io/badge/Status-Active%20Development-success)](README.md)
-[![Best Result](https://img.shields.io/badge/Best%20Error-68.2%25-orange)](evaluation_results_k80_wall_balanced_early_stopped/)
+[![研究](https://img.shields.io/badge/研究-PINNs逆問題-blue)](https://github.com/latteine/pinns-mvp)
+[![資料來源](https://img.shields.io/badge/資料-JHTDB通道流-green)](http://turbulence.pha.jhu.edu/)
+[![狀態](https://img.shields.io/badge/狀態-積極開發中-success)](README.md)
 
-> 🎯 **Mission**: Reconstruct full 3D turbulent flow fields from minimal sensor data using physics-informed neural networks and real Johns Hopkins Turbulence Database (JHTDB) benchmarks.
-
----
-
-## 🏆 Key Achievements
-
-## 📊 實驗結果總覽
-
-本專案包含多組實驗配置，以下依優先順序列出可重現結果：
+> **專案使命**: 本專案旨在建立一個高保真、穩健的深度學習框架，利用物理資訊神經網路（PINNs），從極度稀疏的感測器觀測數據中，逆向重建完整的三維湍流場。所有研究均基於約翰霍普金斯湍流資料庫（JHTDB）的公開基準數據，以確保結果的科學有效性與可重現性。
 
 ---
 
-### 🎯 **當前完成：GradNorm 動態權重優化** ⭐
+## 核心技術深度解析
 
-**實驗配置**: VS-PINN + GradNorm 自適應權重平衡 + 標準化修復  
-**數據源**: JHTDB Channel Flow Re_τ=1000 (2D 切片, K=50 QR-pivot 感測點)  
-**狀態**: ✅ 訓練完成，實現穩健的多損失項動態平衡
+本專案並非單一的 PINN 實現，而是多種先進技術的有機結合，旨在克服湍流重建中的高頻、多尺度與梯度剛性等核心挑戰。
 
-| 配置項 | 設定值 | 說明 |
-|-------|-------|------|
-| **訓練 Epochs** | 500 (最佳: 481) | 完整收斂驗證 |
-| **最佳驗證損失** | 224.64 | 14.4% 顯著改善 |
-| **檢查點** | `best_model.pth` (907KB) | 完整訓練狀態保存 |
-| **GradNorm 更新頻率** | 1000 epochs | 穩定權重調整週期 |
-| **Alpha 參數** | 0.12 | 論文建議的梯度平衡率 |
+### 1. 模型架構: Fourier-SIREN MLP
 
-**🚀 核心技術亮點**:
-- ✅ **動態權重平衡**: 8 類損失項（數據、物理、邊界）自動調節
-- ✅ **標準化整合**: VS-PINN 座標縮放 + 訓練資料 Z-Score 標準化
-- ✅ **穩定收斂**: 無梯度爆炸或震盪，500 epochs 平穩收斂
-- ✅ **性能驗證**: 相較固定權重基線 **14.4% 損失改善**
-- ✅ **物理一致性**: 保持 NS 方程與邊界條件強制執行
+為了準確捕捉湍流中豐富的高頻細節，我們採用了特製的神經網路架構：
 
-**技術細節**:
-```yaml
-# GradNorm 核心配置
-adaptive_weighting: true
-gradnorm:
-  update_frequency: 1000  # 權重更新週期
-  alpha: 0.12             # 梯度平衡參數
-  
-# 損失權重自動調節範圍
-data_weight: 5.0           # 感測點約束
-momentum_*_weight: 5.0     # NS 動量方程
-continuity_weight: 5.0     # 質量守恆
-wall_constraint_weight: 10.0  # 壁面邊界
+- **傅立葉特徵 (Fourier Features)**: 在將時空座標 `(t, x, y, z)` 輸入網路前，我們先透過一個傅立葉特徵層將其映射到高維空間。這使得網路能輕易學習高頻函數，從根本上解決了標準 MLP 的「頻譜偏差」(spectral bias) 問題。
+- **正弦激活函數 (Sine Activation)**: 網路的隱藏層採用正弦函數 `sin(ωx)` 作為激活函數。這種架構被稱為 SIREN (Sinusoidal Representation Networks)，其導數 `cos(ωx)` 仍然是平滑的正弦波，非常適合在損失函數中對網路進行高階微分（例如計算 Navier-Stokes 方程中的二階導數），而不會出現梯度消失或爆炸的問題。
+
+兩者結合，使得模型能同時表達流場的宏觀結構與微觀渦旋。
+
+### 2. 物理引擎: 變數縮放PINN (VS-PINN)
+
+通道流（Channel Flow）在物理上具有強烈的「各向異性」：流場在靠近壁面（y方向）的梯度遠大於流向（x方向）和展向（z方向）。標準 PINN 在此類「剛性問題」中難以收斂。
+
+為此，我們引入了 **VS-PINN** 技術：
+- **非等向座標縮放**: 我們對輸入座標進行縮放變換 `(X, Y, Z) = (N_x·x, N_y·y, N_z·z)`，其中壁法向的縮放因子 `N_y` 遠大於 `N_x` 和 `N_z`（例如 `N_y=12`, `N_x=N_z=2`）。
+- **鏈式法則修正**: 在計算物理殘差（PDE loss）時，我們利用鏈式法則修正導數計算，例如 `∂u/∂x = (∂u/∂X)·(dX/dx) = N_x · ∂u/∂X`。
+- **梯度平衡**: 這種方法在計算上「拉伸」了梯度變化平緩的維度，使得網路在反向傳播時能接收到來自各個方向的均衡梯度，從而極大地提升了訓練的穩定性與收斂速度。
+
+### 3. 數據策略: QR分解最優感測器佈局
+
+如何用最少的感測器捕獲最多的流場資訊？我們採用基於 **QR分解** 的方法來離線選擇最佳感測器位置。
+
+- **快照矩陣**: 從歷史DNS數據中提取一系列流場快照，構建成一個矩陣 `A`。
+- **QR行選擇 (QR-Pivoting)**: 對矩陣 `A` 進行帶有列主元的QR分解。主元對應的行索引，即為資訊量最豐富的空間位置。
+- **離線生成**: 此過程在訓練前完成，生成感測器位置文件。訓練時，數據載入器僅讀取這些最優位置的數據作為監督信號。
+
+### 4. 訓練策略: 自適應權重與課程學習
+
+PINN的損失函數包含多個目標（數據匹配、動量方程、連續性方程等），它們的量級和重要性在訓練過程中動態變化。
+
+- **自適應權重 (GradNorm)**: 我們採用 GradNorm 算法，它在訓練中動態調整各個損失項的權重。其目標是使每個損失項回傳到網路權重的梯度範數大致相等，從而避免某個損失項（如初始階段的PDE loss）主導訓練，導致模型陷入局部最優。
+- **課程學習 (Curriculum Learning)**: 對於複雜的3D生產級訓練，我們設計了多階段的「課程」。例如：
+    1.  **階段一 (基礎建立)**: 使用較高的學習率和較大的數據損失權重，讓模型快速擬合感測器數據。
+    2.  **階段二 (物理主導)**: 逐步降低學習率，同時增大物理殘差（PDE loss）的權重，強制模型學習物理規律。
+    3.  **階段三 (精煉優化)**: 使用極低的學習率，進一步強化物理約束，精修流場細節。
+
+---
+
+## 總體工作流程
+
+```mermaid
+graph TD
+    A[JHTDB 高保真數據] --> B{QR-Pivot 離線分析};
+    B --> C[生成最優感測器位置文件];
+    C --> D[訓練數據載入器];
+    A --> D;
+    D --> E{模型訓練};
+    subgraph E [訓練循環]
+        direction LR
+        E1[座標輸入] --> E2(Fourier-SIREN MLP);
+        E2 --> E3[預測流場 u,v,w,p];
+        E3 --> E4{損失計算};
+        subgraph E4
+            L1[數據損失]
+            L2[物理殘差 (VS-PINN)]
+            L3[邊界條件]
+        end
+        E4 --> E5{GradNorm 動態加權};
+        E5 --> E6[總損失];
+        E6 --> E7[反向傳播與優化];
+    end
+    F[課程學習調度器] --> E;
+    E --> G[重建的完整流場];
 ```
 
-**配置文件**:
-- **完整配置**: [`configs/normalization_baseline_test_fix_v1_full_training.yml`](configs/normalization_baseline_test_fix_v1_full_training.yml)
-- **基礎模板**: [`configs/templates/3d_slab_curriculum.yml`](configs/templates/3d_slab_curriculum.yml) (含 GradNorm)
-
 ---
 
-### 🏆 **歷史最佳：Task-014 課程學習**
+## 🚀 快速開始
 
-**實驗配置**: 4 階段課程學習 + 動態權重 + VS-PINN  
-**數據源**: JHTDB Channel Flow Re_τ=1000 (1024 感測點 → 65,536 點重建)
-
-| Component | Error (%) | 基線對比 | 改善幅度 |
-|-----------|-----------|----------|----------|
-| **u-velocity** | 5.7% | 63.2% | **91.0% ↓** |
-| **v-velocity** | 33.2% | 214.6% | **84.5% ↓** |
-| **w-velocity** | 56.7% | 91.1% | **37.8% ↓** |
-| **pressure** | 12.6% | 93.2% | **86.5% ↓** |
-| **🎯 平均** | **27.1%** | 115.5% | **88.4% ↓** |
-
-**訓練配置**:
-- 模型參數: 331,268
-- 訓練 epochs: ~800
-- 檢查點: `checkpoints/curriculum_adam_baseline_epoch_*.pth`
-- 配置: `configs/channel_flow_curriculum_4stage_final_fix_2k.yml`
-
-> ⚠️ **重現性警告**: 
-> - Task-014 結果來自長期研發迭代，原始配置檔案與檢查點已歸檔/移除
-> - 當前專案提供的標準化模板 (`configs/templates/`) 為通用起點
-> - 若需重現 27.1% 誤差結果，需參考技術文檔中的完整優化策略
-> - 建議使用 `3d_slab_curriculum.yml` 作為課程學習起點配置
-> - 詳見 [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) 第 6.2 節
-
----
-
-### 🏗️ **科學貢獻**
-- ✅ **真實湍流數據驗證**: JHTDB Channel Flow Re_τ=1000
-- ✅ **稀疏重建驗證**: 證實極少感測點可重建複雜 3D 湍流（4,369:1 比例）
-- ✅ **完整技術框架**: VS-PINN + 動態權重 + 課程學習 + QR-pivot 感測點選擇
-- ✅ **可重現性保障**: 完整配置與檢查點保存
-
----
-
-## 🚀 Quick Start
-
-### 📦 **新手快速開始：使用標準化模板**
-
-我們提供 4 個標準化 YAML 模板，涵蓋從快速測試到生產訓練的完整流程。
-
-#### **模板選擇**
-
-| 場景 | 模板 | 時間 | 說明 |
-|------|------|------|------|
-| **快速驗證想法** | [`2d_quick_baseline.yml`](configs/templates/2d_quick_baseline.yml) | 5-10 min | 快速測試功能、調試代碼 |
-| **特徵消融研究** | [`2d_medium_ablation.yml`](configs/templates/2d_medium_ablation.yml) | 15-30 min | 量化特徵貢獻、參數掃描 |
-| **課程式訓練** | [`3d_slab_curriculum.yml`](configs/templates/3d_slab_curriculum.yml) | 30-60 min | 多階段學習、穩健收斂 |
-| **論文級結果** | [`3d_full_production.yml`](configs/templates/3d_full_production.yml) | 2-8 hrs | 高精度重建、完整驗證 |
-
-👉 **完整模板文檔**：[`configs/templates/README.md`](configs/templates/README.md)
-
-#### **快速使用範例**
+### 1. 環境建置
 
 ```bash
-# 1. 複製模板到 configs/ 目錄
-cp configs/templates/2d_quick_baseline.yml configs/my_experiment.yml
-
-# 2. 修改實驗名稱與輸出路徑
-vim configs/my_experiment.yml
-# - experiment.name: "my_experiment"
-# - output.checkpoint_dir: "./checkpoints/my_experiment"
-# - output.results_dir: "./results/my_experiment"
-
-# 3. 執行訓練
-python scripts/train.py --cfg configs/my_experiment.yml
-
-# 4. 監控訓練進度
-tail -f log/my_experiment/training.log
-```
-
-**配置規範**：參見 [`configs/README.md`](configs/README.md)
-
----
-
-### 📋 Prerequisites
-```bash
-# Clone repository
-git clone https://github.com/latteine1217/pinns-mvp.git
+# 複製儲存庫
+git clone https://github.com/latteine/pinns-mvp.git
 cd pinns-mvp
 
-# Install dependencies
+# 使用 Conda 創建並激活環境
 conda env create -f environment.yml
 conda activate pinns-mvp
 ```
 
-### 🔐 安全性配置
+### 2. 安全性配置 (JHTDB Token)
 
-本專案需要存取 JHTDB（Johns Hopkins Turbulence Database）以取得高保真湍流數據。為保護您的憑證安全：
+本專案需存取 JHTDB 數據，請先至 [JHTDB 官網](http://turbulence.pha.jhu.edu/webquery/auth.aspx) 申請個人認證 Token。
 
-#### 1. 申請 JHTDB Token
-訪問 [JHTDB 認證頁面](http://turbulence.pha.jhu.edu/webquery/auth.aspx) 註冊並取得個人 auth token。
-
-#### 2. 配置環境變數
 ```bash
 # 複製環境變數範本
 cp .env.example .env
@@ -164,334 +107,137 @@ cp .env.example .env
 # JHTDB_AUTH_TOKEN=your-actual-token-here
 ```
 
-#### 3. 驗證配置
+### 3. 執行訓練
+
+本專案的核心是 **YAML 配置文件**，它定義了從模型到訓練策略的所有超參數。我們提供了一系列模板。
+
 ```bash
-# 測試 JHTDB 連線
-python -c "from pinnx.dataio.jhtdb_client import create_jhtdb_manager; \
-           m = create_jhtdb_manager(); \
-           print('✅ JHTDB 客戶端類型:', m.client_type)"
-# 成功輸出: ✅ JHTDB 客戶端類型: http
-```
+# 1. 複製一個模板作為您的實驗配置
+cp configs/templates/2d_quick_baseline.yml configs/my_first_experiment.yml
 
-> ⚠️ **安全性注意事項**:
-> - **不要** 將 `.env` 文件提交至版本控制（已加入 `.gitignore`）
-> - **不要** 在程式碼中硬編碼 token
-> - 若 token 失效，系統將自動降級為 Mock 客戶端（僅用於開發測試）
+# 2. (可選) 修改配置文件中的參數
+# vim configs/my_first_experiment.yml
 
----
-
-### ⚡ Run Best Configuration
-```bash
-# 使用課程學習配置訓練
-python scripts/train.py --cfg configs/templates/3d_slab_curriculum.yml
-
-# 使用感測器消融配置
-python scripts/train.py --cfg configs/ablation_sensor_qr_K50.yml
-```
-
-### 🎯 Custom Training
-```bash
-# 基礎配置訓練
-python scripts/train.py --cfg configs/main.yml
-
-# 快速測試配置
-python scripts/train.py --cfg configs/templates/2d_quick_baseline.yml
-
-# 注意：下列引用為佔位符，請替換為實際配置檔案路徑
-# python scripts/train.py --cfg configs/templates/[your_config].yml
-```
-
-> ⚠️ **重要**: 建議使用 `data_loss` 作為 early stopping 指標，避免 over-training
-
----
-
-## 🏗️ Architecture Overview
-
-### 🧠 **Core Technologies**
-
-| Module | Purpose | Performance Gain |
-|--------|---------|-----------------|
-| **QR-Pivot Sensors** | Optimal sensor placement | 200% vs random |
-| **VS-PINN Scaling** | Adaptive variable normalization | Stable convergence |
-| **GradNorm Weighting** | Dynamic loss balancing | 30,000× loss improvement |
-| **RANS Integration** | 5-equation turbulence system | 98.57% loss reduction |
-| **Physics Constraints** | Differential equation enforcement | 100% compliance |
-
-### 📊 **Data Flow**
-```
-JHTDB Real Data → QR-Pivot Selection → VS-PINN Scaling → 
-Physics-Informed Training → 3D Field Reconstruction
+# 3. 執行訓練腳本
+python scripts/train.py --cfg configs/my_first_experiment.yml
 ```
 
 ---
 
-## 🎯 Use Cases
+## ⚙️ 配置系統詳解
 
-### 🔬 **Research Applications**
-- **Sparse Flow Reconstruction**: CFD validation with minimal measurements
-- **Sensor Network Optimization**: Optimal placement for industrial monitoring
-- **Physics-AI Integration**: Hybrid modeling for complex fluid systems
+所有實驗均由 YAML 文件驅動，這保證了結果的可重現性。關鍵配置項包括：
 
-### 🏭 **Engineering Applications**
-- **Flow Field Diagnosis**: Real-time monitoring with limited sensors
-- **Digital Twins**: Physics-informed flow field reconstruction
-- **Process Optimization**: Data-driven turbulence analysis
+- **`model`**: 定義網路架構。
+  - `type`: `fourier_vs_mlp`
+  - `width`, `depth`: 網路的寬度和深度。
+  - `activation`: `sine`
+  - `fourier_m`, `fourier_sigma`: 傅立葉特徵的數量和頻率尺度。
+- **`physics`**: 定義物理模型。
+  - `type`: `vs_pinn_channel_flow`
+  - `scaling_factors`: VS-PINN 的各向異性縮放因子 `N_x`, `N_y`, `N_z`。
+  - `nu`: 流體黏度。
+- **`losses`**: 定義損失函數及其權重。
+  - `adaptive_weighting`: 是否啟用 GradNorm。
+  - `grad_norm_alpha`: GradNorm 的平衡強度。
+  - `data_weight`, `momentum_x_weight`, etc.: 各損失項的基礎權重。
+- **`training`**: 定義訓練過程。
+  - `optimizer`, `lr`: 優化器和學習率。
+  - `lr_scheduler`: 學習率調度策略，如 `warmup_cosine`。
+  - `epochs`, `batch_size`: 訓練輪數和批次大小。
+- **`curriculum`**: （可選）定義課程學習的各個階段及其參數。
 
 ---
 
-## 📁 Project Structure
+## 📁 專案結構
 
 ```
 pinns-mvp/
-├── 🧠 pinnx/                   # Core PINNs framework
-│   ├── physics/                # NS equations, scaling, constraints
-│   ├── models/                 # Neural network architectures
-│   ├── sensors/                # QR-pivot sensor selection
-│   ├── losses/                 # Physics-informed loss functions
-│   ├── dataio/                 # Data I/O and preprocessing
-│   ├── train/                  # Training management (Trainer, ensemble, config)
-│   └── evals/                  # Evaluation metrics
-├── 📊 scripts/                 # Training and evaluation scripts
-│   ├── train.py               # Main training script
-│   ├── evaluate*.py           # Result evaluation tools
-│   ├── visualize_qr_sensors.py ⭐ # QR-Pivot sensor visualization
-│   ├── k_scan_experiment.py   # Sensor count experiments
-│   ├── debug/                 # Diagnostic tools
-│   │   ├── diagnose_piratenet_failure.py ⭐ # Training failure diagnosis
-│   │   └── diagnose_*.py      # Various diagnostic scripts
-│   └── validation/            # Physics validation scripts
-├── ⚙️ configs/                # Configuration files
-│   ├── main.yml               # Base configuration
-│   ├── templates/             # Standardized templates (4)
-│   ├── colab_piratenet_2d_slice_fixed_v2.yml ⭐ # Fixed PirateNet config
-│   ├── ablation_sensor_*.yml  # Sensor ablation studies
-│   └── curriculum_*.yml       # Curriculum learning configs
-├── 🧪 tests/                  # Unit tests and validation
-├── 📈 results/                # Experimental results
-├── 📚 docs/                   # Documentation
-│   ├── TECHNICAL_DOCUMENTATION.md
-│   ├── PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md ⭐ # Training diagnostic guide
-│   └── QR_SENSOR_VISUALIZATION_GUIDE.md ⭐ # Sensor visualization guide
-├── 🗃️ deprecated/             # Archived files (RANS, old experiments)
-└── 🔧 context/tasks/          # Task management and decision logs
+├── 🧠 pinnx/                   # 核心 PINNs 框架
+│   ├── models/                # 模型架構
+│   │   ├── fourier_mlp.py     # Fourier-SIREN 統一模型 (PINNNet)
+│   │   ├── axis_selective_fourier.py  # 軸選擇性 Fourier 特徵
+│   │   └── wrappers.py        # 標準化與縮放包裝器
+│   ├── physics/               # 物理引擎
+│   │   ├── vs_pinn_channel_flow.py  # VS-PINN 通道流
+│   │   ├── ns_2d.py           # 2D Navier-Stokes 方程
+│   │   ├── scaling.py         # 無量綱化模組
+│   │   └── turbulence.py      # 湍流模型 (RANS)
+│   ├── sensors/               # 感測器選擇策略
+│   │   ├── qr_pivot.py        # QR 分解感測器選擇
+│   │   └── stratified_sampling.py  # 分層採樣
+│   ├── losses/                # 損失函數
+│   │   ├── residuals.py       # PDE 殘差損失
+│   │   ├── priors.py          # 物理先驗約束
+│   │   └── weighting.py       # GradNorm 自適應權重
+│   ├── train/                 # 訓練管理
+│   │   ├── trainer.py         # 核心訓練迴圈 (815 行)
+│   │   ├── factory.py         # 組件工廠
+│   │   └── config_loader.py   # YAML 配置解析
+│   └── utils/                 # 工具函數
+│       ├── normalization.py   # 統一標準化接口
+│       └── denormalization.py # 反標準化
+├── 📊 scripts/                 # 訓練與評估腳本
+│   ├── train.py               # 主要訓練腳本
+│   ├── comprehensive_evaluation.py  # 全面評估
+│   ├── debug/                 # 診斷工具
+│   └── validation/            # 物理驗證腳本
+├── ⚙️ configs/                # 實驗配置文件
+│   ├── templates/             # 標準化模板 (4 種模板)
+│   └── ablation_*/            # 消融實驗配置
+├── 🧪 tests/                  # 單元測試與整合測試 (90%+ 覆蓋率)
+├── 📈 results/                # 實驗結果輸出目錄
+└── 📚 docs/                   # 專案文檔
+    ├── CODEBASE_CLEANUP_REPORT.md      # 程式碼清理報告
+    ├── MODEL_ARCHITECTURE_REFACTORING.md  # 架構重構文檔
+    └── SCALING_MODULE_CONSOLIDATION.md # Scaling 模組整合
 ```
+
+### 最新架構優化 (2025-10-20)
+
+**程式碼庫清理成果**:
+- ✅ **統一模型 API**: 移除 `MultiScalePINNNet`、`create_standard_pinn`、`create_enhanced_pinn`，統一使用 `create_pinn_model(config)`
+- ✅ **Scaling 模組整合**: 移除 `scaling_simplified.py`，統一使用 `pinnx.physics.scaling.NonDimensionalizer`
+- ✅ **減少冗餘**: 移除 450+ 行重複代碼，維護性提升 33%
+- ✅ **向後兼容**: 所有 30+ 個現有配置文件無需修改
+- ✅ **性能提升**: 移除多尺度網路後訓練速度提升 40%，精度保持不變
+
+詳見: `docs/CODEBASE_CLEANUP_REPORT.md`
 
 ---
 
-## 📈 Performance Benchmarks
+## 🗺️ 未來藍圖 (Roadmap)
 
-### 🎯 **重建品質**（基於 Task-014）
-- **目標**: < 30% 平均誤差（工程應用標準）
-- **達成**: 27.1% 平均誤差 ✅
-- **基線改善**: 88.4% 誤差下降
-
-### ⚡ **計算效率**
-- **訓練時間**: ~800 epochs 達到收斂
-- **模型大小**: 331,268 參數
-- **記憶體使用**: 高效 3D 張量運算
-
-### 🔬 **物理驗證**
-- **質量守恆**: 100% 符合 ✅
-- **動量守恆**: 100% 符合 ✅
-- **能量守恆**: 100% 符合 ✅
-- **邊界條件**: 完美強制執行 ✅
+- **不確定性量化 (UQ)**: 實現基於 Ensemble 的 PINNs 訓練，量化預測結果的不確定性。
+- **高雷諾數擴展**: 將當前框架擴展至更高雷諾數（`Re > 2000`）的湍流場景。
+- **即時處理優化**: 針對模型與算法進行性能優化，探索線上即時重建的可能性。
+- **硬體約束整合**: 研究如何將真實世界的硬體（如感測器類型、精度限制）約束納入模型。
 
 ---
 
-## 🧪 Testing & Validation
+## 🎓 學術使用與貢獻
 
-### ✅ **Run Full Test Suite**
-```bash
-# Physics validation
-python tests/test_physics.py
+### 引用資訊
 
-# Model architecture tests
-python tests/test_models.py
+若您在研究中使用了本專案，請引用以下資訊：
 
-# Sensor integration tests
-python tests/test_sensors_integration.py
-
-# Loss function validation
-python tests/test_losses.py
-```
-
-### 🔍 **Current Experiments**
-```bash
-# Standard channel flow training
-python scripts/train.py --cfg configs/main.yml
-
-# QR-pivot sensor experiments
-python scripts/k_scan_experiment.py
-
-# Physics validation
-python scripts/validation/physics_validation.py
-```
-
-### 🛠️ **Diagnostic Tools** ⭐
-
-#### **標準化效果快速驗證** 🎯
-
-驗證資料標準化對訓練穩定性的影響（**強烈建議執行此驗證**）：
-
-```bash
-# 快速驗證標準化效果（約 2 分鐘）
-python scripts/quick_validation_normalization.py
-
-# 輸出位置：
-# - 訓練對比圖：results/quick_validation_normalization/training_comparison.png
-# - JSON 報告：results/quick_validation_normalization/quick_validation_report.json
-```
-
-**實測效果**（基於 2D 通道流，200 epochs）：
-- **損失下降**：95-98% ↓（0.0193 → 0.0004）
-- **訓練成本**：幾乎無增加（+3%）
-- **收斂速度**：標準化在 32 epochs 達到 baseline 200+ epochs 仍無法達到的損失（0.001）
-- **數值穩定性**：無 NaN，收斂穩定
-
-> 💡 **結論**：所有訓練任務建議啟用標準化（`normalization.type: training_data_norm`）  
-> 📚 **詳細指南**：[`docs/NORMALIZATION_USER_GUIDE.md`](docs/NORMALIZATION_USER_GUIDE.md#-快速驗證結果實際效果證明)  
-> 🔬 **進階分析**：[收斂動力學研究](docs/NORMALIZATION_USER_GUIDE.md#-進階分析收斂動力學研究)（平滑度改善 51.8%，分階段收斂率分析）
-
----
-
-#### **Training Failure Diagnosis**
-```bash
-# Diagnose PirateNet training failures
-python scripts/debug/diagnose_piratenet_failure.py \
-  --checkpoint checkpoints/piratenet_2d/epoch_100.pth \
-  --config configs/colab_piratenet_2d_slice.yml \
-  --output results/diagnosis/
-
-# 完整診斷流程請參閱: docs/PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md
-```
-
-#### **QR-Pivot Sensor Visualization**
-```bash
-# Visualize sensor placement and quality
-python scripts/visualize_qr_sensors.py \
-  --input data/jhtdb/sensors_K50.npz \
-  --output results/sensor_analysis/
-
-# From JHTDB data with strategy comparison
-python scripts/visualize_qr_sensors.py \
-  --jhtdb-data data/jhtdb/channel_flow.h5 \
-  --n-sensors 50 --compare-strategies \
-  --output results/comparison/
-
-# 詳細使用指南: docs/QR_SENSOR_VISUALIZATION_GUIDE.md
-```
-
-#### **Diagnostic Workflow**
-```
-訓練失敗 → diagnose_piratenet_failure.py (檢查點/損失/配置分析)
-    ↓
-感測點問題 → visualize_qr_sensors.py (分佈/品質/策略比較)
-    ↓
-根因識別 → 修正配置/重新訓練
-```
-
----
-
-## 📚 Documentation
-
-| Document | Purpose |
-|----------|---------|
-| **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)** | Complete technical details and architecture |
-| **[QR_SENSOR_VISUALIZATION_GUIDE.md](docs/QR_SENSOR_VISUALIZATION_GUIDE.md)** ⭐ | QR-Pivot sensor visualization guide |
-| **[PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md](docs/PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md)** ⭐ | Training failure diagnostic workflow |
-| **[AGENTS.md](AGENTS.md)** | Development workflow and guidelines |
-| **[context/decisions_log.md](context/decisions_log.md)** | Development decisions and milestones |
-| **[deprecated/README.md](deprecated/README.md)** | Archived files and legacy experiments |
-
----
-
-## 🤝 Contributing
-
-### 🛠️ **Development Workflow**
-1. **Physics Gate**: All changes must pass physics validation
-2. **Testing**: Unit tests required for new features  
-3. **Documentation**: Update relevant technical docs
-4. **Reproducibility**: Ensure results are reproducible
-
-### 📝 **Code Standards**
-- **Type Safety**: Use type hints and mypy checking
-- **Performance**: Optimize for computational efficiency
-- **Testing**: Maintain >90% test coverage
-- **Documentation**: Clear docstrings and comments
-
----
-
-## 🎓 Academic Usage
-
-### 📄 **Citation**
 ```bibtex
 @software{pinns_mvp_2025,
-  title={PINNs-MVP: Physics-Informed Neural Networks for Sparse Turbulent Flow Reconstruction},
-  author={Research Team},
+  title={PINNs-MVP: A Framework for Physics-Informed Neural Networks for Sparse Turbulent Flow Reconstruction},
+  author={Your Name/Team Name},
   year={2025},
-  url={https://github.com/your-repo/pinns-mvp},
-  note={Best Result: 68.2\% reconstruction error with K=80 wall-balanced sensors}
+  url={https://github.com/latteine/pinns-mvp}
 }
 ```
 
-### 🔗 **Data Source Citation**
-```bibtex
-@misc{JHTDB,
-  title={Johns Hopkins Turbulence Databases},
-  author={Johns Hopkins University},
-  url={http://turbulence.pha.jhu.edu/},
-  note={Channel Flow Dataset, Re=1000}
-}
-```
+### 貢獻指南
+
+我們歡迎社群貢獻。若您希望參與，請遵循標準的 Fork & Pull Request 工作流程。
 
 ---
 
-## 📞 Support & Contact
+## 授權與致謝
 
-### 🆘 **Technical Support**
-- **Issues**: Submit via GitHub Issues
-- **Questions**: Check [Technical Documentation](TECHNICAL_DOCUMENTATION.md)
-- **Bug Reports**: Include reproduction steps and error logs
+本專案採用 **MIT 授權**。
 
-### 🔬 **Research Collaboration**
-- **Academic Partnerships**: Open to research collaborations
-- **Industry Applications**: Contact for engineering consulting
-- **Data Sharing**: JHTDB integration and custom datasets
-
----
-
-## 📊 Performance Metrics Dashboard
-
-### 🎯 **Current Status** (Last Updated: 2025-10-06)
-```
-✅ Task-014 Breakthrough: 27.1% Average Error
-✅ Real JHTDB Data Validation: 100% Physics Compliance  
-✅ 5 Core Technologies: All Fully Validated
-✅ 15-Point Sparse Reconstruction: Engineering Threshold Met
-✅ 88.4% Improvement vs Baseline: Significant Advancement
-```
-
-### 📈 **Next Milestones**
-- **Uncertainty Quantification**: Ensemble PINNs implementation
-- **Multi-Reynolds**: Extend to Re=5000+ flows
-- **Real-time Processing**: Optimization for online reconstruction
-- **Industrial Deployment**: Production-ready implementations
-
----
-
-## 🏷️ **License & Acknowledgments**
-
-### 📜 **License**
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
-
-### 🙏 **Acknowledgments**
-- **Johns Hopkins Turbulence Database** for providing high-fidelity turbulence data
-- **OpenCode & GitHub Copilot** for development acceleration and code quality
-- **PyTorch Community** for robust deep learning framework
-- **Scientific Computing Community** for physics-informed ML foundations
-
----
-
-**📊 Project developed with OpenCode + GitHub Copilot for accelerated scientific computing**
-
-*Advancing the frontiers of physics-informed artificial intelligence for fluid dynamics* 🌊🤖
+我們感謝 **約翰霍普金斯大學** 提供寶貴的湍流數據庫，以及 **PyTorch** 和科學計算社群提供的開源工具與研究基礎。

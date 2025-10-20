@@ -391,23 +391,10 @@ def create_model(
         )
         logging.info("✅ Created Axis-Selective Fourier MLP")
     
-    elif model_type == 'enhanced_fourier_mlp':
-        # 增強版 PINN（支援 RWF 等進階特性）
-        base_model = create_enhanced_pinn(
-            in_dim=model_cfg['in_dim'],
-            out_dim=model_cfg['out_dim'],
-            width=model_cfg['width'],
-            depth=model_cfg['depth'],
-            activation=model_cfg['activation'],
-            use_fourier=use_fourier,
-            fourier_m=model_cfg.get('fourier_m', 32),
-            fourier_sigma=model_cfg.get('fourier_sigma', 1.0),
-            use_rwf=model_cfg.get('use_rwf', False),
-            rwf_scale_std=model_cfg.get('rwf_scale_std', 0.1),
-            fourier_normalize_input=fourier_normalize_input,
-            input_scale_factors=input_scale_factors
-        ).to(device)
-        logging.info(f"✅ Created Enhanced PINN (use_fourier={use_fourier})")
+    elif model_type == 'fourier_vs_mlp':
+        # Fourier-VS MLP 統一架構
+        base_model = create_pinn_model(model_cfg).to(device)
+        logging.info(f"✅ Created Fourier-VS MLP (use_fourier={use_fourier})")
     else:
         # 基礎 PINN
         base_model = PINNNet(

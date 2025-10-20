@@ -65,7 +65,7 @@ normalization:
 # 感測點配置
 # =============================================================================
 sensors:
-  K: 100  # 3D 需更多感測點
+  K: 500  # 3D 需更多感測點
   selection_method: "qr_pivot"
   spatial_coverage: "optimal"
 
@@ -73,7 +73,7 @@ sensors:
 # 模型架構（標準 3D）
 # =============================================================================
 model:
-  type: "enhanced_fourier_mlp"
+  type: "fourier_vs_mlp"
   in_dim: 3
   out_dim: 4
   width: 256
@@ -145,16 +145,16 @@ physics:
 # 損失函數權重（基礎配置，由課程學習覆蓋）
 # =============================================================================
 losses:
-  data_weight: 5.0
-  boundary_weight: 5.0
+  data_weight: 10.0
+  boundary_weight: 10.0
   
-  momentum_x_weight: 5.0
-  momentum_y_weight: 5.0
-  momentum_z_weight: 5.0
-  continuity_weight: 5.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
   
   wall_constraint_weight: 10.0
-  periodicity_weight: 2.0
+  periodicity_weight: 10.0
   pressure_gradient_weight: 1.0
   
   prior_weight: 0.3
@@ -163,7 +163,7 @@ losses:
   
   # ⭐ 啟用自適應權重
   adaptive_weighting: true
-  weight_update_freq: 50
+  weight_update_freq: 1000
   grad_norm_alpha: 1.5
   
   adaptive_loss_terms:
@@ -181,18 +181,22 @@ losses:
 # 訓練設定（基礎配置）
 # =============================================================================
 training:
-  optimizer: "adam"
+  optimizer:
+    type: "soap"
+    lr: 1.0e-3
+    weight_decay: 1.0e-5
+    precondition_frequency: 2
+    shampoo_beta: -1
   lr: 1.0e-3
   weight_decay: 1.0e-5
   
   lr_scheduler:
-    type: "warmup_cosine"
-    min_lr: 1.0e-6
-    warmup_epochs: 50
-    T_max: 1000
+    type: "step"
+    step_size: 1000
+    gamma: 0.9
   
-  epochs: 1000
-  max_epochs: 1000
+  epochs: 5000
+  max_epochs: 5000
   batch_size: 1024
   validation_freq: 50
   checkpoint_freq: 100
@@ -204,8 +208,8 @@ training:
     min_delta: 1.0e-7
   
   sampling:
-    pde_points: 2048
-    boundary_points: 1000
+    pde_points: 10000
+    boundary_points: 5000
     wall_clustering: 0.3
   
   gradient_clip: 1.0
@@ -220,76 +224,89 @@ training:
     #   - 已驗證課程學習兼容性
 
 # =============================================================================
-# ⭐ 課程學習配置（2 階段）
+# ⭐ 課程學習配置（3 階段）
 # =============================================================================
 curriculum:
   enable: true
   
   stages:
     # ================================
-    # 階段 1: 強 PDE 暖啟（Epochs 0-400）
+    # 階段 1: 低 Re_tau 穩定啟動 (Epochs 0-1500)
     # ================================
-    - name: "Stage1_StrongPDE"
-      epoch_range: [0, 400]
-      Re_tau: 1000.0
-      nu: 5.0e-5
-      pressure_gradient: 0.0025
+    - name: "Stage1_Low_Re"
+      epoch_range: [0, 1500]
+      Re_tau: 500.0
+      nu: 1.0e-4  # nu = (1000 * 5e-5) / 500
+      pressure_gradient: 0.00125 # Scaled linearly
       lr: 1.0e-3
       
       weights:
-        data: 5.0
-        boundary: 5.0
-        momentum_x: 5.0
-        momentum_y: 5.0
-        momentum_z: 5.0
-        continuity: 5.0
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
         wall_constraint: 10.0
-        periodicity: 2.0
+        periodicity: 10.0
         pressure_gradient: 1.0
       
       sampling:
-        pde_points: 2048
-        boundary_points: 1000
+        pde_points: 10000
+        boundary_points: 5000
         wall_clustering: 0.3
+
+    # ================================
+    # 階段 2: 中等 Re_tau 過渡 (Epochs 1500-3500)
+    # ================================
+    - name: "Stage2_Mid_Re"
+      epoch_range: [1500, 3500]
+      Re_tau: 750.0
+      nu: 6.67e-5 # nu = (1000 * 5e-5) / 750
+      pressure_gradient: 0.001875 # Scaled linearly
+      lr: 0.9e-3  # Decayed once
       
-      # 階段目標
-      stage_goals:
-        pde_ratio_min: 0.25
-        tau_w_ratio_min: 1.0
-        loss_reduction_factor: 0.5
-    
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
+        wall_constraint: 10.0
+        periodicity: 10.0
+        pressure_gradient: 1.0
+      
+      sampling:
+        pde_points: 10000
+        boundary_points: 5000
+        wall_clustering: 0.4
+
     # ================================
-    # 階段 2: PDE 主導精煉（Epochs 400-1000）
+    # 階段 3: 目標 Re_tau 精煉 (Epochs 3500-5000)
     # ================================
-    - name: "Stage2_PDEDominance"
-      epoch_range: [400, 1000]
+    - name: "Stage3_High_Re_Refinement"
+      epoch_range: [3500, 5000]
       Re_tau: 1000.0
       nu: 5.0e-5
       pressure_gradient: 0.0025
-      lr: 3.0e-4  # 降低學習率
+      lr: 0.729e-3 # Decayed three times (0.9^3)
       
       weights:
-        data: 5.0
-        boundary: 5.0
-        momentum_x: 8.0  # ⭐ PDE 權重提升 60%
-        momentum_y: 8.0
-        momentum_z: 8.0
-        continuity: 8.0
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
         wall_constraint: 10.0
-        periodicity: 2.0
+        periodicity: 10.0
         pressure_gradient: 1.0
       
       sampling:
-        pde_points: 2048
-        boundary_points: 1000
-        wall_clustering: 0.3
-      
-      # 階段目標
-      stage_goals:
-        pde_ratio_min: 0.35
-        tau_w_ratio_min: 5.0
-        u_l2_target: 0.25
-        mass_conservation_target: 1.0e-3
+        pde_points: 10000
+        boundary_points: 5000
+        wall_clustering: 0.5
 
 ensemble:
   enable: false

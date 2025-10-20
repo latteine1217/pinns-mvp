@@ -23,7 +23,7 @@ from pinnx.models.axis_selective_fourier import (
 class TestAxisSelectiveFourierFeatures:
     """AxisSelectiveFourierFeatures 核心功能測試"""
     
-    def test_basic_initialization(self):
+    def test_axis_fourier_basic_initialization(self):
         """測試基本初始化"""
         config = {'x': [1, 2], 'y': [], 'z': [1]}
         fourier = AxisSelectiveFourierFeatures(config)
@@ -78,7 +78,7 @@ class TestAxisSelectiveFourierFeatures:
         
         torch.testing.assert_close(output, expected, rtol=1e-5, atol=1e-6)
     
-    def test_gradient_flow(self):
+    def test_axis_fourier_gradient_flow(self):
         """測試梯度回傳正常"""
         config = {'x': [1, 2], 'y': [1]}
         fourier = AxisSelectiveFourierFeatures(config)
@@ -203,7 +203,7 @@ class TestFourierFeatureFactory:
         output = fourier(x)
         assert output.shape[1] == 0
     
-    def test_backward_compatibility(self):
+    def test_fourier_factory_backward_compatibility(self):
         """測試向後兼容性（舊版 FourierFeatures）"""
         # 這裡假設舊版接受整數配置
         # 如果專案中有舊版 FourierFeatures，應測試工廠能正確處理
@@ -255,7 +255,7 @@ class TestIntegrationScenarios:
         fourier.set_active_frequencies(full_config)
         assert fourier.out_dim == 8  # 2*(4+0)
     
-    def test_with_mlp_network(self):
+    def test_axis_fourier_integration_with_mlp(self):
         """測試與 MLP 網路集成"""
         config = {'x': [1, 2], 'y': [], 'z': [1]}
         fourier = AxisSelectiveFourierFeatures(config)

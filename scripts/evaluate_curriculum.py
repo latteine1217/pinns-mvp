@@ -58,7 +58,7 @@ def create_model_from_config(config: Dict[str, Any], device: torch.device) -> nn
     fourier_m = fourier_cfg.get('fourier_m', model_cfg.get('fourier_m', 32))
     fourier_sigma = fourier_cfg.get('fourier_sigma', model_cfg.get('fourier_sigma', 1.0))
     
-    if model_cfg.get('type') == 'enhanced_fourier_mlp':
+    if model_cfg.get('type') == 'fourier_vs_mlp':
         base_model = create_enhanced_pinn(
             in_dim=model_cfg['in_dim'],
             out_dim=model_cfg['out_dim'],

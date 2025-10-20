@@ -233,7 +233,7 @@ def test_rwf_scale_mean_parameter():
     print("✅ RWF scale_mean 參數測試通過")
 
 
-def test_rwf_in_enhanced_fourier_mlp():
+def test_rwf_in_fourier_vs_mlp():
     """測試 RWF 在 PINNNet 中正確配置"""
     model = PINNNet(
         in_dim=3,
@@ -416,7 +416,7 @@ if __name__ == "__main__":
     # 4. RWF 參數
     print("\n4️⃣  測試 RWF 參數配置...")
     test_rwf_scale_mean_parameter()
-    test_rwf_in_enhanced_fourier_mlp()
+    test_rwf_in_fourier_vs_mlp()
     
     # 5. 配置載入
     print("\n5️⃣  測試配置載入...")

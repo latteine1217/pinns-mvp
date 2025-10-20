@@ -155,7 +155,7 @@ class TestGetDevice:
             device = get_device("cuda")
             assert device.type == "cuda"
     
-    def test_cuda_fallback_to_cpu(self):
+    def test_factory_cuda_fallback_to_cpu(self):
         """測試 CUDA 不可用時回退到 CPU"""
         with patch("torch.cuda.is_available", return_value=False):
             device = get_device("cuda")
@@ -167,7 +167,7 @@ class TestGetDevice:
             device = get_device("mps")
             assert device.type == "mps"
     
-    def test_mps_fallback_to_cpu(self):
+    def test_factory_mps_fallback_to_cpu(self):
         """測試 MPS 不可用時回退到 CPU"""
         with patch("torch.backends.mps.is_available", return_value=False):
             device = get_device("mps")
@@ -241,7 +241,7 @@ class TestCreateModel:
         out = model(x)
         assert out.shape == (10, 4)
     
-    def test_siren_initialization(self):
+    def test_factory_siren_initialization(self):
         """測試 SIREN 權重初始化"""
         config = {
             "model": {

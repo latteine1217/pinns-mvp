@@ -1,6 +1,13 @@
 # Data and results artifacts
 data/
 results/
+logs/
+
+# AI tools context files
+AGENTS.md 
+CLAUDE.md 
+GEMINI.md
+openspec/
 
 # Model checkpoints and arrays
 *.pt
@@ -22,6 +29,9 @@ context/
 tasks/
 archive/
 legacy/
+scripts/archive_*/
+scripts/archived_*/
+scripts/archive*/
 
 # External dependencies (nested git repos)
 external/

@@ -7,7 +7,7 @@ from pathlib import Path
 # 添加專案根目錄到路徑
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pinnx.models.fourier_mlp import create_enhanced_fourier_mlp
+from pinnx.models.fourier_mlp import create_pinn_model
 from pinnx.physics.vs_pinn_channel_flow import VSPINNChannelFlow, create_vs_pinn_channel_flow
 
 def load_model(checkpoint_path, config_path, device):
@@ -17,7 +17,7 @@ def load_model(checkpoint_path, config_path, device):
     
     # 創建模型
     model_config = config['model']
-    model = create_enhanced_fourier_mlp(
+    model = create_pinn_model(
         N_x=model_config['vs_pinn']['scaling_factors']['N_x'],
         N_y=model_config['vs_pinn']['scaling_factors']['N_y'],
         N_z=model_config['vs_pinn']['scaling_factors']['N_z'],

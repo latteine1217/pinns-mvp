@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Callable, Union
 import numpy as np
 
-from .fourier_mlp import PINNNet, MultiScalePINNNet
+from .fourier_mlp import PINNNet
 from ..physics.scaling import VSScaler
 
 

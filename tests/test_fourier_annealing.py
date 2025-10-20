@@ -62,7 +62,7 @@ class TestAnnealingStage:
 class TestFourierAnnealingScheduler:
     """FourierAnnealingScheduler 核心功能測試"""
     
-    def test_basic_initialization(self):
+    def test_annealing_basic_initialization(self):
         """測試基本初始化"""
         stages = [
             AnnealingStage(0.5, [1, 2]),

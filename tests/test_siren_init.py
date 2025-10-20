@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.models import PINNNet, init_siren_weights
 
-def test_siren_initialization():
+def test_standalone_siren_initialization():
     """測試 SIREN 權重初始化"""
     print("=" * 80)
     print("🧪 測試 SIREN 權重初始化")
@@ -97,4 +97,4 @@ def test_siren_initialization():
     print("=" * 80)
 
 if __name__ == "__main__":
-    test_siren_initialization()
+    test_standalone_siren_initialization()

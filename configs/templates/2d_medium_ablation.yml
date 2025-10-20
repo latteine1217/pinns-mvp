@@ -64,7 +64,7 @@ normalization:
 # 感測點配置（中等稀疏度）
 # =============================================================================
 sensors:
-  K: 100  # 中等感測點數量
+  K: 500  # 中等感測點數量
   selection_method: "qr_pivot"
   spatial_coverage: "optimal"
 
@@ -72,7 +72,7 @@ sensors:
 # 模型架構（標準配置）
 # =============================================================================
 model:
-  type: "enhanced_fourier_mlp"
+  type: "fourier_vs_mlp"
   in_dim: 3
   out_dim: 4
   width: 256  # 標準寬度
@@ -146,16 +146,16 @@ physics:
 # =============================================================================
 losses:
   # 基礎權重（平衡）
-  data_weight: 5.0
-  boundary_weight: 5.0
+  data_weight: 10.0
+  boundary_weight: 10.0
   
-  momentum_x_weight: 5.0
-  momentum_y_weight: 5.0
-  momentum_z_weight: 5.0
-  continuity_weight: 5.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
   
   wall_constraint_weight: 10.0
-  periodicity_weight: 2.0
+  periodicity_weight: 10.0
   pressure_gradient_weight: 1.0
   
   prior_weight: 0.3
@@ -164,7 +164,7 @@ losses:
   
   # ⚠️ 消融變數 2: 自適應權重（可開關）
   adaptive_weighting: true  # 🧪 設為 false 來禁用
-  weight_update_freq: 50
+  weight_update_freq: 1000
   grad_norm_alpha: 1.5
   
   adaptive_loss_terms:
@@ -182,31 +182,35 @@ losses:
 # 訓練設定（中期）
 # =============================================================================
 training:
-  optimizer: "adam"
+  optimizer:
+    type: "soap"
+    lr: 1.0e-3
+    weight_decay: 1.0e-5
+    precondition_frequency: 2
+    shampoo_beta: -1
   lr: 1.0e-3
   weight_decay: 1.0e-5
   
   lr_scheduler:
-    type: "warmup_cosine"
-    min_lr: 1.0e-6
-    warmup_epochs: 50
-    T_max: 1000
+    type: "step"
+    step_size: 1000
+    gamma: 0.9
   
-  epochs: 1000  # 中期訓練
-  max_epochs: 1000
+  epochs: 5000  # 中期訓練
+  max_epochs: 5000
   batch_size: 1024
   validation_freq: 50
   checkpoint_freq: 100
   log_interval: 20
   
   early_stopping:
-    enabled: true
+    enabled: false
     patience: 200
     min_delta: 1.0e-7
   
   sampling:
-    pde_points: 2048
-    boundary_points: 1000
+    pde_points: 10000
+    boundary_points: 5000
     wall_clustering: 0.3
   
   gradient_clip: 1.0
@@ -300,7 +304,7 @@ test_acceptance:
   # 消融研究特定指標
   ablation_metrics:
     - baseline_l2_comparison: true  # 需與基線對照
-    - delta_l2_threshold: 0.10  # ΔL2 ≥ 10% 視為顯著差異
+    - delta_l2_threshold: 0.10  # ΔL2 ≥ 10% 視為顯2著差異
     - convergence_speed_ratio: true  # 收斂速度對比
 
 # =============================================================================
@@ -318,7 +322,7 @@ usage_notes: |
     2. 自適應權重：adaptive_weighting (true/false)
     3. 網路寬度：width (128/256/512)
     4. 感測點數：K (50/100/200)
-  
+  2
   📊 對照實驗設計範例：
     實驗 A (baseline):      fourier_m=32, adaptive=true
     實驗 B (no_fourier):    fourier_m=0,  adaptive=true
@@ -336,7 +340,7 @@ usage_notes: |
     
     # 消融實驗（修改配置後）
     python scripts/train.py --cfg configs/2d_ablation_no_fourier.yml
-  
+  2
   📈 預期結果：
     - 訓練時間：15-30 分鐘（GPU）
     - 最終 L2：20-30%
@@ -357,7 +361,7 @@ ablation_experiment_plan:
     config: "2d_medium_ablation_fourier_full.yml"
     fourier_m: 32
     adaptive_weighting: true
-    K: 100
+    2K: 100
     expected_l2: 0.25
   
   ablation_fourier:
@@ -369,7 +373,7 @@ ablation_experiment_plan:
   
   ablation_adaptive:
     config: "2d_medium_ablation_fixed_weights.yml"
-    fourier_m: 32
+    22fourier_m: 32
     adaptive_weighting: false  # ⚠️ 唯一變數
     K: 100
     hypothesis: "PDE ratio 下降至 15-20%（權重失衡）"

@@ -66,7 +66,7 @@ normalization:
 # 感測點配置（稀疏採樣）
 # =============================================================================
 sensors:
-  K: 50  # 少量感測點（快速測試）
+  K: 500  # 少量感測點（快速測試）
   selection_method: "qr_pivot"
   spatial_coverage: "optimal"
 
@@ -74,7 +74,7 @@ sensors:
 # 模型架構（輕量級）
 # =============================================================================
 model:
-  type: "enhanced_fourier_mlp"
+  type: "fourier_vs_mlp"
   in_dim: 3  # x, y, z (2D 切片仍需 3D 座標)
   out_dim: 4  # u, v, w, p
   width: 128  # 較小網路（快速）
@@ -148,18 +148,18 @@ physics:
 # =============================================================================
 losses:
   # 資料與邊界
-  data_weight: 5.0
-  boundary_weight: 5.0
+  data_weight: 10.0
+  boundary_weight: 10.0
   
   # PDE 項（平衡）
-  momentum_x_weight: 5.0
-  momentum_y_weight: 5.0
-  momentum_z_weight: 5.0
-  continuity_weight: 5.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
   
   # 約束
   wall_constraint_weight: 10.0
-  periodicity_weight: 2.0
+  periodicity_weight: 10.0
   pressure_gradient_weight: 1.0
   
   # 正則化（輕量）
@@ -175,15 +175,19 @@ losses:
 # 訓練設定（快速模式）
 # =============================================================================
 training:
-  optimizer: "adam"  # 僅 Adam（快速）
+  optimizer:
+    type: "soap"
+    lr: 1.0e-3
+    weight_decay: 1.0e-5
+    precondition_frequency: 2
+    shampoo_beta: -1
   lr: 1.0e-3
   weight_decay: 1.0e-5
   
   lr_scheduler:
-    type: "warmup_cosine"
-    min_lr: 1.0e-5
-    warmup_epochs: 10
-    T_max: 100
+    type: "step"
+    step_size: 50
+    gamma: 0.9
   
   epochs: 100  # 快速測試
   max_epochs: 100
@@ -199,8 +203,8 @@ training:
   
   # 採樣配置（較少點）
   sampling:
-    pde_points: 1024  # 減少碰撞點
-    boundary_points: 500
+    pde_points: 10000  # 減少碰撞點
+    boundary_points: 5000
     wall_clustering: 0.2
   
   gradient_clip: 1.0

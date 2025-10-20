@@ -1,15 +1,21 @@
 """
-Fourier 特徵 MLP 網路架構模組 (統一版)
+Fourier-VS MLP 網路架構模組
 
-整合標準與增強功能，透過參數選項控制網路複雜度。
+整合 Fourier Features 與 VS-PINN 變數尺度化的統一架構。
 
 核心特色：
 - Fourier Random Features (標準/多尺度)
+- VS-PINN 座標縮放支援
 - Random Weight Factorization (RWF) 可選
-- 可配置的網路深度與寬度  
+- 可配置的網路深度與寬度
 - 支援多種激活函數 (tanh, swish, gelu, sine)
 - 殘差連接與層歸一化 (可選)
 - 針對 PINNs 自動微分優化的權重初始化
+
+Note:
+    此模組僅保留 `PINNNet` (核心網路) 和基礎組件 (RWFLinear, FourierFeatures, 等)。
+    舊版本的 `MultiScalePINNNet`、`create_standard_pinn`、`create_enhanced_pinn` 已移除。
+    所有模型通過統一的 `create_pinn_model()` 工廠函數創建。
 """
 
 import torch
@@ -555,91 +561,72 @@ class PINNNet(nn.Module):
                 f"params={summary['total_params']:,}")
 
 
-class MultiScalePINNNet(nn.Module):
-    """
-    多尺度 PINN 網路：使用不同 Fourier 頻率的子網路組合
-    
-    適用於包含多個特徵尺度的問題（例如湍流中的大尺度結構與小尺度渦漩）
-    """
-    
-    def __init__(self,
-                 in_dim: int = 3,
-                 out_dim: int = 4,
-                 width: int = 128,
-                 depth: int = 4,
-                 num_scales: int = 3,
-                 sigma_min: float = 1.0,
-                 sigma_max: float = 10.0,
-                 fourier_m: int = 16,
-                 activation: str = 'tanh'):
-        
-        super().__init__()
-        
-        self.num_scales = num_scales
-        self.out_dim = out_dim
-        
-        # 生成多個不同頻率尺度的子網路
-        sigmas = np.logspace(np.log10(sigma_min), np.log10(sigma_max), num_scales)
-        
-        self.subnets = nn.ModuleList()
-        for sigma in sigmas:
-            subnet = PINNNet(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                width=width,
-                depth=depth,
-                fourier_m=fourier_m,
-                fourier_sigma=float(sigma),
-                activation=activation,
-                use_fourier=True
-            )
-            self.subnets.append(subnet)
-        
-        # 尺度權重（可學習）
-        self.scale_weights = nn.Parameter(torch.ones(num_scales) / num_scales)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        多尺度前向傳播：各子網路輸出的加權組合
-        """
-        outputs = []
-        for subnet in self.subnets:
-            outputs.append(subnet(x))
-        
-        # 堆疊 [num_scales, batch_size, out_dim]
-        stacked = torch.stack(outputs, dim=0)
-        
-        # 加權平均：[batch_size, out_dim]
-        weights = F.softmax(self.scale_weights, dim=0)
-        weighted_output = torch.einsum('s,sbo->bo', weights, stacked)
-        
-        return weighted_output
-    
-    def get_num_params(self) -> int:
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+# ========== 已移除的類別 ==========
+#
+# MultiScalePINNNet 已移除（2025-10-20）
+# 原因：增加架構複雜度但效果不顯著，單一尺度的 fourier_vs_mlp 配合適當的
+#       fourier_sigma 參數（如 2-5）已能有效捕捉多尺度特徵
+#
+# 如需多尺度特徵，建議：
+# 1. 使用 fourier_multiscale=True（對數間距的多頻率採樣）
+# 2. 調整 fourier_sigma 至推薦範圍（2-5 for channel flow）
+# 3. 增加 fourier_m（Fourier 特徵數量）至 64-256
 
 
 # ========== 便捷工廠函數 ==========
 
 def create_pinn_model(config: dict) -> nn.Module:
     """
-    根據配置字典建立 PINN 模型
-    
+    根據配置字典建立 Fourier-VS PINN 模型
+
+    支援的模型類型：
+    - 'fourier_vs_mlp': 統一的 Fourier-VS 架構
+    - 'standard': 別名，指向 fourier_vs_mlp（向後兼容）
+
     Args:
-        config: 模型配置字典
+        config: 模型配置字典，必須包含：
+            - type: 模型類型
+            - in_dim: 輸入維度
+            - out_dim: 輸出維度
+            - width: 隱藏層寬度
+            - depth: 網路深度
+            - fourier_m: Fourier 特徵數量
+            - fourier_sigma: Fourier 頻率尺度
+            - activation: 激活函數 (tanh/swish/sine/gelu)
+            - use_fourier: 是否啟用 Fourier Features
+            - use_residual: 是否啟用殘差連接
+            - use_rwf: 是否啟用 Random Weight Factorization
+
     Returns:
-        建立好的 PINN 模型
+        PINNNet 模型實例
+
+    Raises:
+        ValueError: 如果指定了不支援的模型類型
+
+    Example:
+        >>> config = {
+        ...     'type': 'fourier_vs_mlp',
+        ...     'in_dim': 3,
+        ...     'out_dim': 4,
+        ...     'width': 256,
+        ...     'depth': 6,
+        ...     'fourier_m': 64,
+        ...     'fourier_sigma': 3.0,
+        ...     'activation': 'swish'
+        ... }
+        >>> model = create_pinn_model(config)
     """
-    model_type = config.get('type', 'standard')
-    
-    if model_type == 'standard' or model_type == 'enhanced_fourier_mlp':
-        # 🔧 處理 VS-PINN 縮放因子（如果提供）
+    model_type = config.get('type', 'fourier_vs_mlp')
+
+    # 向後兼容：支援 'standard' 別名
+    if model_type in ('fourier_vs_mlp', 'standard'):
+        # 處理 VS-PINN 縮放因子
         input_scale_factors = None
         if 'input_scale_factors' in config:
             scale_list = config['input_scale_factors']
             if isinstance(scale_list, (list, tuple)):
                 input_scale_factors = torch.tensor(scale_list, dtype=torch.float32)
-        
+
         return PINNNet(
             in_dim=config.get('in_dim', 3),
             out_dim=config.get('out_dim', 4),
@@ -658,66 +645,37 @@ def create_pinn_model(config: dict) -> nn.Module:
             use_rwf=config.get('use_rwf', False),
             rwf_scale_mean=config.get('rwf_scale_mean', 0.0),
             rwf_scale_std=config.get('rwf_scale_std', 0.1),
-            sine_omega_0=config.get('sine_omega_0', 1.0),  # 預設值改為 1.0
-            fourier_normalize_input=config.get('fourier_normalize_input', False),  # 🔧 新參數
-            input_scale_factors=input_scale_factors  # 🔧 新參數
+            sine_omega_0=config.get('sine_omega_0', 1.0),
+            fourier_normalize_input=config.get('fourier_normalize_input', False),
+            input_scale_factors=input_scale_factors
         )
-    
-    elif model_type == 'multiscale':
-        return MultiScalePINNNet(
-            in_dim=config.get('in_dim', 3),
-            out_dim=config.get('out_dim', 4),
-            width=config.get('width', 128),
-            depth=config.get('depth', 4),
-            num_scales=config.get('num_scales', 3),
-            sigma_min=config.get('sigma_min', 1.0),
-            sigma_max=config.get('sigma_max', 10.0),
-            fourier_m=config.get('fourier_m', 16),
-            activation=config.get('activation', 'tanh')
-        )
-    
+
     else:
-        raise ValueError(f"不支援的模型類型: {model_type}")
+        raise ValueError(
+            f"不支援的模型類型: {model_type}\n"
+            f"支援的類型: 'fourier_vs_mlp', 'standard' (向後兼容)\n"
+            f"注意: \n"
+            f"  - 'multiscale' 已移除，請使用 fourier_vs_mlp + fourier_multiscale=True\n"
+            f"  - 'enhanced_fourier_mlp' 已移除，請使用 'fourier_vs_mlp'"
+        )
 
 
-def create_standard_pinn(**kwargs) -> PINNNet:
-    """建立標準 PINN 模型 (輕量級配置)"""
-    defaults = {
-        'width': 128,
-        'depth': 4,
-        'fourier_m': 32,
-        'activation': 'tanh',
-        'use_residual': False,
-        'use_layer_norm': False,
-        'dropout': 0.0,
-        'use_rwf': False
-    }
-    defaults.update(kwargs)
-    return PINNNet(**defaults)
-
-
-def create_enhanced_pinn(**kwargs) -> PINNNet:
-    """建立增強 PINN 模型 (高容量配置)"""
-    defaults = {
-        'width': 256,
-        'depth': 8,
-        'fourier_m': 64,
-        'fourier_multiscale': True,
-        'activation': 'swish',
-        'use_residual': True,
-        'use_layer_norm': True,
-        'use_input_projection': True,
-        'dropout': 0.1,
-        'use_rwf': False,
-        'rwf_scale_std': 0.1
-    }
-    defaults.update(kwargs)
-    return PINNNet(**defaults)
-
-
-def multiscale_pinn(in_dim: int = 3, out_dim: int = 4, **kwargs) -> MultiScalePINNNet:
-    """快速建立多尺度 PINN 模型"""
-    return MultiScalePINNNet(in_dim=in_dim, out_dim=out_dim, **kwargs)
+# ========== 已移除的便捷函數 ==========
+#
+# create_standard_pinn(), create_enhanced_pinn(), multiscale_pinn() 已移除（2025-10-20）
+# 原因：統一使用 create_pinn_model(config) 工廠函數，避免 API 碎片化
+#
+# 遷移指南：
+#
+# 舊代碼:
+#   model = create_standard_pinn(in_dim=3, out_dim=4, width=128)
+#
+# 新代碼:
+#   config = {'type': 'fourier_vs_mlp', 'in_dim': 3, 'out_dim': 4, 'width': 128}
+#   model = create_pinn_model(config)
+#
+# 或直接使用:
+#   model = PINNNet(in_dim=3, out_dim=4, width=128)
 
 
 def init_siren_weights(model: PINNNet) -> None:
@@ -778,43 +736,70 @@ def init_siren_weights(model: PINNNet) -> None:
 
 if __name__ == "__main__":
     # 測試程式碼
-    print("=== 標準 PINNNet 測試 ===")
-    
-    # 建立標準模型
-    model_std = create_standard_pinn(in_dim=3, out_dim=4)
-    print(f"標準模型: {model_std}")
-    print(f"參數總數: {model_std.get_num_params():,}")
-    
-    # 建立增強模型
-    model_enh = create_enhanced_pinn(in_dim=2, out_dim=3)
-    print(f"\n增強模型: {model_enh}")
-    print(f"參數總數: {model_enh.get_num_params():,}")
-    
-    # 測試前向傳播
+    print("=== Fourier-VS MLP 測試 ===\n")
+
+    # 測試 1: 基礎配置
+    config_basic = {
+        'type': 'fourier_vs_mlp',
+        'in_dim': 3,
+        'out_dim': 4,
+        'width': 128,
+        'depth': 4,
+        'fourier_m': 32,
+        'fourier_sigma': 3.0,
+        'activation': 'tanh'
+    }
+    model_basic = create_pinn_model(config_basic)
+    print(f"1️⃣  基礎模型: {model_basic}")
+    print(f"   參數總數: {model_basic.get_num_params():,}\n")
+
+    # 測試 2: 增強配置（Residual + RWF）
+    config_enhanced = {
+        'type': 'fourier_vs_mlp',
+        'in_dim': 3,
+        'out_dim': 4,
+        'width': 256,
+        'depth': 6,
+        'fourier_m': 64,
+        'fourier_sigma': 3.0,
+        'activation': 'swish',
+        'use_residual': True,
+        'use_rwf': False
+    }
+    model_enhanced = create_pinn_model(config_enhanced)
+    print(f"2️⃣  增強模型: {model_enhanced}")
+    print(f"   參數總數: {model_enhanced.get_num_params():,}\n")
+
+    # 測試 3: 向後兼容（舊名稱 'standard'）
+    config_legacy = config_basic.copy()
+    config_legacy['type'] = 'standard'
+    model_legacy = create_pinn_model(config_legacy)
+    print(f"3️⃣  向後兼容測試 (type='standard'): ✅")
+    print(f"   模型類型: {type(model_legacy).__name__}\n")
+
+    # 測試 4: 前向傳播
     x = torch.randn(100, 3)
     with torch.no_grad():
-        y_std = model_std(x)
-    print(f"\n標準模型輸出形狀: {y_std.shape}")
-    
-    x2 = torch.randn(100, 2)
-    with torch.no_grad():
-        y_enh = model_enh(x2)
-    print(f"增強模型輸出形狀: {y_enh.shape}")
-    
-    # 測試梯度計算
-    x.requires_grad_(True)
-    y = model_std(x)
-    u = y[:, 0]
-    du_dx = torch.autograd.grad(u.sum(), x, create_graph=True)[0][:, 1]
-    print(f"\n梯度計算成功: ∂u/∂x 形狀 = {du_dx.shape}")
-    
-    # 測試多尺度模型
-    print("\n=== MultiScalePINNNet 測試 ===")
-    ms_model = multiscale_pinn(in_dim=3, out_dim=4, num_scales=2)
-    print(f"多尺度模型參數: {ms_model.get_num_params():,}")
-    
-    with torch.no_grad():
-        y_ms = ms_model(x)
-    print(f"多尺度輸出形狀: {y_ms.shape}")
-    
+        y_basic = model_basic(x)
+        y_enhanced = model_enhanced(x)
+    print(f"4️⃣  前向傳播測試:")
+    print(f"   輸入形狀: {x.shape}")
+    print(f"   基礎模型輸出: {y_basic.shape}")
+    print(f"   增強模型輸出: {y_enhanced.shape}\n")
+
+    # 測試 5: 梯度計算（PINNs 關鍵）
+    x_grad = torch.randn(50, 3, requires_grad=True)
+    y_grad = model_basic(x_grad)
+    u = y_grad[:, 0]
+    du_dx = torch.autograd.grad(u.sum(), x_grad, create_graph=True)[0][:, 0]
+    print(f"5️⃣  梯度計算測試:")
+    print(f"   ∂u/∂x 形狀: {du_dx.shape}")
+    print(f"   ∂u/∂x 範圍: [{du_dx.min():.4f}, {du_dx.max():.4f}]\n")
+
+    # 測試 6: 模型摘要
+    summary = model_enhanced.get_model_summary()
+    print(f"6️⃣  模型摘要:")
+    for key, value in summary.items():
+        print(f"   {key:20s}: {value}")
+
     print("\n✅ 所有測試通過！")

@@ -201,7 +201,7 @@ class TestMaskingMechanism:
         fourier.set_active_frequencies(valid_config)  # 不應拋出異常
         assert fourier.axes_config == valid_config
     
-    def test_backward_compatibility(self):
+    def test_masking_backward_compatibility(self):
         """測試向後相容性（未提供 full_axes_config）"""
         config = {'x': [1, 2, 4], 'y': [], 'z': [1, 2]}
         
@@ -337,7 +337,7 @@ class TestIntegrationScenarios:
         expected_mask = torch.ones(7)  # 7 個頻率全啟用
         torch.testing.assert_close(fourier._frequency_mask, expected_mask)
     
-    def test_with_mlp_network(self):
+    def test_masking_with_mlp_network(self):
         """測試與 MLP 網路集成（維度匹配）"""
         full_config = {'x': [1, 2, 4, 8], 'y': [], 'z': [1, 2, 4]}
         initial_config = {'x': [1, 2], 'y': [], 'z': [1, 2]}

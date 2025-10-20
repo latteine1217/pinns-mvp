@@ -32,11 +32,11 @@ class TestBulkVelocityConstraint:
         """創建標準 VS-PINN 求解器"""
         return create_vs_pinn_channel_flow(N_y=12.0, N_x=2.0, N_z=2.0)
     
-    def test_method_exists(self, solver):
+    def test_bulk_constraint_method_exists(self, solver):
         """測試方法是否存在"""
         assert hasattr(solver, 'compute_bulk_velocity_constraint')
     
-    def test_return_type(self, solver):
+    def test_bulk_constraint_return_type(self, solver):
         """測試返回值類型"""
         # 創建測試資料：均勻 y 層分佈
         torch.manual_seed(42)
@@ -52,7 +52,7 @@ class TestBulkVelocityConstraint:
         assert loss.ndim == 0 or (loss.ndim == 1 and loss.shape[0] == 1), "應返回標量"
     
     @pytest.mark.skip(reason="需要重新設計梯度測試邏輯")
-    def test_gradient_flow(self, solver):
+    def test_bulk_constraint_gradient_flow(self, solver):
         """測試梯度傳播"""
         # 創建多個 y 層，每層多個點
         coords = torch.zeros(50, 3, requires_grad=False)
@@ -178,7 +178,7 @@ class TestCenterlineSymmetry:
         """創建標準 VS-PINN 求解器"""
         return create_vs_pinn_channel_flow(N_y=12.0, N_x=2.0, N_z=2.0)
     
-    def test_method_exists(self, solver):
+    def test_centerline_method_exists(self, solver):
         """測試方法是否存在"""
         assert hasattr(solver, 'compute_centerline_symmetry')
     
@@ -201,7 +201,7 @@ class TestCenterlineSymmetry:
         assert 'centerline_v' in result, "應包含 centerline_v"
     
     @pytest.mark.skip(reason="需要重新設計梯度測試邏輯")
-    def test_gradient_flow(self, solver):
+    def test_centerline_gradient_flow(self, solver):
         """測試梯度傳播"""
         coords = torch.randn(50, 3, requires_grad=True)
         coords_data = coords.clone().detach()
@@ -297,11 +297,11 @@ class TestPressureReference:
         """創建標準 VS-PINN 求解器"""
         return create_vs_pinn_channel_flow(N_y=12.0, N_x=2.0, N_z=2.0)
     
-    def test_method_exists(self, solver):
+    def test_pressure_reference_method_exists(self, solver):
         """測試方法是否存在"""
         assert hasattr(solver, 'compute_pressure_reference')
     
-    def test_return_type(self, solver):
+    def test_pressure_reference_return_type(self, solver):
         """測試返回值類型"""
         coords = torch.randn(50, 3)
         predictions = torch.randn(50, 4)
@@ -311,7 +311,7 @@ class TestPressureReference:
         assert isinstance(loss, torch.Tensor), "返回值應為 Tensor"
         assert loss.ndim == 0 or (loss.ndim == 1 and loss.shape[0] == 1), "應返回標量"
     
-    def test_gradient_flow(self, solver):
+    def test_pressure_reference_gradient_flow(self, solver):
         """測試梯度傳播"""
         # 使用實際域中心作為參考點
         x_center = (solver.domain_bounds['x'][0] + solver.domain_bounds['x'][1]) / 2
@@ -461,7 +461,7 @@ class TestLossIntegration:
         assert 0 <= centerline_losses['centerline_v'].item() <= 100
         assert 0 <= pressure_loss.item() <= 1000  # 壓力損失可能較大
     
-    def test_batch_size_invariance(self, solver):
+    def test_loss_batch_size_invariance(self, solver):
         """測試批次大小不影響損失計算邏輯"""
         small_coords = torch.randn(50, 3)
         large_coords = torch.randn(500, 3)

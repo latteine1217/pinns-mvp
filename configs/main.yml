@@ -203,8 +203,8 @@ losses:
   continuity_weight: 1.0              # 連續方程（質量守恆）
   
   # 物理約束權重
-  wall_constraint_weight: 5.0         # 壁面約束增強
-  periodicity_weight: 5.0             # 週期性邊界
+  wall_constraint_weight: 10.0         # 壁面約束增強
+  periodicity_weight: 10.0             # 週期性邊界
   pressure_gradient_weight: 1.0       # 平均壓力梯度
   
   # 正則化
@@ -231,28 +231,9 @@ training:
   
   # 學習率調度器
   lr_scheduler:
-    type: "cosine_warm_restarts"                    # 類型：warmup_cosine / cosine_warm_restarts / cosine / exponential / step / none
-    
-    # warmup_cosine 專用參數（推薦用於大型訓練）
-    warmup_epochs: 100                # Warmup 階段 epochs（線性增加學習率）
-    min_lr: 1.0e-6                    # CosineAnnealing 最小學習率
-    
-    # cosine_warm_restarts 專用參數（週期性重啟）
-    T_0: 100                          # 第一次重啟週期（epochs）
-    T_mult: 2                         # 週期倍增因子（1=固定週期，2=指數增長）
-    eta_min: 1.0e-6                   # 最小學習率
-    
-    # cosine 專用參數（單調遞減）
-    # min_lr: 1.0e-6                  # 最小學習率（已在上方定義）
-    
-    # exponential 專用參數（指數衰減）
-    gamma: 0.999                      # 衰減率（每 epoch 乘以 gamma）
-    
-    # step 專用參數（階梯式衰減）
-    step_size: 100                    # 每 N 個 epoch 衰減一次
-    gamma: 0.5                        # 衰減倍率（lr *= gamma）
-    
-    # none：固定學習率（無調度器）
+    type: "step"
+    step_size: 1000
+    gamma: 0.9
   
   # 訓練循環
   epochs: 5000                        # 總訓練 epochs
@@ -270,12 +251,91 @@ training:
   
   # 採樣策略
   sampling:
-    pde_points: 20000                  # PDE 殘差採樣點數
+    pde_points: 10000                  # PDE 殘差採樣點數
     boundary_points: 5000             # 邊界條件採樣點數
     wall_clustering: 0.3              # 壁面聚類比例（0.0-1.0）
   
   # 課程學習（可選）
-  curriculum: true                   # 是否啟用課程學習（雷諾數漸進）
+  curriculum:
+    enable: true
+    stages:
+      # ================================
+      # 階段 1: 低 Re_tau 穩定啟動 (Epochs 0-1500)
+      # ================================
+      - name: "Stage1_Low_Re"
+        epoch_range: [0, 1500]
+        Re_tau: 500.0
+        nu: 1.0e-4  # nu = (1000 * 5e-5) / 500
+        pressure_gradient: 0.00125 # Scaled linearly
+        lr: 1.0e-3
+        
+        weights:
+          data: 10.0
+          boundary: 10.0
+          momentum_x: 1.0
+          momentum_y: 1.0
+          momentum_z: 1.0
+          continuity: 1.0
+          wall_constraint: 10.0
+          periodicity: 10.0
+          pressure_gradient: 1.0
+        
+        sampling:
+          pde_points: 10000
+          boundary_points: 5000
+          wall_clustering: 0.3
+
+      # ================================
+      # 階段 2: 中等 Re_tau 過渡 (Epochs 1500-3500)
+      # ================================
+      - name: "Stage2_Mid_Re"
+        epoch_range: [1500, 3500]
+        Re_tau: 750.0
+        nu: 6.67e-5 # nu = (1000 * 5e-5) / 750
+        pressure_gradient: 0.001875 # Scaled linearly
+        lr: 0.9e-3  # Decayed once
+        
+        weights:
+          data: 10.0
+          boundary: 10.0
+          momentum_x: 1.0
+          momentum_y: 1.0
+          momentum_z: 1.0
+          continuity: 1.0
+          wall_constraint: 10.0
+          periodicity: 10.0
+          pressure_gradient: 1.0
+        
+        sampling:
+          pde_points: 10000
+          boundary_points: 5000
+          wall_clustering: 0.4
+
+      # ================================
+      # 階段 3: 目標 Re_tau 精煉 (Epochs 3500-5000)
+      # ================================
+      - name: "Stage3_High_Re_Refinement"
+        epoch_range: [3500, 5000]
+        Re_tau: 1000.0
+        nu: 5.0e-5
+        pressure_gradient: 0.0025
+        lr: 0.729e-3 # Decayed three times (0.9^3)
+        
+        weights:
+          data: 10.0
+          boundary: 10.0
+          momentum_x: 1.0
+          momentum_y: 1.0
+          momentum_z: 1.0
+          continuity: 1.0
+          wall_constraint: 10.0
+          periodicity: 10.0
+          pressure_gradient: 1.0
+        
+        sampling:
+          pde_points: 10000
+          boundary_points: 5000
+          wall_clustering: 0.5
   
   # 梯度裁剪（穩定性）
   gradient_clip: 1.0                  # 梯度裁剪閾值（防止梯度爆炸）
