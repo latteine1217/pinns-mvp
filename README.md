@@ -137,7 +137,7 @@ conda activate pinns-mvp
 ```bash
 # 自動檢測 GPU/CPU，生成 Re=56 的湍流資料（k_f=8, nu=0.0125）
 python scripts/generate_kolmogorov_dns.py \
-  --N 512 --nu 0.0125 --kf 8 --T_end 40.0 \
+  --N 512 --nu 0.0125 --k_f 8 --T_end 40.0 \
   --output data/kolmogorov_dns_re56_512x512_kf8_midway.h5
 
 # 驗證雷諾數是否正確
@@ -355,7 +355,7 @@ python scripts/calculate_reynolds_parameters.py \
 ```bash
 # 生成 Re≈56 的 DNS 資料（k_f=8, ν=0.0125）
 python scripts/generate_kolmogorov_dns.py \
-  --N 512 --nu 0.0125 --kf 8 --T_end 40.0 \
+  --N 512 --nu 0.0125 --k_f 8 --T_end 40.0 \
   --output data/kolmogorov_dns_re56_512x512_kf8_midway.h5
 
 # 驗證檔案內的實際雷諾數
