@@ -11,10 +11,10 @@ dependencies:
   - python=3.10
   
   # 深度學習框架
-  - pytorch>=2.2
-  - pytorch-cuda=12.1  # CUDA 支援，可根據實際GPU調整
-  - torchvision
-  - torchaudio
+  - pytorch>=2.9.1
+  - pytorch-cuda=12.1  # CUDA 支援，可根據實際GPU調整（macOS 使用 MPS）
+  - torchvision>=0.24.1
+  - torchaudio>=2.9.1
   
   # 科學計算核心
   - numpy>=1.24

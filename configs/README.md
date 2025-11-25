@@ -31,15 +31,35 @@
 ```
 configs/
 ├── README.md                    # 本文檔（配置管理總指南）
+│
 ├── templates/                   # ⭐ 標準化模板目錄
 │   ├── README.md                #    模板使用指引（詳細）
 │   ├── 2d_quick_baseline.yml    #    2D 快速基線（5-10 min）
 │   ├── 2d_medium_ablation.yml   #    2D 消融實驗（15-30 min）
 │   ├── 3d_slab_curriculum.yml   #    3D 課程學習（30-60 min）
-│   └── 3d_full_production.yml   #    3D 生產訓練（2-8 hrs）
+│   ├── 3d_full_production.yml   #    3D 生產訓練（2-8 hrs）
+│   ├── curriculum_reynolds_ramp.yml  # Reynolds 遞增課程模板
+│   └── piratenet_baseline.yml   #    PirateNet 基準配置
 │
-├── main.yml                     # 生產級主配置
-└── ... (其他實驗配置)
+├── kolmogorov_experiments/      # ⭐ Kolmogorov Flow 2D 配置系列
+│   ├── KOLMOGOROV_CONFIGS.md    #    專屬配置指南
+│   └── kolmogorov_2d_*.yml      #    8 個配置文件（Re=30/60, 課程學習, 測試）
+│
+├── ablation_pde_constraint/     # PDE 約束消融實驗系列
+│   ├── exp1_qr_no_pde.yml       #    實驗 1: QR 感測器無 PDE
+│   ├── exp2_qr_weak_pde.yml     #    實驗 2: QR 感測器弱 PDE
+│   ├── exp3_wall_no_center.yml  #    實驗 3: 壁面感測器無中心
+│   └── exp4_physics_guided_qr.yml    實驗 4: 物理引導 QR
+│
+├── archive/                     # 已歸檔配置（冗餘/過時）
+│   ├── README.md                #    歸檔說明與復原指引
+│   ├── CLEANUP_REPORT.md        #    清理報告（2025-11-21）
+│   ├── redundant_kolmogorov/    #    冗餘 Kolmogorov 配置（3 個）
+│   └── channel_flow_rescaled_medium.yml  # 過時的測試配置
+│
+├── main.yml                     # 生產級主配置（Channel Flow Re_τ=1000）
+├── config_template_example.yml  # 完整配置範例模板
+└── monitoring.yml               # 訓練監控配置
 ```
 
 ---
@@ -148,5 +168,36 @@ curriculum:
 
 ---
 
-**維護者**：PINNs Research Team
-**最後更新**：2025-10-20
+## 🗂️ 歸檔配置管理
+
+### 已歸檔項目 (2025-11-21)
+
+為保持專案配置的簡潔性與可維護性，以下配置已移至 `archive/` 目錄：
+
+| 歸檔項目 | 數量 | 原因 | 位置 |
+|---------|------|------|------|
+| **Kolmogorov Flow 冗餘配置** | 3 個 | 與其他配置功能重複 | `archive/redundant_kolmogorov/` |
+| **過時測試配置** | 1 個 | 已被 templates 取代 | `archive/` |
+
+**Kolmogorov Flow 配置狀態**:
+- ✅ **保留**: 8 個核心配置（位於 `kolmogorov_experiments/`）
+- 🗑️ **歸檔**: 3 個冗餘配置（模板重複、參數重複）
+
+**詳細說明**: 
+- Kolmogorov Flow 配置指南：[`kolmogorov_experiments/KOLMOGOROV_CONFIGS.md`](./kolmogorov_experiments/KOLMOGOROV_CONFIGS.md)
+- 歸檔說明與復原指引：[`archive/README.md`](./archive/README.md)
+- 清理報告：[`archive/CLEANUP_REPORT.md`](./archive/CLEANUP_REPORT.md)
+
+**復原方式**：
+```bash
+# 如需使用歸檔配置
+cp configs/archive/redundant_kolmogorov/<config_name>.yml configs/
+
+# 查看歷史記錄
+git log -- configs/archive/
+```
+
+---
+
+**維護者**：PINNs Research Team  
+**最後更新**：2025-11-21

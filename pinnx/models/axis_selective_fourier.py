@@ -15,7 +15,7 @@
 import torch
 import torch.nn as nn
 import math
-from typing import Dict, List, Optional, Union, cast
+from typing import Dict, List, Optional, cast
 import numpy as np
 
 
@@ -41,9 +41,8 @@ class AxisSelectiveFourierFeatures(nn.Module):
             
         trainable: 是否讓 Fourier 係數可訓練（預設 False）
         
-        full_axes_config: 【可選】完整頻率配置（用於 Fourier 退火驗證）
-            - 若啟用退火，此參數應包含所有可能解鎖的頻率
-            - 若未提供，則假設 axes_config 即為完整配置（向後相容）
+        full_axes_config: 完整頻率配置（用於 Fourier 退火驗證）
+            - 必須包含所有可能解鎖的頻率
             - 範例：axes_config=[1,2], full_axes_config=[1,2,4,8]
         
     輸出維度：
@@ -59,7 +58,11 @@ class AxisSelectiveFourierFeatures(nn.Module):
         ...     'z': [1, 2, 4]      # 3 個頻率 → 6 維
         ... }
         >>> domain_lengths = {'x': 25.13, 'y': 2.0, 'z': 9.42}  # 8π, 2h, 3π
-        >>> fourier = AxisSelectiveFourierFeatures(config, domain_lengths)
+        >>> fourier = AxisSelectiveFourierFeatures(
+        ...     axes_config=config,
+        ...     full_axes_config=config,
+        ...     domain_lengths=domain_lengths
+        ... )
         >>> x = torch.randn(100, 3)  # [batch, 3] 對應 (x, y, z)
         >>> features = fourier(x)    # [batch, 14] = 8 + 0 + 6
         
@@ -102,17 +105,14 @@ class AxisSelectiveFourierFeatures(nn.Module):
                         f"軸 '{axis}' 的頻率 {k} 無效（必須是非負數）"
                     )
         
+        if full_axes_config is None:
+            raise ValueError("AxisSelectiveFourierFeatures 需要提供 full_axes_config")
+
         # 儲存配置
-        # 🔧 TASK-007 Phase 2 修復：支援雙配置機制
         # - full_axes_config：完整頻率配置（用於構建 Fourier 矩陣 → 固定維度）
         # - axes_config：當前啟用頻率（用於退火控制 → 動態掩碼）
-        # 策略：
-        #   1. 矩陣始終基於 full_axes_config 構建（固定最大維度）
-        #   2. forward() 時根據 axes_config 應用掩碼（置零未啟用頻率）
-        #   3. 若未提供 full_axes_config，則假設 axes_config 即為完整配置（向後相容）
-        self._full_axes_config = {k: list(v) for k, v in (full_axes_config or axes_config).items()}
+        self._full_axes_config = {k: list(v) for k, v in full_axes_config.items()}
         self.axes_config = {k: list(v) for k, v in axes_config.items()}
-        self._original_axes_config = self._full_axes_config  # 向後相容（用於驗證）
         self.trainable = trainable
         
         # 處理域長度（用於歸一化到 [0, 2π]）
@@ -338,13 +338,12 @@ class FourierFeatureFactory:
     """
     Fourier Features 工廠類
     
-    提供統一接口創建不同類型的 Fourier 特徵層，
-    保持向後兼容性。
+    提供統一接口創建不同類型的 Fourier 特徵層。
     """
     
     @staticmethod
     def create(
-        config: Union[Dict, int, None] = None,
+        config: Optional[Dict] = None,
         in_dim: Optional[int] = None,
         **kwargs
     ) -> nn.Module:
@@ -352,10 +351,9 @@ class FourierFeatureFactory:
         創建 Fourier Features 層
         
         Args:
-            config: 配置（支持多種格式）
+            config: 配置（支持兩種格式）
                 - Dict with 'type': 'axis_selective' → AxisSelectiveFourierFeatures
                 - Dict with 'type': 'standard' → FourierFeatures（標準版）
-                - int → m（向後兼容：創建標準版）
                 - None → 返回零維輸出模組
             in_dim: 輸入維度（當 config 為 None 時必須提供）
             **kwargs: 傳遞給具體類的額外參數
@@ -370,19 +368,10 @@ class FourierFeatureFactory:
             # 創建所有軸為空列表的配置
             axes_names = kwargs.get('axes_names', [f'dim{i}' for i in range(in_dim)])
             empty_config = {name: [] for name in axes_names[:in_dim]}
-            return AxisSelectiveFourierFeatures(empty_config)
-        
-        # 處理向後兼容情況（整數配置）
-        if isinstance(config, int):
-            if in_dim is None:
-                raise ValueError("當 config 為 int 時必須提供 in_dim 參數")
-            # 標準版本（需導入 FourierFeatures）
-            from .fourier_mlp import FourierFeatures
-            return FourierFeatures(
-                in_dim=in_dim,
-                m=config,
-                sigma=kwargs.get('sigma', 5.0),
-                multiscale=kwargs.get('multiscale', False),
+            return AxisSelectiveFourierFeatures(
+                axes_config=empty_config,
+                full_axes_config=empty_config,
+                domain_lengths=kwargs.get('domain_lengths'),
                 trainable=kwargs.get('trainable', False)
             )
         
@@ -397,12 +386,16 @@ class FourierFeatureFactory:
             axes_config = config.get('axes_config')
             domain_lengths = config.get('domain_lengths', kwargs.get('domain_lengths'))
             trainable = config.get('trainable', kwargs.get('trainable', False))
+            full_axes_config = config.get('full_axes_config')
             
             if axes_config is None:
                 raise ValueError("axis_selective 類型需要 'axes_config' 參數")
+            if full_axes_config is None:
+                raise ValueError("axis_selective 類型需要 'full_axes_config' 參數")
             
             return AxisSelectiveFourierFeatures(
                 axes_config=axes_config,
+                full_axes_config=full_axes_config,
                 domain_lengths=domain_lengths,
                 trainable=trainable
             )
@@ -437,7 +430,11 @@ if __name__ == "__main__":
     }
     domain_lengths = {'x': 25.13274, 'y': 2.0, 'z': 9.42478}
     
-    fourier = AxisSelectiveFourierFeatures(config, domain_lengths)
+    fourier = AxisSelectiveFourierFeatures(
+        axes_config=config,
+        domain_lengths=domain_lengths,
+        full_axes_config=config
+    )
     print(f"  輸入維度: {fourier.in_dim}")
     print(f"  輸出維度: {fourier.out_dim}")
     print(f"  Fourier 矩陣形狀: {fourier.B.shape}")
@@ -456,7 +453,10 @@ if __name__ == "__main__":
         'y': [1],
         'z': [1, 2]
     }
-    fourier2 = AxisSelectiveFourierFeatures(config2)
+    fourier2 = AxisSelectiveFourierFeatures(
+        axes_config=config2,
+        full_axes_config=config2
+    )
     print(f"  輸出維度: {fourier2.out_dim}")
     features2 = fourier2(x)
     print(f"  輸出形狀: {features2.shape}")
@@ -469,7 +469,10 @@ if __name__ == "__main__":
         'y': [],
         'z': []
     }
-    fourier3 = AxisSelectiveFourierFeatures(config3)
+    fourier3 = AxisSelectiveFourierFeatures(
+        axes_config=config3,
+        full_axes_config=config3
+    )
     print(f"  輸出維度: {fourier3.out_dim}")
     features3 = fourier3(x)
     print(f"  輸出形狀: {features3.shape}")
@@ -480,6 +483,7 @@ if __name__ == "__main__":
     factory_config = {
         'type': 'axis_selective',
         'axes_config': {'x': [1, 2], 'y': [1]},
+        'full_axes_config': {'x': [1, 2], 'y': [1]},
         'domain_lengths': {'x': 6.28, 'y': 2.0}
     }
     fourier4 = FourierFeatureFactory.create(in_dim=2, config=factory_config)

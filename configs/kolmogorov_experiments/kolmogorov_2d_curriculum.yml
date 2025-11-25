@@ -1,0 +1,218 @@
+# Kolmogorov Flow 2D 課程學習配置
+# 階段式訓練：Re=50 → Re=100 → Re=240
+# 策略：從簡單到複雜，逐步提高湍流強度
+
+experiment:
+  name: kolmogorov_2d_curriculum
+  description: "Curriculum learning for Kolmogorov Flow: Re=50→100→240"
+  tags:
+    - curriculum
+    - turbulence
+    - kolmogorov
+  seed: 42
+
+# ============================================================================
+# 重現性設定
+# ============================================================================
+reproducibility:
+  deterministic: false          # MPS 不支援完全確定性
+  benchmark: true               # 啟用 benchmark 以加速
+  num_workers: 4
+
+# ============================================================
+# 課程學習階段配置
+# ============================================================
+curriculum:
+  enabled: true
+
+  # 階段 1: Re ≈ 50（轉捩初期）
+  phase1:
+    name: "transition_onset"
+    epochs: 1000
+    physics:
+      forcing:
+        amplitude: 0.32  # A=0.32 → Re≈50
+        wavenumber: 4
+    loss:
+      weights:
+        momentum_x: 1.0
+        momentum_y: 1.0
+        continuity: 1.0
+        periodic_x: 10.0
+        periodic_y: 10.0
+    optimizer:
+      type: adam
+      lr: 0.001
+      weight_decay: 0.0
+
+  # 階段 2: Re ≈ 100（弱湍流）
+  phase2:
+    name: "weak_turbulence"
+    epochs: 1000
+    physics:
+      forcing:
+        amplitude: 0.64  # A=0.64 → Re≈100
+        wavenumber: 4
+    loss:
+      weights:
+        momentum_x: 1.5   # 增加 x 方向權重
+        momentum_y: 1.0
+        continuity: 2.0   # 強化不可壓縮約束
+        periodic_x: 10.0
+        periodic_y: 10.0
+    optimizer:
+      type: adam
+      lr: 0.0005  # 降低學習率
+      weight_decay: 0.0
+
+  # 階段 3: Re ≈ 240（發展湍流）
+  phase3:
+    name: "developed_turbulence"
+    epochs: 1000
+    physics:
+      forcing:
+        amplitude: 1.536  # A=1.536 → Re≈240
+        wavenumber: 4
+    loss:
+      weights:
+        momentum_x: 2.0   # 進一步提高 x 方向權重
+        momentum_y: 1.0
+        continuity: 3.0   # 最強不可壓縮約束
+        periodic_x: 10.0
+        periodic_y: 10.0
+    optimizer:
+      type: adam
+      lr: 0.0002  # 更低學習率以穩定訓練
+      weight_decay: 1.0e-5  # 添加正則化
+
+# ============================================================
+# 基礎配置（所有階段共用）
+# ============================================================
+model:
+  type: fourier_mlp
+  input_dim: 2
+  output_dim: 3
+
+  # 增強網絡容量以處理湍流
+  width: 384        # 256 → 384
+  depth: 6          # 5 → 6
+  hidden_layers: [384, 384, 384, 384, 384, 384]
+
+  activation: sine
+  initialization: siren
+  omega_0: 30.0
+
+  # 增強 Fourier 特徵
+  fourier_features:
+    enabled: true
+    n_features: 768   # 增加以捕捉多尺度
+    sigma: 20.0
+
+  # 實際使用參數（向後兼容）
+  fourier_m: 64       # 32 → 64
+  fourier_sigma: 10.0
+  fourier_trainable: false
+  use_fourier: true
+  in_dim: 2
+  out_dim: 3
+
+physics:
+  type: kolmogorov_flow_2d
+
+  # 固定物理參數
+  nu: 0.02
+  rho: 1.0
+
+  # 強迫參數（會被課程覆蓋）
+  forcing:
+    amplitude: 0.32  # 初始值（Phase 1）
+    wavenumber: 4
+
+  # 域配置
+  domain:
+    x_min: 0.0
+    x_max: 12.566370614359172  # 2π × 2
+    y_min: 0.0
+    y_max: 6.283185307179586   # 2π
+    x_range: [0.0, 12.566370614359172]
+    y_range: [0.0, 6.283185307179586]
+
+  # 邊界條件
+  boundary_conditions:
+    type: double_periodic
+    boundary_band_width: 0.02
+
+data:
+  source: none
+  steady_state: true
+
+  # 增加採樣點以捕捉多尺度
+  n_collocation: 20000  # 10000 → 20000
+  n_boundary: 4000      # 2000 → 4000
+
+# ============================================================================
+# 感測點配置（純 PDE 訓練，無監督資料）
+# ============================================================================
+sensors:
+  K: 0                          # 純 PDE 訓練無感測點
+  selection_method: "none"
+  noise_level: 0.0
+
+# ============================================================================
+# 損失函數配置
+# ============================================================================
+losses:
+  # 初始權重（會被課程覆蓋）
+  weights:
+    data: 0.0
+    momentum_x: 1.0
+    momentum_y: 1.0
+    continuity: 1.0
+    periodic_x: 10.0
+    periodic_y: 10.0
+
+  normalize_losses: true
+  warmup_epochs: 10
+  prior_weight: 0.0
+
+  # 自適應權重
+  adaptive_weighting:
+    enabled: true
+    method: gradnorm
+    alpha: 1.5
+    update_interval: 20
+
+training:
+  # 總 epochs（會被課程階段覆蓋）
+  n_epochs: 3000  # 1000 + 1000 + 1000
+  batch_size: 20000
+
+  optimizer:
+    phase1:
+      type: adam
+      lr: 0.001
+      epochs: 1500
+
+  sampling:
+    method: uniform
+    pde_points: 20000
+    boundary_points: 4000
+
+  checkpoint:
+    save_interval: 100
+    save_best: true
+
+  early_stopping:
+    enabled: false
+
+# 移除舊的 sensors 段（已在頂層定義）
+
+# ============================================================================
+# 評估配置
+# ============================================================================
+evaluation:
+  metrics:
+    - vorticity
+    - divergence_error
+  visualization:
+    enabled: false

@@ -1,0 +1,236 @@
+# ============================================================================
+# Kolmogorov Flow 2D - 完全發展湍流（Re=60）
+# ============================================================================
+# 用途：純 PDE 驅動，進入完全發展湍流態（統計湍流工作點）
+# 理論基礎：
+#   - 強迫公式: F0 = Re × ν² × k³ = 60 × 0.02² × 4³ = 1.536
+#   - 層流解: U = F0/(ν×k²) = 4.8
+#   - 統計湍流區間: Re ≥ 60
+# 預期現象：
+#   - 完全發展湍流
+#   - 明顯的逆能量串級（2D 湍流特徵）
+#   - 寬頻能譜，k^(-5/3) 或 k^(-3) 慣性區
+#   - 強渦度間歇性（峰度 >> 3）
+#   - 複雜的渦街結構
+# ============================================================================
+
+experiment:
+  name: "kolmogorov_2d_turbulent_re60"
+  description: "Fully developed turbulence at Re=60 for statistical analysis"
+  tags: ["kolmogorov", "2d", "turbulent", "re60", "statistical"]
+  seed: 42
+
+# ============================================================================
+# 重現性設定
+# ============================================================================
+reproducibility:
+  deterministic: false          # MPS 不支援完全確定性
+  benchmark: true               # 啟用 benchmark 以加速
+  num_workers: 4
+
+# ============================================================================
+# 物理參數（Re=60, k_f=4）
+# ============================================================================
+physics:
+  type: "kolmogorov_flow_2d"
+
+  # 強迫參數（根據 F0 = Re × ν² × k³）
+  forcing:
+    amplitude: 1.536              # F0 = 60 × 0.02² × 4³
+    wavenumber: 4
+
+  # 流體參數
+  nu: 0.02
+  rho: 1.0
+
+  # 域範圍（Lx/Ly = 2，充分展現湍流統計）
+  domain:
+    x_min: 0.0
+    x_max: 12.566370614359172     # 4π
+    y_min: 0.0
+    y_max: 6.283185307179586      # 2π
+
+  # 邊界條件
+  boundary_conditions:
+    type: "double_periodic"
+    boundary_band_width: 0.015
+
+  # 初始擾動（強擾動加速湍流發展）
+  initial_perturbation:
+    enabled: true
+    amplitude: 0.03               # 3% 白噪（略強）
+    seed: 42
+
+# ============================================================================
+# 網路架構（優化深度與寬度以提升訓練穩定性）
+# ============================================================================
+model:
+  type: "fourier_mlp"
+
+  input_dim: 2
+  output_dim: 3
+  hidden_layers: [256, 256, 256, 256, 256]  # 5 層 × 256（SIREN 推薦配置）
+
+  # Fourier feature（覆蓋廣闊頻譜範圍）
+  fourier_features:
+    enabled: true
+    n_features: 512               # 降至 512（足以捕捉湍流頻譜）
+    sigma: 20.0                   # 調整至 20.0（更穩定）
+
+  activation: "sine"
+  initialization: "siren"         # 使用 SIREN 初始化（適合 sine 激活）
+  omega_0: 30.0                   # Sine 激活函數頻率參數
+
+# ============================================================================
+# 訓練資料
+# ============================================================================
+data:
+  source: "none"
+  file: null
+
+  n_sensors: 0
+  sensor_selection: null
+  sensor_noise: 0.0
+
+  # 配置點（高密度以解析小尺度湍流結構）
+  n_collocation: 30000            # 30000 個配置點（增加 2 倍）
+  sampling_strategy: "uniform"
+
+  # 邊界點（用於週期性邊界條件）
+  n_boundary: 3000                # 3000 個邊界點（增加 2 倍）
+  boundary_sampling: "uniform"
+
+  steady_state: true
+  time_snapshot: null
+
+# ============================================================================
+# 感測點配置（純 PDE 訓練，無監督資料）
+# ============================================================================
+sensors:
+  K: 0                          # 純 PDE 訓練無感測點
+  selection_method: "none"
+  noise_level: 0.0
+
+# ============================================================================
+# 損失函數配置（優化權重以配合 GradNorm 自適應調整）
+# ============================================================================
+losses:
+  weights:
+    data: 0.0
+    momentum_x: 1.0               # PDE 項基準權重
+    momentum_y: 1.0
+    continuity: 1.0
+    periodic_x: 10.0              # 保持較高權重以強化週期性約束
+    periodic_y: 10.0
+
+  # 損失歸一化
+  normalize_losses: true
+  warmup_epochs: 30               # 更長 warmup（湍流需要更穩定初期）
+
+  # 自適應權重（GradNorm）
+  adaptive_weighting:
+    enabled: true
+    method: "gradnorm"
+    alpha: 1.5                    # 梯度平衡更新率（推薦值）
+    update_interval: 50           # 每 50 步更新一次權重
+
+# ============================================================================
+# 訓練配置（長期訓練以充分發展湍流）
+# ============================================================================
+training:
+  n_epochs: 5000                  # 5000 epochs
+  batch_size: 30000               # ⭐ 匹配 n_collocation（全批次訓練）
+
+  # 學習率策略（三階段）
+  optimizer:
+    phase1:
+      type: "adam"
+      lr: 1.0e-3
+      epochs: 2000                # 初期快速收斂
+    phase2:
+      type: "adam"
+      lr: 5.0e-4
+      epochs: 2000                # 中期穩定
+    phase3:
+      type: "adam"
+      lr: 1.0e-4
+      epochs: 1000                # 後期精細調整
+
+  early_stopping:
+    enabled: false                # 禁用早停（確保充分訓練）
+    patience: 300
+    min_delta: 1.0e-6
+
+  checkpoint:
+    save_interval: 500
+    save_best: true
+
+  validation:
+    enabled: true
+    interval: 200
+    n_points: 3000
+
+# ============================================================================
+# 評估配置（完整湍流統計分析）
+# ============================================================================
+evaluation:
+  metrics:
+    - "vorticity"
+    - "enstrophy"
+    - "kinetic_energy"
+    - "divergence_error"
+    - "vorticity_kurtosis"
+    - "vorticity_skewness"        # 偏度
+    - "energy_spectrum"
+    - "enstrophy_spectrum"
+    - "energy_flux"               # 能量通量（逆串級）
+    - "temporal_autocorr"
+    - "correlation_length"        # 相關長度
+
+  visualization:
+    enabled: true
+    fields: ["u", "v", "p", "vorticity", "streamlines", "velocity_magnitude"]
+    save_format: "png"
+    high_resolution: true         # 高解析度圖表
+
+  # 湍流統計診斷
+  turbulence_diagnostics:
+    enabled: true
+    check_broadband_spectrum: true
+    check_inertial_range: true          # 檢查慣性區 k^(-5/3)
+    check_inverse_cascade: true         # 檢查逆串級
+    check_vorticity_kurtosis: true
+    check_intermittency: true           # 間歇性
+    check_temporal_chaos: true
+
+  # 統計分析
+  statistical_analysis:
+    enabled: true
+    compute_pdf: true                   # 速度/渦度 PDF
+    compute_structure_functions: true   # 結構函數
+    compute_correlation: true           # 空間相關
+
+# ============================================================================
+# 輸出配置
+# ============================================================================
+output:
+  checkpoint_dir: "checkpoints/kolmogorov_2d_turbulent_re60"
+  result_dir: "results/kolmogorov_2d_turbulent_re60"
+  log_dir: "log/kolmogorov_2d_turbulent_re60"
+
+  logging:
+    level: "INFO"
+    print_interval: 200
+
+  # 保存完整場數據（用於後續分析）
+  save_full_fields: true
+  field_resolution: [256, 128]    # x × y（高解析度）
+
+# ============================================================================
+# 計算資源
+# ============================================================================
+compute:
+  device: "auto"                # 自動選擇 CUDA > MPS > CPU
+  dtype: "float32"
+  num_workers: 4
+  seed: 42

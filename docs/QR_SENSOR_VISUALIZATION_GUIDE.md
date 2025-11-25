@@ -278,9 +278,96 @@ pip install --upgrade matplotlib
 
 ---
 
+## ⭐ 新功能：循環索引支援（v2024.10）
+
+### 問題背景
+
+對於週期邊界條件的流場（如通道流的 x/z 方向週期性），標準 QR-Pivot 可能在**週期接縫處產生感測點聚集**，原因是：
+
+1. **接縫不連續**：數值上 x=0 與 x=L 是不同的點，即使物理上它們連續
+2. **特徵放大**：接縫處的數值梯度被誤認為「高資訊量」區域
+3. **對稱性破壞**：理論上對稱的週期域，選點卻不對稱
+
+### 解決方案：循環索引
+
+通過在週期軸上添加**環繞層（wrap layers）**，使 QR-Pivot 在拓撲上連續的環狀域中選點：
+
+```python
+from pinnx.sensors.qr_pivot import QRPivotSelector
+
+# 啟用循環索引模式
+selector = QRPivotSelector(
+    use_circular_indexing=True,  # ⭐ 啟用循環索引
+    n_wrap_layers=2               # 環繞層數（建議 1-3 層）
+)
+
+# 需要提供網格元資料
+indices, metrics = selector.select_sensors(
+    data_matrix=snapshots,        # [n_locations, n_snapshots]
+    n_sensors=50,
+    coords=coords,                # [n_locations, 3] ⭐ 必需
+    grid_shape=(128, 64, 128),    # (nx, ny, nz) ⭐ 必需
+    periodic_axes=[0, 2],         # x/z 週期 ⭐ 必需
+    domain_lengths={0: 8*np.pi, 2: 3*np.pi}  # 可選：角度嵌入
+)
+
+# 返回的索引自動映射回原始網格範圍 [0, n_locations)
+print(f"選中 {len(indices)} 個感測點")
+print(f"循環索引啟用: {metrics['circular_indexing_enabled']}")
+print(f"去重數量: {metrics['n_duplicates_removed']}")
+```
+
+### 適用場景
+
+| 場景 | periodic_axes | domain_lengths |
+|------|---------------|----------------|
+| **通道流** (x/z 週期) | `[0, 2]` | `{0: 8π, 2: 3π}` |
+| **均勻各向同性湍流** | `[0, 1, 2]` | `{0: 2π, 1: 2π, 2: 2π}` |
+| **2D 切片** (x 週期) | `[0]` | `{0: 8π}` |
+
+### 診斷指標
+
+新增的 metrics 鍵：
+
+- `circular_indexing_enabled`: 是否啟用循環索引
+- `n_wrap_layers`: 使用的環繞層數
+- `n_duplicates_removed`: 去重移除的重複點數（環繞層可能選到相同原始點）
+
+### 驗證方法
+
+```python
+# 比較標準模式 vs 循環索引模式的空間分佈
+selector_std = QRPivotSelector(use_circular_indexing=False)
+indices_std, _ = selector_std.select_sensors(snapshots, 50)
+
+selector_circ = QRPivotSelector(use_circular_indexing=True, n_wrap_layers=2)
+indices_circ, _ = selector_circ.select_sensors(
+    snapshots, 50, coords=coords, grid_shape=grid_shape, periodic_axes=[0, 2]
+)
+
+# 分析接縫處（例如 x < 0.1 或 x > 7.9π）的點數比例
+coords_std = coords[indices_std]
+coords_circ = coords[indices_circ]
+
+seam_ratio_std = np.sum((coords_std[:, 0] < 0.1) | (coords_std[:, 0] > 24.8)) / len(indices_std)
+seam_ratio_circ = np.sum((coords_circ[:, 0] < 0.1) | (coords_circ[:, 0] > 24.8)) / len(indices_circ)
+
+print(f"接縫聚集比例：標準 {seam_ratio_std:.1%} vs 循環 {seam_ratio_circ:.1%}")
+# 預期：循環索引模式應減少接縫聚集
+```
+
+### 注意事項
+
+1. **計算成本**：環繞層增加點數（例如 n_wrap=2 對 x/z 兩軸，點數增加 ~30-50%），但 QR 分解仍高效
+2. **去重處理**：環繞層可能選到相同的原始點，已自動去重並按出現頻率排序
+3. **向後相容**：`use_circular_indexing=False`（預設）時行為與舊版完全一致
+
+---
+
 ## 🔗 相關文件
 
 - **感測點選擇演算法**：`pinnx/sensors/qr_pivot.py`
+- **循環索引單元測試**：`tests/test_qr_pivoting_fix.py`
 - **PirateNet 訓練失敗診斷**：`docs/PIRATENET_TRAINING_FAILURE_DIAGNOSIS.md`
 - **技術文檔**：`TECHNICAL_DOCUMENTATION.md`
 

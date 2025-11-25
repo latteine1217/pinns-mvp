@@ -45,10 +45,14 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from pinnx.sensors.qr_pivot import (
-    QRPivotSelector, 
-    PODBasedSelector, 
+    QRPivotSelector,
+    PODBasedSelector,
     GreedySelector,
-    evaluate_sensor_placement
+    PODQREIMSelector,
+    evaluate_sensor_placement,
+    prepare_turbulence_features,
+    PeriodicBoundaryHandler,
+    apply_min_distance_constraint
 )
 
 
@@ -433,14 +437,51 @@ def compute_sensors_from_jhtdb(jhtdb_path: str, n_sensors: int, strategy: str = 
     print(f"   資料矩陣形狀: {data_matrix.shape}")
     print(f"   座標形狀: {coords.shape}")
     
+    # ⭐ 特徵工程：提取脈動量（改善物理相關性）
+    # 對時間快照提取脈動量特徵
+    if temporal_data_path is not None:
+        print(f"   🔧 特徵工程: 提取脈動量特徵")
+        try:
+            snapshots_dict = {
+                'u': u_snapshots,
+                'v': v_snapshots,
+                'w': w_snapshots
+            }
+            data_matrix_fluctuation = prepare_turbulence_features(
+                snapshots_dict,
+                method='fluctuation'
+            )
+            print(f"      脈動量矩陣形狀: {data_matrix_fluctuation.shape}")
+
+            # 使用脈動量矩陣替代原始矩陣
+            data_matrix = data_matrix_fluctuation
+        except Exception as e:
+            logger.warning(f"   ⚠️  脈動量提取失敗，使用原始資料: {e}")
+
     # ⭐ 數據標準化（改善條件數）
     # 對每個特徵（列）進行 Z-score 標準化
     data_matrix_normalized = (data_matrix - data_matrix.mean(axis=0)) / (data_matrix.std(axis=0) + 1e-10)
     print(f"   ✅ 已進行數據標準化（Z-score）")
-    
-    # 選擇感測點
+
+    # 選擇感測點（支援新策略）
     if strategy == 'qr_pivot':
         selector = QRPivotSelector(mode='row', pivoting=True)
+    elif strategy == 'qr_pivot_periodic':
+        # ⭐ 新策略：QR-Pivot + 週期邊界處理
+        # 使用循環平移ensemble來避免入口聚集
+        selector = PODQREIMSelector(
+            n_modes=min(20, data_matrix.shape[1]),
+            energy_threshold=0.95,
+            periodic_axes=[0, 2],  # x, z方向週期（通道流）
+            n_circular_shifts=5
+        )
+        print(f"   🔄 啟用週期邊界處理 (5次循環平移)")
+    elif strategy == 'pod_deim':
+        # ⭐ 新策略：POD-DEIM
+        selector = PODQREIMSelector(
+            n_modes=min(20, data_matrix.shape[1]),
+            energy_threshold=0.95
+        )
     elif strategy == 'pod_based':
         selector = PODBasedSelector(n_modes=min(10, data_matrix.shape[1]))
     elif strategy == 'greedy':

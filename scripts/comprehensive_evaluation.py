@@ -51,7 +51,8 @@ from pinnx.models.fourier_mlp import PINNNet
 # from pinnx.physics.vs_pinn_channel_flow import create_vs_pinn_channel_flow  # Not needed for evaluation
 from pinnx.evals.metrics import (
     relative_L2, rmse_metrics, field_statistics,
-    energy_spectrum_1d, conservation_error
+    energy_spectrum_1d, conservation_error,
+    pressure_gradient_from_finite_diff  # 新增壓力梯度計算
 )
 from pinnx.utils.denormalization import denormalize_output  # TASK-008: 反標準化工具
 
@@ -377,44 +378,90 @@ def predict_on_grid(model, x: np.ndarray, y: np.ndarray, z: np.ndarray,
 # 物理指標計算
 # ============================================================
 
-def compute_error_metrics(pred: Dict[str, np.ndarray], 
+def compute_error_metrics(pred: Dict[str, np.ndarray],
                           ref: Dict[str, np.ndarray]) -> Dict[str, float]:
-    """計算誤差指標"""
+    """計算誤差指標（包含壓力梯度評估）"""
     logger.info("📊 Computing error metrics...")
-    
+
     metrics = {}
-    
+
     for field in ['u', 'v', 'w', 'p']:
         if field not in pred or field not in ref:
             continue
-        
+
         pred_field = pred[field].flatten()
         ref_field = ref[field].flatten()
-        
+
         # 相對 L2 誤差
         l2_error = np.linalg.norm(pred_field - ref_field) / (np.linalg.norm(ref_field) + 1e-12)
-        
+
         # RMSE
         rmse = np.sqrt(np.mean((pred_field - ref_field)**2))
-        
+
         # 相對 RMSE
         rel_rmse = rmse / (np.std(ref_field) + 1e-12)
-        
+
         # 最大絕對誤差
         max_error = np.max(np.abs(pred_field - ref_field))
-        
+
         metrics[f'{field}_l2_error'] = l2_error
         metrics[f'{field}_rmse'] = rmse
         metrics[f'{field}_rel_rmse'] = rel_rmse
         metrics[f'{field}_max_error'] = max_error
-    
+
+    # 🆕 壓力梯度評估（更準確的壓力場指標）
+    if 'p' in pred and 'p' in ref:
+        logger.info("📊 Computing pressure gradient metrics (more accurate than absolute pressure)...")
+        try:
+            # 使用有限差分計算壓力梯度
+            pred_p_grad = pressure_gradient_from_finite_diff(
+                pred['p'],
+                {'x': pred['x'], 'y': pred['y'], 'z': pred.get('z', np.array([0.0]))}
+            )
+            ref_p_grad = pressure_gradient_from_finite_diff(
+                ref['p'],
+                {'x': ref['x'], 'y': ref['y'], 'z': ref.get('z', np.array([0.0]))}
+            )
+
+            # 計算各方向梯度誤差
+            for direction in ['dpdx', 'dpdy', 'dpdz']:
+                if direction in pred_p_grad and direction in ref_p_grad:
+                    pred_grad_flat = pred_p_grad[direction].flatten()
+                    ref_grad_flat = ref_p_grad[direction].flatten()
+
+                    # 相對 L2 誤差
+                    grad_l2_error = np.linalg.norm(pred_grad_flat - ref_grad_flat) / (np.linalg.norm(ref_grad_flat) + 1e-12)
+                    metrics[f'{direction}_l2_error'] = grad_l2_error
+
+                    # RMSE
+                    grad_rmse = np.sqrt(np.mean((pred_grad_flat - ref_grad_flat)**2))
+                    metrics[f'{direction}_rmse'] = grad_rmse
+
+                    # 平均值（驗證通道流驅動梯度）
+                    metrics[f'{direction}_pred_mean'] = np.mean(pred_grad_flat)
+                    metrics[f'{direction}_ref_mean'] = np.mean(ref_grad_flat)
+
+                    # 標準差（驗證是否為常數梯度）
+                    metrics[f'{direction}_pred_std'] = np.std(pred_grad_flat)
+                    metrics[f'{direction}_ref_std'] = np.std(ref_grad_flat)
+
+            # 綜合壓力梯度誤差
+            grad_errors = [metrics.get(f'{d}_l2_error', 0) for d in ['dpdx', 'dpdy', 'dpdz'] if f'{d}_l2_error' in metrics]
+            if grad_errors:
+                metrics['pressure_gradient_l2_error'] = np.mean(grad_errors)
+                logger.info(f"✅ Pressure gradient L2 error: {metrics['pressure_gradient_l2_error']:.4f}")
+
+        except Exception as e:
+            logger.warning(f"⚠️  Pressure gradient calculation failed: {e}")
+            metrics['pressure_gradient_l2_error'] = float('inf')
+
     # 綜合指標
     metrics['overall_l2_error'] = np.mean([
         metrics.get(f'{f}_l2_error', 0) for f in ['u', 'v', 'w']
     ])
-    
+
     logger.info(f"✅ Overall L2 error: {metrics['overall_l2_error']:.4f}")
-    
+
     return metrics
 
 
@@ -454,103 +501,314 @@ def compute_field_statistics(pred: Dict[str, np.ndarray],
     return stats
 
 
-def compute_wall_shear_stress_comparison(pred: Dict[str, np.ndarray], 
-                                         ref: Dict[str, np.ndarray]) -> Dict[str, float]:
-    """比較壁面剪應力（支援 2D/3D）"""
-    logger.info("📊 Computing wall shear stress comparison...")
-    
-    # 檢測 2D vs 3D（使用 reference 判斷，因為 pred 可能被擴維）
+def compute_wall_shear_stress_comparison(pred: Dict[str, np.ndarray],
+                                         ref: Dict[str, np.ndarray],
+                                         nu: float = 5e-5,  # 🔴 新增參數
+                                         rho: float = 1.0) -> Dict[str, float]:
+    """
+    比較壁面剪應力（修正版：包含黏性係數）
+
+    理論公式: τ_w = μ * (∂u/∂y)|_wall = ρ*ν * (∂u/∂y)|_wall
+
+    Args:
+        pred: 預測場數據
+        ref: 參考場數據
+        nu: 運動黏性係數 [m²/s] (JHTDB Channel Flow: 5e-5)
+        rho: 密度 [kg/m³] (標準化為 1.0)
+
+    Returns:
+        壁面剪應力指標字典,包含:
+        - pred/ref_tau_{lower,upper}_mean/std: 上下壁面統計量
+        - tau_{lower,upper}_rmse/rel_error: 誤差指標
+        - symmetry_error: 對稱性檢查
+        - theoretical_tau_w: 理論值 0.0025
+        - pred_vs_theory_error: 預測與理論的相對誤差
+    """
+    logger.info(f"📊 Computing wall shear stress (nu={nu}, rho={rho})...")
+
+    # 🔴 動力黏性係數 (關鍵修正)
+    mu = rho * nu
+
+    # 檢測 2D vs 3D
     is_2d = len(ref['u'].shape) == 2
-    
-    # 計算速度梯度（使用有限差分）
+
+    # 計算網格間距 (假設均勻網格)
     dy = pred['y'][1] - pred['y'][0]
-    
-    # 下壁面剪應力：τ_w = μ * ∂u/∂y
+    logger.info(f"   Grid spacing dy = {dy:.6f}")
+
+    # 計算壁面速度梯度 (∂u/∂y)
     if is_2d:
         # 2D: shape (nx, ny) - squeeze pred if needed
         pred_u = pred['u'].squeeze() if pred['u'].ndim == 3 else pred['u']
-        pred_tau_lower = (pred_u[:, 1] - pred_u[:, 0]) / dy
-        ref_tau_lower = (ref['u'][:, 1] - ref['u'][:, 0]) / dy
+
+        # 下壁面 (y=y_min, 索引 0)
+        pred_dudy_lower = (pred_u[:, 1] - pred_u[:, 0]) / dy
+        ref_dudy_lower = (ref['u'][:, 1] - ref['u'][:, 0]) / dy
+
+        # 上壁面 (y=y_max, 索引 -1)
+        pred_dudy_upper = (pred_u[:, -1] - pred_u[:, -2]) / dy
+        ref_dudy_upper = (ref['u'][:, -1] - ref['u'][:, -2]) / dy
+
     else:
         # 3D: shape (nx, ny, nz)
-        pred_tau_lower = (pred['u'][:, 1, :] - pred['u'][:, 0, :]) / dy
-        ref_tau_lower = (ref['u'][:, 1, :] - ref['u'][:, 0, :]) / dy
-    
+        pred_dudy_lower = (pred['u'][:, 1, :] - pred['u'][:, 0, :]) / dy
+        ref_dudy_lower = (ref['u'][:, 1, :] - ref['u'][:, 0, :]) / dy
+
+        pred_dudy_upper = (pred['u'][:, -1, :] - pred['u'][:, -2, :]) / dy
+        ref_dudy_upper = (ref['u'][:, -1, :] - ref['u'][:, -2, :]) / dy
+
+    # 🔴 關鍵修正: 乘以黏性係數得到剪應力
+    pred_tau_lower = mu * pred_dudy_lower
+    ref_tau_lower = mu * ref_dudy_lower
+
+    pred_tau_upper = mu * pred_dudy_upper
+    ref_tau_upper = mu * ref_dudy_upper
+
     # 統計量
     metrics = {
+        # 下壁面
+        'pred_tau_lower_mean': float(np.mean(pred_tau_lower)),
+        'pred_tau_lower_std': float(np.std(pred_tau_lower)),
+        'ref_tau_lower_mean': float(np.mean(ref_tau_lower)),
+        'ref_tau_lower_std': float(np.std(ref_tau_lower)),
+
+        # 上壁面
+        'pred_tau_upper_mean': float(np.mean(pred_tau_upper)),
+        'pred_tau_upper_std': float(np.std(pred_tau_upper)),
+        'ref_tau_upper_mean': float(np.mean(ref_tau_upper)),
+        'ref_tau_upper_std': float(np.std(ref_tau_upper)),
+
+        # 誤差指標
+        'tau_lower_rmse': float(np.sqrt(np.mean((pred_tau_lower - ref_tau_lower)**2))),
+        'tau_upper_rmse': float(np.sqrt(np.mean((pred_tau_upper - ref_tau_upper)**2))),
+
+        'tau_lower_rel_error': float(np.abs(np.mean(pred_tau_lower) - np.mean(ref_tau_lower))
+                                     / (np.abs(np.mean(ref_tau_lower)) + 1e-12)),
+        'tau_upper_rel_error': float(np.abs(np.mean(pred_tau_upper) - np.mean(ref_tau_upper))
+                                     / (np.abs(np.mean(ref_tau_upper)) + 1e-12)),
+
+        # 對稱性檢查 (通道流應上下對稱)
+        'symmetry_error_pred': float(np.abs(np.mean(pred_tau_lower) - np.mean(pred_tau_upper))
+                                     / (np.mean(pred_tau_lower) + 1e-12)),
+        'symmetry_error_ref': float(np.abs(np.mean(ref_tau_lower) - np.mean(ref_tau_upper))
+                                    / (np.mean(ref_tau_lower) + 1e-12)),
+
+        # 理論值比較 (JHTDB Channel Flow Re_τ=1000)
+        'theoretical_tau_w': 0.0025,
+        'pred_vs_theory_error': float(np.abs(np.mean(pred_tau_lower) - 0.0025) / 0.0025),
+
+        # 向後相容：保留舊的鍵名（使用下壁面值）
         'pred_tau_mean': float(np.mean(pred_tau_lower)),
         'pred_tau_std': float(np.std(pred_tau_lower)),
         'ref_tau_mean': float(np.mean(ref_tau_lower)),
         'ref_tau_std': float(np.std(ref_tau_lower)),
         'tau_rmse': float(np.sqrt(np.mean((pred_tau_lower - ref_tau_lower)**2))),
-        'tau_rel_error': float(np.abs(np.mean(pred_tau_lower) - np.mean(ref_tau_lower)) / (np.abs(np.mean(ref_tau_lower)) + 1e-12))
+        'tau_rel_error': float(np.abs(np.mean(pred_tau_lower) - np.mean(ref_tau_lower))
+                              / (np.abs(np.mean(ref_tau_lower)) + 1e-12))
     }
-    
-    logger.info(f"✅ Wall shear stress ({'2D' if is_2d else '3D'}): pred={metrics['pred_tau_mean']:.6f}, "
-                f"ref={metrics['ref_tau_mean']:.6f}, error={metrics['tau_rel_error']:.2%}")
-    
+
+    logger.info(f"✅ Wall shear stress ({'2D' if is_2d else '3D'}):")
+    logger.info(f"   Lower wall: pred={metrics['pred_tau_lower_mean']:.6f}, "
+                f"ref={metrics['ref_tau_lower_mean']:.6f}")
+    logger.info(f"   Upper wall: pred={metrics['pred_tau_upper_mean']:.6f}, "
+                f"ref={metrics['ref_tau_upper_mean']:.6f}")
+    logger.info(f"   Theoretical (Re_τ=1000): {metrics['theoretical_tau_w']:.6f}")
+    logger.info(f"   Prediction vs. theory error: {metrics['pred_vs_theory_error']:.2%}")
+
+    # 🔴 警告檢查
+    if metrics['pred_vs_theory_error'] > 0.5:  # 超過 50% 偏差
+        logger.warning(f"⚠️  Wall shear stress deviates significantly from theory!")
+        logger.warning(f"   Expected: {metrics['theoretical_tau_w']:.6f}")
+        logger.warning(f"   Predicted: {metrics['pred_tau_lower_mean']:.6f}")
+        logger.warning(f"   Error: {metrics['pred_vs_theory_error']:.2%}")
+
+    if metrics['symmetry_error_pred'] > 0.15:  # 超過 15% 不對稱
+        logger.warning(f"⚠️  Channel flow lacks symmetry (upper/lower walls differ by "
+                      f"{metrics['symmetry_error_pred']:.2%})")
+
     return metrics
 
 
-def compute_energy_spectrum_comparison(pred: Dict[str, np.ndarray], 
-                                       ref: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-    """比較能量譜（支援 2D/3D）"""
-    logger.info("📊 Computing energy spectrum comparison...")
-    
-    # 檢測 2D vs 3D（使用 reference 判斷）
+def compute_energy_spectrum_comparison(pred: Dict[str, np.ndarray],
+                                       ref: Dict[str, np.ndarray],
+                                       spectrum_type: str = 'streamwise_1d') -> Dict[str, np.ndarray]:
+    """
+    比較能量譜（通道流專用方法）
+
+    通道流是非均勻的剪切湍流，不適用徑向平均2D FFT方法（僅適用於均勻各向同性湍流）。
+    應使用流向1D能譜（沿x方向）並對y方向分層或平均。
+
+    Args:
+        pred: 預測場數據
+        ref: 參考場數據
+        spectrum_type: 能譜類型
+            - 'streamwise_1d': 流向1D能譜（推薦，適用於通道流）
+            - 'radial_2d': 徑向平均2D能譜（傳統方法，不適用於通道流）
+
+    Returns:
+        能譜數據字典，包含:
+        - k: 波數
+        - pred_spectrum: 預測能譜
+        - ref_spectrum: 參考能譜
+        - spectrum_rmse: RMSE
+        - spectrum_rel_error: 相對誤差
+        - spectrum_type: 使用的能譜類型
+    """
+    logger.info(f"📊 Computing energy spectrum (type: {spectrum_type})...")
+
+    # 檢測 2D vs 3D
     is_2d = len(ref['u'].shape) == 2
-    
+
+    if spectrum_type == 'streamwise_1d':
+        # ✅ 推薦：流向1D能譜（適用於通道流）
+        return _compute_streamwise_spectrum(pred, ref, is_2d)
+
+    elif spectrum_type == 'radial_2d':
+        # ⚠️ 傳統方法：徑向平均2D能譜（僅適用於均勻各向同性湍流）
+        logger.warning("⚠️  Using radial 2D spectrum for channel flow (not physically appropriate)")
+        logger.warning("   Consider using 'streamwise_1d' for channel flow")
+        return _compute_radial_spectrum(pred, ref, is_2d)
+
+    else:
+        raise ValueError(f"Unknown spectrum_type: {spectrum_type}. "
+                        f"Choose 'streamwise_1d' or 'radial_2d'")
+
+
+def _compute_streamwise_spectrum(pred: Dict[str, np.ndarray],
+                                  ref: Dict[str, np.ndarray],
+                                  is_2d: bool) -> Dict[str, np.ndarray]:
+    """
+    計算流向1D能譜（通道流專用）
+
+    方法：沿流向（x方向）進行1D FFT，對法向（y方向）和展向（z方向）平均
+    """
     if is_2d:
-        # 2D: 直接使用整個場（squeeze pred 移除 z 維度）
+        # 2D: (nx, ny)
+        pred_u = pred['u'].squeeze() if pred['u'].ndim == 3 else pred['u']
+        pred_v = pred['v'].squeeze() if pred['v'].ndim == 3 else pred['v']
+
+        # 湍動能 (TKE)
+        pred_tke = 0.5 * (pred_u**2 + pred_v**2)
+        ref_tke = 0.5 * (ref['u']**2 + ref['v']**2)
+
+        # 沿 x 方向 1D FFT
+        nx = pred_tke.shape[0]
+        pred_fft_x = np.fft.fft(pred_tke, axis=0)
+        ref_fft_x = np.fft.fft(ref_tke, axis=0)
+
+        # 能量譜：對 y 方向平均
+        pred_spectrum_1d = np.mean(np.abs(pred_fft_x)**2, axis=1)
+        ref_spectrum_1d = np.mean(np.abs(ref_fft_x)**2, axis=1)
+
+        # 波數（流向）
+        dx = pred['x'][1] - pred['x'][0]
+        k_x = np.fft.fftfreq(nx, d=dx)
+
+        # 僅保留正頻率
+        positive_freq = k_x >= 0
+        k_x = k_x[positive_freq]
+        pred_spectrum_1d = pred_spectrum_1d[positive_freq]
+        ref_spectrum_1d = ref_spectrum_1d[positive_freq]
+
+    else:
+        # 3D: (nx, ny, nz)
+        # 湍動能
+        pred_tke = 0.5 * (pred['u']**2 + pred['v']**2 + pred['w']**2)
+        ref_tke = 0.5 * (ref['u']**2 + ref['v']**2 + ref['w']**2)
+
+        # 沿 x 方向 1D FFT
+        nx = pred_tke.shape[0]
+        pred_fft_x = np.fft.fft(pred_tke, axis=0)
+        ref_fft_x = np.fft.fft(ref_tke, axis=0)
+
+        # 能量譜：對 y, z 方向平均
+        pred_spectrum_1d = np.mean(np.abs(pred_fft_x)**2, axis=(1, 2))
+        ref_spectrum_1d = np.mean(np.abs(ref_fft_x)**2, axis=(1, 2))
+
+        # 波數（流向）
+        dx = pred['x'][1] - pred['x'][0]
+        k_x = np.fft.fftfreq(nx, d=dx)
+
+        # 僅保留正頻率
+        positive_freq = k_x >= 0
+        k_x = k_x[positive_freq]
+        pred_spectrum_1d = pred_spectrum_1d[positive_freq]
+        ref_spectrum_1d = ref_spectrum_1d[positive_freq]
+
+    # 計算誤差指標
+    spectrum_rmse = np.sqrt(np.mean((pred_spectrum_1d - ref_spectrum_1d)**2))
+    spectrum_rel_error = spectrum_rmse / (np.mean(ref_spectrum_1d) + 1e-12)
+
+    logger.info(f"✅ Streamwise 1D spectrum: RMSE={spectrum_rmse:.2e}, rel_error={spectrum_rel_error:.2%}")
+
+    return {
+        'k': k_x,
+        'pred_spectrum': pred_spectrum_1d,
+        'ref_spectrum': ref_spectrum_1d,
+        'spectrum_rmse': spectrum_rmse,
+        'spectrum_rel_error': spectrum_rel_error,
+        'spectrum_type': 'streamwise_1d'
+    }
+
+
+def _compute_radial_spectrum(pred: Dict[str, np.ndarray],
+                              ref: Dict[str, np.ndarray],
+                              is_2d: bool) -> Dict[str, np.ndarray]:
+    """
+    計算徑向平均2D能譜（傳統方法，僅適用於均勻各向同性湍流）
+
+    ⚠️ 警告：此方法不適用於通道流（非均勻剪切湍流）
+    """
+    if is_2d:
         pred_u = pred['u'].squeeze() if pred['u'].ndim == 3 else pred['u']
         pred_v = pred['v'].squeeze() if pred['v'].ndim == 3 else pred['v']
         pred_ke = 0.5 * (pred_u**2 + pred_v**2)
         ref_ke = 0.5 * (ref['u']**2 + ref['v']**2)
     else:
-        # 3D: 選擇中間 y 平面
         y_mid = len(pred['y']) // 2
         pred_ke = 0.5 * (pred['u'][:, y_mid, :]**2 + pred['v'][:, y_mid, :]**2 + pred['w'][:, y_mid, :]**2)
         ref_ke = 0.5 * (ref['u'][:, y_mid, :]**2 + ref['v'][:, y_mid, :]**2 + ref['w'][:, y_mid, :]**2)
-    
+
     # 2D FFT
     pred_fft = np.fft.fft2(pred_ke)
     ref_fft = np.fft.fft2(ref_ke)
-    
+
     # 能量譜
     pred_spectrum = np.abs(np.fft.fftshift(pred_fft))**2
     ref_spectrum = np.abs(np.fft.fftshift(ref_fft))**2
-    
+
     # 徑向平均
     h, w = pred_ke.shape
     center_h, center_w = h // 2, w // 2
-    
+
     y_idx, x_idx = np.ogrid[:h, :w]
     r = np.sqrt((x_idx - center_w)**2 + (y_idx - center_h)**2).astype(int)
-    
+
     k_max = min(center_h, center_w)
     k_bins = np.arange(1, k_max)
-    
+
     pred_radial = np.zeros(len(k_bins))
     ref_radial = np.zeros(len(k_bins))
-    
+
     for i, k in enumerate(k_bins):
         mask = (r == k)
         if mask.sum() > 0:
             pred_radial[i] = pred_spectrum[mask].mean()
             ref_radial[i] = ref_spectrum[mask].mean()
-    
+
     # 計算能譜 RMSE
     spectrum_rmse = np.sqrt(np.mean((pred_radial - ref_radial)**2))
     spectrum_rel_error = spectrum_rmse / (np.mean(ref_radial) + 1e-12)
-    
-    logger.info(f"✅ Energy spectrum RMSE: {spectrum_rmse:.2e}, rel_error: {spectrum_rel_error:.2%}")
-    
+
+    logger.info(f"✅ Radial 2D spectrum: RMSE={spectrum_rmse:.2e}, rel_error={spectrum_rel_error:.2%}")
+
     return {
         'k': k_bins,
         'pred_spectrum': pred_radial,
         'ref_spectrum': ref_radial,
         'spectrum_rmse': spectrum_rmse,
-        'spectrum_rel_error': spectrum_rel_error
+        'spectrum_rel_error': spectrum_rel_error,
+        'spectrum_type': 'radial_2d'
     }
 
 
@@ -957,6 +1215,19 @@ def generate_markdown_report(metrics: Dict, stats: Dict, spectrum_data: Dict,
 | **w** | {metrics.get('w_l2_error', 0):.4f} | {metrics.get('w_rmse', 0):.6f} | {metrics.get('w_rel_rmse', 0):.4f} | {metrics.get('w_max_error', 0):.6f} |
 | **p** | {metrics.get('p_l2_error', 0):.4f} | {metrics.get('p_rmse', 0):.6f} | {metrics.get('p_rel_rmse', 0):.4f} | {metrics.get('p_max_error', 0):.6f} |
 
+### 💡 壓力梯度誤差（更準確的壓力場評估）
+
+**說明**: 由於壓力場僅定義到任意常數，壓力梯度 ∇p 的比較比絕對值更具物理意義。
+
+| 梯度分量 | 相對 L2 誤差 | RMSE | 預測均值 | 參考均值 | 標準差（預測/參考） |
+|---------|-------------|------|---------|---------|------------------|
+| **∂p/∂x** | {metrics.get('dpdx_l2_error', 0):.4f} | {metrics.get('dpdx_rmse', 0):.6f} | {metrics.get('dpdx_pred_mean', 0):.6f} | {metrics.get('dpdx_ref_mean', 0):.6f} | {metrics.get('dpdx_pred_std', 0):.6f} / {metrics.get('dpdx_ref_std', 0):.6f} |
+| **∂p/∂y** | {metrics.get('dpdy_l2_error', 0):.4f} | {metrics.get('dpdy_rmse', 0):.6f} | {metrics.get('dpdy_pred_mean', 0):.6f} | {metrics.get('dpdy_ref_mean', 0):.6f} | {metrics.get('dpdy_pred_std', 0):.6f} / {metrics.get('dpdy_ref_std', 0):.6f} |
+| **∂p/∂z** | {metrics.get('dpdz_l2_error', 0):.4f} | {metrics.get('dpdz_rmse', 0):.6f} | {metrics.get('dpdz_pred_mean', 0):.6f} | {metrics.get('dpdz_ref_mean', 0):.6f} | {metrics.get('dpdz_pred_std', 0):.6f} / {metrics.get('dpdz_ref_std', 0):.6f} |
+| **綜合梯度** | **{metrics.get('pressure_gradient_l2_error', 0):.4f}** | - | - | - | - |
+
+**通道流驗證**: ∂p/∂x 應為常數（驅動流動），標準差應接近零。
+
 ---
 
 ## 📈 場統計比較
@@ -990,17 +1261,35 @@ def generate_markdown_report(metrics: Dict, stats: Dict, spectrum_data: Dict,
 
 ### 壁面剪應力
 
-| 指標 | 預測值 | JHTDB 參考 | 誤差 |
-|------|--------|-----------|------|
-| Mean τ_w | {wall_metrics.get('pred_tau_mean', 0):.6f} | {wall_metrics.get('ref_tau_mean', 0):.6f} | {wall_metrics.get('tau_rel_error', 0):.2%} |
-| Std τ_w | {wall_metrics.get('pred_tau_std', 0):.6f} | {wall_metrics.get('ref_tau_std', 0):.6f} | - |
-| RMSE | {wall_metrics.get('tau_rmse', 0):.6f} | - | - |
+**理論公式**: τ_w = μ·(∂u/∂y)|_wall，其中 μ = ρ·ν = 5×10⁻⁵
+
+**理論值 (JHTDB Re_τ=1000)**: τ_w ≈ 0.0025，可接受範圍: [0.0020, 0.0030] (±20%)
+
+| 位置 | 預測值 | JHTDB 參考 | 相對誤差 |
+|------|--------|-----------|---------|
+| **下壁面** (y=-1) | {wall_metrics.get('pred_tau_lower_mean', 0):.6f} | {wall_metrics.get('ref_tau_lower_mean', 0):.6f} | {wall_metrics.get('tau_lower_rel_error', 0):.2%} |
+| **上壁面** (y=+1) | {wall_metrics.get('pred_tau_upper_mean', 0):.6f} | {wall_metrics.get('ref_tau_upper_mean', 0):.6f} | {wall_metrics.get('tau_upper_rel_error', 0):.2%} |
+| **理論值** | 0.0025 | 0.0025 | **{wall_metrics.get('pred_vs_theory_error', 0):.2%}** |
+
+| 統計量 | 下壁面 Std | 上壁面 Std | 對稱性誤差 |
+|--------|-----------|-----------|-----------|
+| 預測值 | {wall_metrics.get('pred_tau_lower_std', 0):.6f} | {wall_metrics.get('pred_tau_upper_std', 0):.6f} | {wall_metrics.get('symmetry_error_pred', 0):.2%} |
+| 參考值 | {wall_metrics.get('ref_tau_lower_std', 0):.6f} | {wall_metrics.get('ref_tau_upper_std', 0):.6f} | {wall_metrics.get('symmetry_error_ref', 0):.2%} |
+
+**對稱性檢查**: 通道流應上下對稱，對稱性誤差應 < 15%
 
 ### 能量譜
 
+**計算方法**: {spectrum_data.get('spectrum_type', 'streamwise_1d')}
+- `streamwise_1d`: 流向1D能譜（推薦，適用於通道流）
+- `radial_2d`: 徑向平均2D能譜（僅適用於均勻各向同性湍流）
+
+**評估指標**:
 - **譜 RMSE**: {spectrum_data.get('spectrum_rmse', 0):.6e}
 - **譜相對誤差**: {spectrum_data.get('spectrum_rel_error', 0):.2%}
 - **波數範圍**: k ∈ [{spectrum_data['k'][0]:.2f}, {spectrum_data['k'][-1]:.2f}]
+
+**說明**: 通道流是非均勻的剪切湍流，應使用流向1D能譜而非徑向平均2D能譜。
 
 ---
 
@@ -1183,7 +1472,20 @@ def main():
     # ========== 計算指標 ==========
     error_metrics = compute_error_metrics(pred_data, ref_data)
     field_stats = compute_field_statistics(pred_data, ref_data)
-    wall_metrics = compute_wall_shear_stress_comparison(pred_data, ref_data)
+
+    # 🔴 修正: 從配置中讀取黏性係數
+    nu = config.get('physics', {}).get('nu', 5e-5)
+    if 'physics' in config and 'channel_flow' in config['physics']:
+        # 優先使用 channel_flow 配置中的值
+        nu = config['physics']['channel_flow'].get('nu', nu)
+    rho = config.get('physics', {}).get('rho', 1.0)
+
+    wall_metrics = compute_wall_shear_stress_comparison(
+        pred_data,
+        ref_data,
+        nu=nu,
+        rho=rho
+    )
     spectrum_data = compute_energy_spectrum_comparison(pred_data, ref_data)
     
     # ========== 可視化 ==========
@@ -1212,9 +1514,17 @@ def main():
     logger.info(f"📊 整體相對 L2 誤差: {error_metrics.get('overall_l2_error', 0):.2%}")
     logger.info(f"🌊 壁面剪應力誤差: {wall_metrics.get('tau_rel_error', 0):.2%}")
     logger.info(f"📈 能量譜誤差: {spectrum_data.get('spectrum_rel_error', 0):.2%}")
+
+    # 🆕 壓力梯度誤差摘要
+    if 'pressure_gradient_l2_error' in error_metrics and error_metrics['pressure_gradient_l2_error'] != float('inf'):
+        logger.info(f"💡 壓力梯度誤差: {error_metrics['pressure_gradient_l2_error']:.2%} (更準確的壓力評估)")
+        if 'dpdx_pred_mean' in error_metrics:
+            logger.info(f"   ∂p/∂x: 預測={error_metrics['dpdx_pred_mean']:.6f}, "
+                       f"參考={error_metrics['dpdx_ref_mean']:.6f}")
+
     logger.info(f"📁 結果保存於: {output_dir}")
     logger.info("="*60)
-    
+
     # 檢查成敗
     if error_metrics.get('overall_l2_error', 1) <= 0.15:
         logger.info("✅ 成功！整體誤差低於 15% 門檻")

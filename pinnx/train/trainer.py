@@ -568,35 +568,37 @@ class Trainer:
         
         # ==================== 輔助函數 ====================
         def prepare_model_coords(
-            coord_tensor: torch.Tensor, 
+            coord_tensor: torch.Tensor,
             require_grad: bool = False
         ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             """
             準備模型輸入座標（處理標準化與縮放）
-            
+
+            ⚠️ 修正：不使用 clone() 以保持計算圖連接
+
             Returns:
                 (coords_physical, coords_norm, model_coords):
                 - coords_physical: 物理座標（供 PDE autograd 使用）
                 - coords_norm: 標準化後的座標（若無 InputNormalizer 則與 coords_physical 相同）
                 - model_coords: 最終模型輸入（可能經過 VS-PINN scaling）
             """
-            # 1. 保留物理座標（啟用梯度追蹤）
-            coords_physical = coord_tensor.clone()
-            if require_grad:
+            # 1. 直接使用物理座標（不 clone，保持計算圖）
+            coords_physical = coord_tensor
+            if require_grad and not coords_physical.requires_grad:
                 coords_physical.requires_grad_(True)
-            
+
             # 2. 輸入標準化（可選）
             if self.input_normalizer is not None:
                 coords_norm = self.input_normalizer.transform(coords_physical)
             else:
                 coords_norm = coords_physical
-            
+
             # 3. VS-PINN 縮放（可選，作用於標準化後的座標）
             if is_vs_pinn and hasattr(self.physics, 'scale_coordinates'):
                 model_coords = self.physics.scale_coordinates(coords_norm)
             else:
                 model_coords = coords_norm
-            
+
             return coords_physical, coords_norm, model_coords
         
         # ==================== 1. PDE 殘差損失 ====================
@@ -617,12 +619,18 @@ class Trainer:
         
         # 模型預測（標準化空間輸出）
         u_pred_norm = self.model(model_coords_pde)
-        
+
         # ✅ 立即反標準化為物理量（供 PDE 殘差計算使用）
         var_order = self._infer_variable_order(u_pred_norm.shape[1], context='pde')
         u_pred_pde_physical_raw = self.data_normalizer.denormalize_batch(u_pred_norm, var_order=var_order)
         # 確保是 Tensor 類型（denormalize_batch 保持輸入類型）
         u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)  # type: ignore
+
+        # ✅ 計算圖連接已驗證（診斷代碼已移除，避免干擾訓練）
+        # 前期測試已確認：
+        # - u_pred_norm 與 model_coords_pde 有正確連接
+        # - u_pred_pde_physical 與 model_coords_pde 有正確連接
+        # - 物理模組內部切片不會破壞計算圖
         
         # ✅ 提取速度和壓力分量（物理空間）
         if is_vs_pinn:
@@ -671,16 +679,18 @@ class Trainer:
                     'continuity': continuity_residual,
                 }
             else:
-                # 標準 NS 2D：需要 2D 座標 [x, y] + 完整 pred 張量 [u, v, p, S]
-                # ⚠️ 修復：只傳遞前 2D 座標給 2D 物理模組
-                coords_pde_2d = coords_pde_physical[:, :2]  # 取 [x, y]，忽略 z
-                
-                # 構建完整預測張量 [u, v, p, S]（NS 2D 需要 4 個分量）
-                source_term_phys = torch.zeros_like(pressure_phys)  # 假設源項為 0
-                pred_full_phys = torch.cat([velocity_phys, pressure_phys, source_term_phys], dim=1)
-                
+                # 標準 NS 2D：需要 2D 座標 [x, y] + 預測張量 [u, v, p]
+                # ⚠️ 關鍵修復：不要對 coords 做切片！
+                # 切片會創建新視圖，可能破壞計算圖連接
+                # 直接傳遞完整的 model_coords_pde，讓物理模組內部處理維度
+
                 # 調用 NSEquations2D.residual_unified() 方法
-                residuals = self.physics.residual_unified(coords_pde_2d, pred_full_phys)
+                # 傳遞完整的 model_coords_pde（可能是 2D 或 3D）
+                # 和模型輸出（前 3 個分量）
+                residuals = self.physics.residual_unified(
+                    model_coords_pde,  # 完整座標，不切片
+                    u_pred_pde_physical  # 完整預測，讓物理模組內部切片
+                )
             
             # 應用點權重（如果存在）
             pde_point_weights = data_batch.get('pde_point_weights', None)
@@ -736,7 +746,47 @@ class Trainer:
             wall_loss = torch.tensor(0.0, device=self.device)
             if epoch == 0:
                 logging.warning(f"⚠️ 未檢測到壁面邊界點！y_bc 範圍: [{y_bc.min():.6f}, {y_bc.max():.6f}]")
-        
+
+        # ==================== 2B. 週期性邊界條件損失 ====================
+        # 僅用於 Kolmogorov Flow 或其他週期性系統
+        # ✅ 使用成對邊界點直接計算週期性損失（而非 compute_periodic_loss）
+        periodic_loss_dict = {}
+        if hasattr(self.physics, 'compute_periodic_loss'):
+            try:
+                # ✅ 邊界點結構：[左邊界, 右邊界, 下邊界, 上邊界]（成對順序）
+                # 假設前一半是 x 方向（左+右），後一半是 y 方向（下+上）
+                n_bc = u_bc_pred_phys.shape[0]
+                n_pairs_total = n_bc // 2
+                n_pairs_x = n_pairs_total // 2  # x 方向配對數
+                n_pairs_y = n_pairs_total - n_pairs_x  # y 方向配對數
+                
+                # x 方向週期性：左邊界 (0:n_pairs_x) vs 右邊界 (n_pairs_x:2*n_pairs_x)
+                if n_pairs_x > 0:
+                    pred_left = u_bc_pred_phys[0:n_pairs_x]
+                    pred_right = u_bc_pred_phys[n_pairs_x:2*n_pairs_x]
+                    periodic_x_loss = torch.mean((pred_left - pred_right) ** 2)
+                else:
+                    periodic_x_loss = torch.tensor(0.0, device=self.device)
+                
+                # y 方向週期性：下邊界 (2*n_pairs_x:2*n_pairs_x+n_pairs_y) vs 上邊界 (2*n_pairs_x+n_pairs_y:)
+                if n_pairs_y > 0:
+                    start_y = 2 * n_pairs_x
+                    pred_bottom = u_bc_pred_phys[start_y:start_y+n_pairs_y]
+                    pred_top = u_bc_pred_phys[start_y+n_pairs_y:]
+                    periodic_y_loss = torch.mean((pred_bottom - pred_top) ** 2)
+                else:
+                    periodic_y_loss = torch.tensor(0.0, device=self.device)
+
+                if epoch == 0:
+                    logging.info(f"✅ 週期性邊界條件已啟用（成對計算，x方向{n_pairs_x}對，y方向{n_pairs_y}對）")
+            except Exception as e:
+                logging.warning(f"⚠️ 週期性損失計算失敗: {e}")
+                periodic_x_loss = torch.tensor(0.0, device=self.device)
+                periodic_y_loss = torch.tensor(0.0, device=self.device)
+        else:
+            periodic_x_loss = torch.tensor(0.0, device=self.device)
+            periodic_y_loss = torch.tensor(0.0, device=self.device)
+
         # ==================== 3. 資料監督損失 ====================
         # 組合感測器座標（使用模型實際輸入維度）
         if self.model_input_dim == 3:
@@ -802,8 +852,17 @@ class Trainer:
             'momentum_x': momentum_x_loss,
             'momentum_y': momentum_y_loss,
             'continuity': continuity_loss,
-            'wall_constraint': wall_loss,
         }
+
+        # 條件性添加邊界條件損失（互斥：壁面 vs 週期性）
+        if hasattr(self.physics, 'compute_periodic_loss'):
+            # Kolmogorov Flow 使用週期性邊界
+            loss_terms['periodic_x'] = periodic_x_loss
+            loss_terms['periodic_y'] = periodic_y_loss
+        else:
+            # 通道流使用壁面邊界
+            loss_terms['wall_constraint'] = wall_loss
+
         if is_vs_pinn:
             loss_terms['momentum_z'] = momentum_z_loss
         
@@ -849,8 +908,17 @@ class Trainer:
         w_momentum_y = scaled_weight('momentum_y', loss_cfg.get('momentum_y_weight', base_pde_weight))
         w_momentum_z = scaled_weight('momentum_z', loss_cfg.get('momentum_z_weight', base_pde_weight)) if is_vs_pinn else 0.0
         w_continuity = scaled_weight('continuity', loss_cfg.get('continuity_weight', base_pde_weight))
-        w_bc = scaled_weight('wall_constraint', loss_cfg.get('wall_constraint_weight', base_bc_weight))
-        
+
+        # 邊界條件權重（互斥：壁面 vs 週期性）
+        if hasattr(self.physics, 'compute_periodic_loss'):
+            w_periodic_x = scaled_weight('periodic_x', loss_cfg.get('periodic_x_weight', base_bc_weight))
+            w_periodic_y = scaled_weight('periodic_y', loss_cfg.get('periodic_y_weight', base_bc_weight))
+            w_bc = 0.0  # 週期性系統不使用壁面損失
+        else:
+            w_periodic_x = 0.0
+            w_periodic_y = 0.0
+            w_bc = scaled_weight('wall_constraint', loss_cfg.get('wall_constraint_weight', base_bc_weight))
+
         # 📊 診斷日誌：在訓練開始時打印實際應用的權重
         if epoch == 0 and not hasattr(self, '_weights_logged'):
             logging.info("=" * 60)
@@ -862,7 +930,11 @@ class Trainer:
             if is_vs_pinn:
                 logging.info(f"  Momentum Z:       {w_momentum_z:.2e}")
             logging.info(f"  Continuity:       {w_continuity:.2e}")
-            logging.info(f"  Wall Constraint:  {w_bc:.2e}")
+            if hasattr(self.physics, 'compute_periodic_loss'):
+                logging.info(f"  Periodic X:       {w_periodic_x:.2e}")
+                logging.info(f"  Periodic Y:       {w_periodic_y:.2e}")
+            else:
+                logging.info(f"  Wall Constraint:  {w_bc:.2e}")
             logging.info("=" * 60)
             self._weights_logged = True
         
@@ -876,7 +948,12 @@ class Trainer:
             w_continuity * continuity_loss
         )
         weighted_data_loss = w_data * data_loss
-        weighted_wall_loss = w_bc * wall_loss
+
+        # 邊界條件損失（互斥）
+        if hasattr(self.physics, 'compute_periodic_loss'):
+            weighted_bc_loss = w_periodic_x * periodic_x_loss + w_periodic_y * periodic_y_loss
+        else:
+            weighted_bc_loss = w_bc * wall_loss
         
         # ⭐ Phase 6C: 均值約束損失（若啟用）
         mean_constraint_loss = torch.tensor(0.0, device=data_loss.device)
@@ -913,7 +990,7 @@ class Trainer:
         total_loss = (
             weighted_data_loss +
             weighted_pde_loss +
-            weighted_wall_loss +
+            weighted_bc_loss +  # ⭐ 統一邊界條件損失（壁面或週期性）
             mean_constraint_loss  # ⭐ Phase 6C: 均值約束損失
         )
         
@@ -957,30 +1034,44 @@ class Trainer:
             'pde_loss': pde_loss.item(),
             'weighted_data_loss': weighted_data_loss.item(),
             'weighted_pde_loss': weighted_pde_loss.item(),
-            'weighted_wall_loss': weighted_wall_loss.item(),
+            'weighted_bc_loss': weighted_bc_loss.item(),  # ⭐ 統一邊界條件損失
             'momentum_x_loss': momentum_x_loss.item(),
             'momentum_y_loss': momentum_y_loss.item(),
             'momentum_z_loss': momentum_z_loss.item(),
             'continuity_loss': continuity_loss.item(),
-            'wall_loss': wall_loss.item(),
             'u_loss': u_loss.item(),
             'v_loss': v_loss.item(),
             'w_loss': w_loss.item(),
             'pressure_loss': pressure_loss.item(),
         }
-        
+
+        # 添加邊界條件損失細項（條件性）
+        if hasattr(self.physics, 'compute_periodic_loss'):
+            result['periodic_x_loss'] = periodic_x_loss.item()
+            result['periodic_y_loss'] = periodic_y_loss.item()
+        else:
+            result['wall_loss'] = wall_loss.item()
+
         # RANS 損失項已移除（2025-10-14）
-        
+
         if gradnorm_weights is not None:
             result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
-            result['applied_weights'] = {
+
+            # 構建應用權重字典（包含週期性損失）
+            applied_weights_dict = {
                 'data': w_data,
                 'momentum_x': w_momentum_x,
                 'momentum_y': w_momentum_y,
                 'momentum_z': w_momentum_z,
                 'continuity': w_continuity,
-                'wall_constraint': w_bc,
             }
+            if hasattr(self.physics, 'compute_periodic_loss'):
+                applied_weights_dict['periodic_x'] = w_periodic_x
+                applied_weights_dict['periodic_y'] = w_periodic_y
+            else:
+                applied_weights_dict['wall_constraint'] = w_bc
+
+            result['applied_weights'] = applied_weights_dict
         
         return result
     

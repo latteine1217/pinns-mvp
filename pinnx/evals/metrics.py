@@ -341,12 +341,12 @@ def wall_shear_stress(u: torch.Tensor, v: torch.Tensor, coords: torch.Tensor,
 def vorticity_field(u: torch.Tensor, v: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
     """
     計算渦量場 ω = ∂v/∂x - ∂u/∂y
-    
+
     Args:
         u: x方向速度 [N]
         v: y方向速度 [N]
         coords: 座標 [N, 3] (t, x, y)
-        
+
     Returns:
         渦量場 [N]
     """
@@ -354,19 +354,156 @@ def vorticity_field(u: torch.Tensor, v: torch.Tensor, coords: torch.Tensor) -> t
         u.requires_grad_(True)
     if not v.requires_grad:
         v.requires_grad_(True)
-    
+
     try:
         u_grad = torch.autograd.grad(u.sum(), coords, create_graph=True)[0]
         v_grad = torch.autograd.grad(v.sum(), coords, create_graph=True)[0]
-        
+
         # ω = ∂v/∂x - ∂u/∂y
         vorticity = v_grad[:, 1] - u_grad[:, 2]
-        
+
         return vorticity
-        
+
     except RuntimeError as e:
         warnings.warn(f"Vorticity calculation failed: {e}")
         return torch.zeros_like(u)
+
+
+def pressure_gradient_metrics(p_pred: torch.Tensor, p_ref: torch.Tensor,
+                               coords: torch.Tensor,
+                               spatial_dims: List[str] = ['x', 'y', 'z']) -> Dict[str, float]:
+    """
+    計算壓力梯度誤差指標（比壓力場絕對值更準確）
+
+    在通道流等問題中，壓力場只定義到一個任意常數，因此壓力梯度的比較
+    比絕對值更具物理意義。壓力梯度直接影響流體運動 (∇p 出現在 NS 方程中)。
+
+    Args:
+        p_pred: 預測壓力場 [N]
+        p_ref: 參考壓力場 [N]
+        coords: 座標 [N, d] (d = 2 或 3，對應 [x,y] 或 [x,y,z])
+        spatial_dims: 空間維度名稱列表 (用於報告)
+
+    Returns:
+        壓力梯度誤差指標字典，包含：
+        - grad_p_l2_error: 梯度向量的相對 L2 誤差
+        - grad_p_{x,y,z}_rmse: 各方向梯度的 RMSE
+        - grad_p_{x,y,z}_rel_error: 各方向梯度的相對誤差
+        - mean_pressure_gradient_{x,y,z}: 平均壓力梯度（用於驗證通道流驅動）
+
+    注意：
+        此函數要求 p_pred 和 p_ref 通過 coords 計算得出（保持計算圖連接）
+    """
+    if not coords.requires_grad:
+        coords.requires_grad_(True)
+
+    # 確保壓力與座標連接（評估時可能需要重新計算）
+    if p_pred.grad_fn is None or p_ref.grad_fn is None:
+        warnings.warn(
+            "Pressure fields not connected to coords in computation graph. "
+            "Gradient metrics may be inaccurate. Consider recomputing p_pred "
+            "with coords.requires_grad=True before calling this function."
+        )
+
+    metrics = {}
+
+    try:
+        # 計算預測壓力梯度
+        grad_p_pred = torch.autograd.grad(
+            p_pred.sum(), coords,
+            create_graph=True,
+            allow_unused=True
+        )[0]
+
+        # 計算參考壓力梯度
+        grad_p_ref = torch.autograd.grad(
+            p_ref.sum(), coords,
+            create_graph=True,
+            allow_unused=True
+        )[0]
+
+        if grad_p_pred is None or grad_p_ref is None:
+            warnings.warn("Cannot compute pressure gradients: pressure not connected to coords")
+            return {f'{key}': float('inf') for key in ['grad_p_l2_error', 'grad_p_x_rmse', 'grad_p_y_rmse', 'grad_p_z_rmse']}
+
+        # 計算整體梯度向量的相對 L2 誤差
+        grad_error = torch.norm(grad_p_pred - grad_p_ref, p=2) / (torch.norm(grad_p_ref, p=2) + 1e-12)
+        metrics['grad_p_l2_error'] = grad_error.item()
+
+        # 逐方向分析（x, y, z）
+        n_dims = min(coords.shape[1], len(spatial_dims))
+
+        for i, dim_name in enumerate(spatial_dims[:n_dims]):
+            # 提取該方向梯度
+            grad_pred_i = grad_p_pred[:, i]
+            grad_ref_i = grad_p_ref[:, i]
+
+            # RMSE
+            rmse = torch.sqrt(torch.mean((grad_pred_i - grad_ref_i)**2))
+            metrics[f'grad_p_{dim_name}_rmse'] = rmse.item()
+
+            # 相對誤差
+            ref_magnitude = torch.abs(grad_ref_i).mean() + 1e-12
+            rel_error = rmse / ref_magnitude
+            metrics[f'grad_p_{dim_name}_rel_error'] = rel_error.item()
+
+            # 平均梯度（用於驗證通道流驅動力）
+            metrics[f'mean_pressure_gradient_{dim_name}_pred'] = grad_pred_i.mean().item()
+            metrics[f'mean_pressure_gradient_{dim_name}_ref'] = grad_ref_i.mean().item()
+
+        # 特別檢查通道流驅動壓力梯度（∂p/∂x 應為常數）
+        if 'x' in spatial_dims[:n_dims]:
+            x_idx = spatial_dims.index('x')
+            dpdx_pred = grad_p_pred[:, x_idx]
+            dpdx_ref = grad_p_ref[:, x_idx]
+
+            # 檢查 ∂p/∂x 的標準差（應接近零，表示常數梯度）
+            metrics['dpdx_std_pred'] = dpdx_pred.std().item()
+            metrics['dpdx_std_ref'] = dpdx_ref.std().item()
+
+        return metrics
+
+    except RuntimeError as e:
+        warnings.warn(f"Pressure gradient calculation failed: {e}")
+        return {
+            'grad_p_l2_error': float('inf'),
+            'grad_p_x_rmse': float('inf'),
+            'grad_p_y_rmse': float('inf'),
+            'grad_p_z_rmse': float('inf')
+        }
+
+
+def pressure_gradient_from_finite_diff(p_field: np.ndarray, coords: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """
+    使用有限差分計算壓力梯度（用於無法使用自動微分時）
+
+    適用於已經採樣好的網格數據（如 JHTDB 參考數據）
+
+    Args:
+        p_field: 壓力場 [Nx, Ny, Nz] 或 [Nx, Ny]
+        coords: 座標字典 {'x': [Nx], 'y': [Ny], 'z': [Nz]}
+
+    Returns:
+        壓力梯度字典 {'dpdx': [Nx, Ny, Nz], 'dpdy': [...], 'dpdz': [...]}
+    """
+    grad = {}
+
+    # x 方向
+    if 'x' in coords:
+        dx = coords['x'][1] - coords['x'][0] if len(coords['x']) > 1 else 1.0
+        grad['dpdx'] = np.gradient(p_field, dx, axis=0)
+
+    # y 方向
+    if 'y' in coords:
+        dy = coords['y'][1] - coords['y'][0] if len(coords['y']) > 1 else 1.0
+        grad['dpdy'] = np.gradient(p_field, dy, axis=1)
+
+    # z 方向（3D）
+    if 'z' in coords and p_field.ndim >= 3:
+        dz = coords['z'][1] - coords['z'][0] if len(coords['z']) > 1 else 1.0
+        grad['dpdz'] = np.gradient(p_field, dz, axis=2)
+
+    return grad
 
 
 def reconstruction_quality(pred: torch.Tensor, ref: torch.Tensor, 
@@ -604,7 +741,252 @@ def comprehensive_evaluation(predictions: torch.Tensor, references: torch.Tensor
     field_stats = field_statistics(predictions)
     results.update({f'pred_{k}': v for k, v in field_stats.items()})
     
-    ref_stats = field_statistics(references) 
+    ref_stats = field_statistics(references)
     results.update({f'ref_{k}': v for k, v in ref_stats.items()})
-    
+
+    return results
+
+
+# ==============================================================================
+# 2D 流場專屬指標（Kolmogorov Flow）
+# ==============================================================================
+
+def compute_vorticity_2d(
+    u: torch.Tensor,
+    v: torch.Tensor,
+    coords: torch.Tensor,
+    method: str = 'finite_difference'
+) -> torch.Tensor:
+    """
+    計算 2D 渦度：ω = ∂v/∂x - ∂u/∂y
+
+    Args:
+        u: x 方向速度 [N]
+        v: y 方向速度 [N]
+        coords: 座標 [N, 2] = [x, y]
+        method: 計算方法 ('finite_difference' | 'autograd')
+
+    Returns:
+        vorticity: 渦度場 [N]
+
+    Note:
+        - finite_difference: 使用中心差分（需規則網格）
+        - autograd: 使用自動微分（適用於不規則網格，但需 requires_grad）
+    """
+    if method == 'finite_difference':
+        # 假設規則網格，使用 numpy 進行中心差分
+        # 此處簡化實現，實際應根據網格結構調整
+        x = coords[:, 0].detach().cpu().numpy()
+        y = coords[:, 1].detach().cpu().numpy()
+
+        # 重塑為 2D 網格（假設排列為 [N_x, N_y]）
+        N = int(np.sqrt(len(x)))
+        if N * N != len(x):
+            raise ValueError(f"座標數量 {len(x)} 不是完全平方數，無法使用有限差分")
+
+        u_2d = u.detach().cpu().numpy().reshape(N, N)
+        v_2d = v.detach().cpu().numpy().reshape(N, N)
+
+        # 計算梯度（中心差分）
+        dv_dx = np.gradient(v_2d, axis=0)
+        du_dy = np.gradient(u_2d, axis=1)
+
+        vorticity = (dv_dx - du_dy).flatten()
+        return torch.tensor(vorticity, device=u.device, dtype=u.dtype)
+
+    elif method == 'autograd':
+        # 使用 PyTorch autograd（需要 coords.requires_grad=True）
+        if not coords.requires_grad:
+            coords = coords.clone().requires_grad_(True)
+
+        # 計算 ∂v/∂x
+        grad_v = torch.autograd.grad(
+            outputs=v.sum(),
+            inputs=coords,
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+        dv_dx = grad_v[:, 0]
+
+        # 計算 ∂u/∂y
+        grad_u = torch.autograd.grad(
+            outputs=u.sum(),
+            inputs=coords,
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+        du_dy = grad_u[:, 1]
+
+        vorticity = dv_dx - du_dy
+        return vorticity
+
+    else:
+        raise ValueError(f"未知的計算方法: {method}")
+
+
+def compute_enstrophy_2d(
+    u: torch.Tensor,
+    v: torch.Tensor,
+    coords: torch.Tensor
+) -> float:
+    """
+    計算 2D enstrophy：E = ⟨ω²⟩ = (1/A) ∫ω² dA
+
+    物理意義：渦度的平方積分，表徵湍流的旋轉強度。
+
+    Args:
+        u: x 方向速度 [N]
+        v: y 方向速度 [N]
+        coords: 座標 [N, 2]
+
+    Returns:
+        enstrophy: 標量值
+    """
+    vorticity = compute_vorticity_2d(u, v, coords)
+    enstrophy = torch.mean(vorticity ** 2).item()
+    return enstrophy
+
+
+def compute_kinetic_energy_2d(
+    u: torch.Tensor,
+    v: torch.Tensor
+) -> float:
+    """
+    計算 2D 動能：KE = ⟨u² + v²⟩ / 2
+
+    Args:
+        u: x 方向速度 [N]
+        v: y 方向速度 [N]
+
+    Returns:
+        kinetic_energy: 標量值
+    """
+    kinetic_energy = 0.5 * torch.mean(u**2 + v**2).item()
+    return kinetic_energy
+
+
+def vorticity_statistics_2d(
+    u: torch.Tensor,
+    v: torch.Tensor,
+    coords: torch.Tensor
+) -> Dict[str, float]:
+    """
+    計算 2D 渦度場的統計量
+
+    Args:
+        u: x 方向速度 [N]
+        v: y 方向速度 [N]
+        coords: 座標 [N, 2]
+
+    Returns:
+        統計量字典：
+            - 'vorticity_mean': 平均渦度
+            - 'vorticity_std': 渦度標準差
+            - 'vorticity_max': 最大渦度
+            - 'vorticity_min': 最小渦度
+            - 'enstrophy': Enstrophy
+            - 'kinetic_energy': 動能
+    """
+    vorticity = compute_vorticity_2d(u, v, coords)
+
+    stats = {
+        'vorticity_mean': torch.mean(vorticity).item(),
+        'vorticity_std': torch.std(vorticity).item(),
+        'vorticity_max': torch.max(vorticity).item(),
+        'vorticity_min': torch.min(vorticity).item(),
+        'enstrophy': torch.mean(vorticity ** 2).item(),
+        'kinetic_energy': compute_kinetic_energy_2d(u, v),
+    }
+
+    return stats
+
+
+def compare_vorticity_fields(
+    u_pred: torch.Tensor,
+    v_pred: torch.Tensor,
+    u_ref: torch.Tensor,
+    v_ref: torch.Tensor,
+    coords: torch.Tensor
+) -> Dict[str, float]:
+    """
+    比較預測與參考的渦度場
+
+    Args:
+        u_pred, v_pred: 預測速度場 [N]
+        u_ref, v_ref: 參考速度場 [N]
+        coords: 座標 [N, 2]
+
+    Returns:
+        比較指標字典：
+            - 'vorticity_l2_error': 渦度 L2 誤差
+            - 'vorticity_relative_l2': 渦度相對 L2 誤差
+            - 'enstrophy_error': Enstrophy 誤差
+            - 'enstrophy_relative_error': Enstrophy 相對誤差
+    """
+    # 計算渦度
+    omega_pred = compute_vorticity_2d(u_pred, v_pred, coords)
+    omega_ref = compute_vorticity_2d(u_ref, v_ref, coords)
+
+    # L2 誤差
+    l2_error = torch.norm(omega_pred - omega_ref).item()
+    l2_relative = relative_L2(omega_pred.unsqueeze(1), omega_ref.unsqueeze(1)).item()
+
+    # Enstrophy 誤差
+    enstrophy_pred = torch.mean(omega_pred ** 2).item()
+    enstrophy_ref = torch.mean(omega_ref ** 2).item()
+    enstrophy_error = abs(enstrophy_pred - enstrophy_ref)
+    enstrophy_relative = enstrophy_error / (enstrophy_ref + 1e-12)
+
+    return {
+        'vorticity_l2_error': l2_error,
+        'vorticity_relative_l2': l2_relative,
+        'enstrophy_error': enstrophy_error,
+        'enstrophy_relative_error': enstrophy_relative,
+        'enstrophy_pred': enstrophy_pred,
+        'enstrophy_ref': enstrophy_ref,
+    }
+
+
+def kolmogorov_flow_metrics(
+    predictions: torch.Tensor,
+    references: torch.Tensor,
+    coords: torch.Tensor
+) -> Dict[str, float]:
+    """
+    Kolmogorov flow 專屬綜合評估指標
+
+    Args:
+        predictions: 預測結果 [N, 3] = [u, v, p]
+        references: 參考解 [N, 3] = [u, v, p]
+        coords: 座標 [N, 2] = [x, y]
+
+    Returns:
+        完整評估指標字典
+    """
+    results = {}
+
+    # 基本精度指標
+    results.update(rmse_metrics(predictions, references))
+    results['relative_l2'] = relative_L2(predictions, references).item()
+
+    # 分解速度與壓力
+    u_pred, v_pred, p_pred = predictions[:, 0], predictions[:, 1], predictions[:, 2]
+    u_ref, v_ref, p_ref = references[:, 0], references[:, 1], references[:, 2]
+
+    # 渦度統計（預測）
+    vorticity_stats_pred = vorticity_statistics_2d(u_pred, v_pred, coords)
+    results.update({f'pred_{k}': v for k, v in vorticity_stats_pred.items()})
+
+    # 渦度統計（參考）
+    vorticity_stats_ref = vorticity_statistics_2d(u_ref, v_ref, coords)
+    results.update({f'ref_{k}': v for k, v in vorticity_stats_ref.items()})
+
+    # 渦度場比較
+    vorticity_comparison = compare_vorticity_fields(u_pred, v_pred, u_ref, v_ref, coords)
+    results.update(vorticity_comparison)
+
+    # 散度誤差（不可壓縮性檢查）
+    mass_error = conservation_error(u_pred, v_pred, coords)
+    results['divergence_error'] = mass_error
+
     return results

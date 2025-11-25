@@ -54,7 +54,7 @@ class TestLoadConfig:
         assert result['loss']['data_weight'] == 20.0
     
     def test_load_nested_fourier_config(self, tmp_path):
-        """測試載入嵌套 Fourier 配置（應自動標準化）"""
+        """舊版嵌套 Fourier 配置應立即拒絕"""
         config_dict = {
             'model': {
                 'fourier': {
@@ -70,13 +70,8 @@ class TestLoadConfig:
         with open(config_file, 'w') as f:
             yaml.dump(config_dict, f)
         
-        result = load_config(str(config_file))
-        
-        # 驗證嵌套格式已轉換為扁平格式
-        assert result['model']['use_fourier'] is True
-        assert result['model']['fourier_m'] == 128
-        assert result['model']['fourier_sigma'] == 2.0
-        assert result['model']['fourier_trainable'] is True
+        with pytest.raises(ValueError, match="model.fourier"):
+            load_config(str(config_file))
     
     def test_load_nonexistent_file(self):
         """測試載入不存在的檔案（應拋出 FileNotFoundError）"""
@@ -109,7 +104,7 @@ class TestNormalizeConfigStructure:
     """測試配置結構標準化"""
     
     def test_normalize_nested_fourier_to_flat(self):
-        """測試嵌套 Fourier 格式轉扁平格式"""
+        """舊版嵌套 Fourier 應觸發錯誤"""
         config = {
             'model': {
                 'fourier': {
@@ -121,23 +116,15 @@ class TestNormalizeConfigStructure:
             }
         }
         
-        result = normalize_config_structure(config)
-        
-        assert result['model']['use_fourier'] is False
-        assert result['model']['fourier_m'] == 256
-        assert result['model']['fourier_sigma'] == 5.0
-        assert result['model']['fourier_trainable'] is True
+        with pytest.raises(ValueError, match="model.fourier"):
+            normalize_config_structure(config)
     
     def test_normalize_preserves_flat_format(self):
         """測試扁平格式不被覆蓋"""
         config = {
             'model': {
                 'use_fourier': True,
-                'fourier_m': 64,
-                'fourier': {
-                    'enabled': False,  # 應被忽略
-                    'm': 999  # 應被忽略
-                }
+                'fourier_m': 64
             }
         }
         
@@ -334,9 +321,10 @@ class TestIntegration:
         """測試完整配置載入→標準化→權重推導流程"""
         config_dict = {
             'model': {
-                'fourier': {  # 嵌套格式
-                    'enabled': True,
-                    'm': 128,
+                'fourier_features': {
+                    'type': 'standard',
+                    'fourier_m': 128,
+                    'fourier_sigma': 2.0
                 }
             },
             'physics': {

@@ -1,0 +1,217 @@
+# ============================================================================
+# Kolmogorov Flow 2D - 週期性邊界條件測試配置
+# ============================================================================
+# 用途：快速驗證週期性損失計算是否正確實現
+# 測試目標：
+#   1. 確認 trainer.py 正確調用 compute_periodic_loss()
+#   2. 驗證週期性損失項在訓練過程中被優化
+#   3. 檢查邊界處的連續性誤差
+# 預期時間：5-10 分鐘（100 epochs）
+# ============================================================================
+
+experiment:
+  name: "kolmogorov_2d_test_periodic"
+  description: "Test periodic boundary loss implementation (100 epochs)"
+  tags: ["kolmogorov", "2d", "test", "periodic", "re60"]
+  seed: 42
+
+# ============================================================================
+# 重現性設定
+# ============================================================================
+reproducibility:
+  deterministic: false          # MPS 不支援完全確定性
+  benchmark: true               # 啟用 benchmark 以加速
+  num_workers: 4
+
+# ============================================================================
+# 物理參數（Re=60, k_f=4）
+# ============================================================================
+physics:
+  type: "kolmogorov_flow_2d"
+
+  # 強迫參數（根據 F0 = Re × ν² × k³）
+  forcing:
+    amplitude: 1.536              # F0 = 60 × 0.02² × 4³
+    wavenumber: 4
+
+  # 流體參數
+  nu: 0.02
+  rho: 1.0
+
+  # 域範圍（Lx/Ly = 2）
+  domain:
+    x_min: 0.0
+    x_max: 12.566370614359172     # 4π
+    y_min: 0.0
+    y_max: 6.283185307179586      # 2π
+
+  # 邊界條件（週期性）
+  boundary_conditions:
+    type: "double_periodic"
+    boundary_band_width: 0.02     # 略寬以捕捉更多邊界點
+
+  # 初始擾動
+  initial_perturbation:
+    enabled: true
+    amplitude: 0.03
+    seed: 42
+
+# ============================================================================
+# 網路架構（5 層 × 256）
+# ============================================================================
+model:
+  type: "fourier_mlp"
+
+  input_dim: 2
+  output_dim: 3
+  hidden_layers: [256, 256, 256, 256, 256]
+
+  # Fourier feature
+  fourier_features:
+    enabled: true
+    n_features: 512
+    sigma: 20.0
+
+  activation: "sine"
+  initialization: "siren"
+  omega_0: 30.0
+
+# ============================================================================
+# 訓練資料
+# ============================================================================
+data:
+  source: "none"
+  file: null
+
+  n_sensors: 0
+  sensor_selection: null
+  sensor_noise: 0.0
+
+  # 配置點
+  n_collocation: 10000            # 快速測試用較少點
+  sampling_strategy: "uniform"
+
+  # 邊界點（重要！用於週期性損失）
+  n_boundary: 2000                # 足夠的邊界點以準確評估週期性
+  boundary_sampling: "uniform"
+
+  steady_state: true
+  time_snapshot: null
+
+# ============================================================================
+# 感測點配置（純 PDE 訓練，無資料監督）
+# ============================================================================
+sensors:
+  K: 0                            # 無感測點
+  selection_method: "none"
+  noise_level: 0.0
+
+# ============================================================================
+# 損失函數配置
+# ============================================================================
+losses:
+  weights:
+    data: 0.0
+    momentum_x: 1.0
+    momentum_y: 1.0
+    continuity: 1.0
+    periodic_x: 1.0               # ⭐ 與 PDE 同量級
+    periodic_y: 1.0
+
+  # 損失歸一化
+  normalize_losses: true
+  warmup_epochs: 10               # 測試用較短 warmup
+
+  # 自適應權重
+  adaptive_weighting:
+    enabled: true
+    method: "gradnorm"
+    alpha: 1.5
+    update_interval: 20           # 更頻繁更新以觀察動態
+
+# ============================================================================
+# 訓練配置（快速測試）
+# ============================================================================
+training:
+  n_epochs: 100                   # ⭐ 快速測試：100 epochs
+  batch_size: 10000
+
+  # 學習率策略（單階段）
+  optimizer:
+    phase1:
+      type: "adam"
+      lr: 1.0e-3
+      epochs: 100
+
+  early_stopping:
+    enabled: false
+    patience: 50
+    min_delta: 1.0e-6
+
+  checkpoint:
+    save_interval: 50
+    save_best: true
+
+  validation:
+    enabled: false                # 測試時禁用驗證以加快速度
+    interval: 50
+    n_points: 1000
+
+# ============================================================================
+# 評估配置（基礎診斷）
+# ============================================================================
+evaluation:
+  metrics:
+    - "vorticity"
+    - "enstrophy"
+    - "kinetic_energy"
+    - "divergence_error"
+
+  visualization:
+    enabled: true
+    fields: ["u", "v", "p", "vorticity"]
+    save_format: "png"
+    high_resolution: false        # 測試時使用低解析度
+
+  # 湍流統計診斷（簡化）
+  turbulence_diagnostics:
+    enabled: false                # 測試時禁用完整診斷
+
+  # 統計分析
+  statistical_analysis:
+    enabled: false
+
+# ============================================================================
+# 輸出配置
+# ============================================================================
+output:
+  checkpoint_dir: "checkpoints/kolmogorov_2d_test_periodic"
+  result_dir: "results/kolmogorov_2d_test_periodic"
+  log_dir: "log/kolmogorov_2d_test_periodic"
+
+  # 保存完整場數據
+  save_full_fields: true
+  field_resolution: [128, 64]     # 測試用較低解析度
+
+# ============================================================================
+# 日誌配置
+# ============================================================================
+logging:
+  level: "INFO"
+  print_interval: 10              # 每 10 epoch 打印一次
+
+# ============================================================================
+# 計算資源
+# ============================================================================
+compute:
+  device: "auto"                # 自動選擇 CUDA > MPS > CPU
+  dtype: "float32"
+  num_workers: 4
+  seed: 42
+
+# ============================================================================
+# 可重現性設定
+# ============================================================================
+reproducibility:
+  deterministic: false           # MPS 不支援完全確定性
+  benchmark: true

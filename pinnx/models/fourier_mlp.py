@@ -581,7 +581,6 @@ def create_pinn_model(config: dict) -> nn.Module:
 
     支援的模型類型：
     - 'fourier_vs_mlp': 統一的 Fourier-VS 架構
-    - 'standard': 別名，指向 fourier_vs_mlp（向後兼容）
 
     Args:
         config: 模型配置字典，必須包含：
@@ -618,8 +617,7 @@ def create_pinn_model(config: dict) -> nn.Module:
     """
     model_type = config.get('type', 'fourier_vs_mlp')
 
-    # 向後兼容：支援 'standard' 別名
-    if model_type in ('fourier_vs_mlp', 'standard'):
+    if model_type == 'fourier_vs_mlp':
         # 處理 VS-PINN 縮放因子
         input_scale_factors = None
         if 'input_scale_factors' in config:
@@ -653,7 +651,7 @@ def create_pinn_model(config: dict) -> nn.Module:
     else:
         raise ValueError(
             f"不支援的模型類型: {model_type}\n"
-            f"支援的類型: 'fourier_vs_mlp', 'standard' (向後兼容)\n"
+            f"支援的類型: 'fourier_vs_mlp'\n"
             f"注意: \n"
             f"  - 'multiscale' 已移除，請使用 fourier_vs_mlp + fourier_multiscale=True\n"
             f"  - 'enhanced_fourier_mlp' 已移除，請使用 'fourier_vs_mlp'"
@@ -770,35 +768,28 @@ if __name__ == "__main__":
     print(f"2️⃣  增強模型: {model_enhanced}")
     print(f"   參數總數: {model_enhanced.get_num_params():,}\n")
 
-    # 測試 3: 向後兼容（舊名稱 'standard'）
-    config_legacy = config_basic.copy()
-    config_legacy['type'] = 'standard'
-    model_legacy = create_pinn_model(config_legacy)
-    print(f"3️⃣  向後兼容測試 (type='standard'): ✅")
-    print(f"   模型類型: {type(model_legacy).__name__}\n")
-
-    # 測試 4: 前向傳播
+    # 測試 3: 前向傳播
     x = torch.randn(100, 3)
     with torch.no_grad():
         y_basic = model_basic(x)
         y_enhanced = model_enhanced(x)
-    print(f"4️⃣  前向傳播測試:")
+    print(f"3️⃣  前向傳播測試:")
     print(f"   輸入形狀: {x.shape}")
     print(f"   基礎模型輸出: {y_basic.shape}")
     print(f"   增強模型輸出: {y_enhanced.shape}\n")
 
-    # 測試 5: 梯度計算（PINNs 關鍵）
+    # 測試 4: 梯度計算（PINNs 關鍵）
     x_grad = torch.randn(50, 3, requires_grad=True)
     y_grad = model_basic(x_grad)
     u = y_grad[:, 0]
     du_dx = torch.autograd.grad(u.sum(), x_grad, create_graph=True)[0][:, 0]
-    print(f"5️⃣  梯度計算測試:")
+    print(f"4️⃣  梯度計算測試:")
     print(f"   ∂u/∂x 形狀: {du_dx.shape}")
     print(f"   ∂u/∂x 範圍: [{du_dx.min():.4f}, {du_dx.max():.4f}]\n")
 
-    # 測試 6: 模型摘要
+    # 測試 5: 模型摘要
     summary = model_enhanced.get_model_summary()
-    print(f"6️⃣  模型摘要:")
+    print(f"5️⃣  模型摘要:")
     for key, value in summary.items():
         print(f"   {key:20s}: {value}")
 

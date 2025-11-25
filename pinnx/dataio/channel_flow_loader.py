@@ -373,10 +373,17 @@ class ChannelFlowLoader:
             if interpolate_to_sensors and prior_type != 'mock':
                 prior_fields = self.interpolator.interpolate_to_points(
                     lowfi_data,
-                    channel_data.sensor_points
+                    channel_data.sensor_points,
+                    quality_check=False
                 )
             else:
                 prior_fields = lowfi_data.fields
+
+            # 過濾非場資料（如品質指標）
+            prior_fields = {
+                key: value for key, value in prior_fields.items()
+                if not key.startswith('_')
+            }
 
             prior_samples = PointSamples(
                 coordinates=channel_data.sensor_points,

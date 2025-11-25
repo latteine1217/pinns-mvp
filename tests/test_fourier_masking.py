@@ -6,7 +6,7 @@ AxisSelectiveFourierFeatures 掩碼機制單元測試
 2. 頻率退火時維度穩定性
 3. 掩碼更新正確性（置零未啟用頻率）
 4. 無效頻率驗證（嘗試啟用未在 full_axes_config 中的頻率）
-5. 向後相容性（未提供 full_axes_config 時的行為）
+5. 缺少完整配置時的錯誤處理
 6. 梯度流動正確性
 7. 與訓練器整合（模擬退火場景）
 
@@ -201,37 +201,12 @@ class TestMaskingMechanism:
         fourier.set_active_frequencies(valid_config)  # 不應拋出異常
         assert fourier.axes_config == valid_config
     
-    def test_masking_backward_compatibility(self):
-        """測試向後相容性（未提供 full_axes_config）"""
+    def test_missing_full_axes_config_raises(self):
+        """缺少 full_axes_config 時應拒絕初始化"""
         config = {'x': [1, 2, 4], 'y': [], 'z': [1, 2]}
-        
-        # 未提供 full_axes_config（舊版使用方式）
-        fourier = AxisSelectiveFourierFeatures(axes_config=config)
-        
-        # full_axes_config 應自動設為 axes_config
-        assert fourier._full_axes_config == config
-        assert fourier.axes_config == config
-        
-        # 輸出維度應基於配置
-        assert fourier.out_dim == 10  # 2 * (3 + 0 + 2) = 10
-        
-        # 掩碼應全為 1（所有頻率啟用）
-        expected_mask = torch.ones(5)  # 5 個頻率
-        torch.testing.assert_close(fourier._frequency_mask, expected_mask)
-        
-        # 測試前向傳播
-        x = torch.randn(5, 3)
-        features = fourier(x)
-        assert features.shape == (5, 10)
-        
-        # 測試退火行為（應允許在原配置範圍內更新）
-        reduced_config = {'x': [1, 2], 'y': [], 'z': [1]}
-        fourier.set_active_frequencies(reduced_config)
-        
-        # 維度應改變（舊版行為：重建矩陣）
-        # 🔧 等等，這裡有問題：Phase 2 後不應重建矩陣
-        # 向後相容模式下，維度應保持不變（基於 full_axes_config）
-        assert fourier.out_dim == 10  # 維度不變 ✅
+
+        with pytest.raises(ValueError, match="full_axes_config"):
+            AxisSelectiveFourierFeatures(axes_config=config)
 
 
 class TestGradientFlow:

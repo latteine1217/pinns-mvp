@@ -1,0 +1,184 @@
+# ============================================================================
+# Kolmogorov Flow 2D - Re=30 快速測試版本（10-15 分鐘）
+# ============================================================================
+# 用途：快速驗證物理合理性與訓練穩定性
+# 優化：減少網路大小、配置點數、訓練輪數
+# 目標：在 10-15 分鐘內看到初步結果
+# ============================================================================
+
+experiment:
+  name: "kolmogorov_2d_chaos_re30_quick"
+  description: "Quick test of Re=30 spatiotemporal chaos (10-15 min)"
+  tags: ["kolmogorov", "2d", "chaos", "re30", "quick_test"]
+  seed: 42
+
+# ============================================================================
+# 重現性設定
+# ============================================================================
+reproducibility:
+  deterministic: false          # MPS 不支援完全確定性
+  benchmark: true               # 啟用 benchmark 以加速
+  num_workers: 4
+
+# ============================================================================
+# 物理參數（與完整版相同）
+# ============================================================================
+physics:
+  type: "kolmogorov_flow_2d"
+
+  forcing:
+    amplitude: 0.768              # F0 = 30 × 0.02² × 4³
+    wavenumber: 4
+
+  nu: 0.02
+  rho: 1.0
+
+  # 域範圍（4π × 2π）
+  domain:
+    x_min: 0.0
+    x_max: 12.566370614359172     # 4π
+    y_min: 0.0
+    y_max: 6.283185307179586      # 2π
+
+  boundary_conditions:
+    type: "double_periodic"
+    boundary_band_width: 0.015
+
+  initial_perturbation:
+    enabled: true
+    amplitude: 0.02
+    seed: 42
+
+# ============================================================================
+# 網路架構（簡化）
+# ============================================================================
+model:
+  type: "fourier_mlp"
+
+  input_dim: 2
+  output_dim: 3
+  hidden_layers: [256, 256, 256, 256]  # 4 層 × 256（減少至原來的 2/3）
+
+  # Fourier feature（減少）
+  fourier_features:
+    enabled: true
+    n_features: 256               # 維持 256
+    sigma: 20.0
+
+  activation: "sine"
+  initialization: "xavier"
+
+# ============================================================================
+# 訓練資料（減少配置點）
+# ============================================================================
+data:
+  source: "none"
+  file: null
+
+  n_sensors: 0
+  sensor_selection: null
+  sensor_noise: 0.0
+
+  # 配置點（減半）
+  n_collocation: 5000             # 從 10000 降至 5000
+  sampling_strategy: "uniform"
+
+  # 邊界點（減半）
+  n_boundary: 500                 # 從 1000 降至 500
+  boundary_sampling: "uniform"
+
+  steady_state: true
+  time_snapshot: null
+
+# ============================================================================
+# 感測點配置（純 PDE 訓練，無監督資料）
+# ============================================================================
+sensors:
+  K: 0                          # 純 PDE 訓練無感測點
+  selection_method: "none"
+  noise_level: 0.0
+
+# ============================================================================
+# 損失函數配置
+# ============================================================================
+losses:
+  weights:
+    data: 0.0
+    momentum_x: 1.0
+    momentum_y: 1.0
+    continuity: 1.0
+    periodic_x: 10.0
+    periodic_y: 10.0
+
+  normalize_losses: true
+  warmup_epochs: 10               # 減少 warmup
+
+  adaptive_weighting:
+    enabled: true
+    method: "gradnorm"
+    alpha: 1.5
+    update_interval: 50
+
+# ============================================================================
+# 訓練配置（快速測試）
+# ============================================================================
+training:
+  n_epochs: 500                   # 從 2000 降至 500
+  batch_size: 5000
+
+  # 單階段學習率
+  optimizer:
+    phase1:
+      type: "adam"
+      lr: 1.0e-3
+      epochs: 500
+
+  early_stopping:
+    enabled: false
+    patience: 100
+    min_delta: 1.0e-6
+
+  checkpoint:
+    save_interval: 100            # 每 100 epochs 保存
+    save_best: true
+
+  validation:
+    enabled: true
+    interval: 50
+    n_points: 1000
+
+# ============================================================================
+# 評估配置
+# ============================================================================
+evaluation:
+  metrics:
+    - "vorticity"
+    - "enstrophy"
+    - "kinetic_energy"
+    - "divergence_error"
+
+  visualization:
+    enabled: true
+    fields: ["u", "v", "p", "vorticity", "streamlines"]
+    save_format: "png"
+
+# ============================================================================
+# 輸出配置
+# ============================================================================
+output:
+  checkpoint_dir: "checkpoints/kolmogorov_2d_chaos_re30_quick"
+  result_dir: "results/kolmogorov_2d_chaos_re30_quick"
+  log_dir: "log/kolmogorov_2d_chaos_re30_quick"
+
+  logging:
+    level: "INFO"
+    print_interval: 50
+
+# ============================================================================
+# 計算資源
+# ============================================================================
+compute:
+  device: "auto"                # 自動選擇 CUDA > MPS > CPU
+  dtype: "float32"
+  num_workers: 4
+  seed: 42

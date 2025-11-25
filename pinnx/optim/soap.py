@@ -357,11 +357,7 @@ class SOAP(optim.Optimizer):
             if len(m) == 0:
                 final.append([])
                 continue
-            try:
-                _, Q = torch.linalg.eigh(m+1e-30*torch.eye(m.shape[0], device=m.device))
-            except:
-                _, Q = torch.linalg.eigh(m.to(torch.float64)+1e-30*torch.eye(m.shape[0], device=m.device))
-                Q = Q.to(m.dtype)
+            _, Q = torch.linalg.eigh(m+1e-30*torch.eye(m.shape[0], device=m.device))
             Q = torch.flip(Q, [1])
 
             if not float_data:
@@ -414,6 +410,7 @@ class SOAP(optim.Optimizer):
             exp_avg_sq = exp_avg_sq.index_select(ind, sort_idx)
             o = o[:,sort_idx]
             power_iter = m @ o
+            
             Q, _ = torch.linalg.qr(power_iter)
 
             if not float_data:

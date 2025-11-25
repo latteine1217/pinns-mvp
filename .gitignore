@@ -67,3 +67,22 @@ deprecated/
 
 # 環境變數（包含敏感憑證）
 .env
+
+# Cache files
+.cache/
+.mplcache/
+__pycache__/
+*.pyc
+
+# Log files
+log/
+*.log
+
+# Process IDs
+*.pid
+
+# macOS
+.DS_Store
+
+# OpenCode
+.opencode/

@@ -834,11 +834,48 @@ def create_physics(config: Dict[str, Any], device: torch.device):
             density=physics_cfg.get('rho', 1.0)
         )
         logging.info("✅ 使用標準 NS 2D 求解器")
-    
+
+    elif physics_type == 'kolmogorov_flow_2d':
+        # === Kolmogorov Flow 2D 求解器 ===
+        from pinnx.physics.kolmogorov_flow_2d import KolmogorovFlow2D
+
+        # 強迫參數
+        forcing_cfg = physics_cfg.get('forcing', {})
+        forcing_params = {
+            'amplitude': forcing_cfg.get('amplitude', 1.0),
+            'wavenumber': forcing_cfg.get('wavenumber', 4),
+        }
+
+        # 物理參數
+        physics_params = {
+            'nu': physics_cfg.get('nu', 0.01),
+            'rho': physics_cfg.get('rho', 1.0),
+        }
+
+        # 域範圍
+        domain_cfg = physics_cfg.get('domain', {})
+        domain_bounds = {
+            'x': (domain_cfg.get('x_min', 0.0), domain_cfg.get('x_max', 2*3.14159)),
+            'y': (domain_cfg.get('y_min', 0.0), domain_cfg.get('y_max', 2*3.14159)),
+        }
+
+        # 損失配置（用於歸一化）
+        loss_cfg = config.get('loss', {})
+
+        physics = KolmogorovFlow2D(
+            forcing_params=forcing_params,
+            physics_params=physics_params,
+            domain_bounds=domain_bounds,
+            loss_config=loss_cfg
+        )
+        logging.info("✅ 使用 Kolmogorov Flow 2D 求解器")
+        logging.info(f"   強迫參數: A={forcing_params['amplitude']:.3f}, k_f={forcing_params['wavenumber']}")
+        logging.info(f"   物理參數: ν={physics_params['nu']:.2e}, ρ={physics_params['rho']:.1f}")
+
     else:
         raise ValueError(
             f"Unsupported physics type: '{physics_type}'. "
-            f"Supported types: 'vs_pinn_channel_flow', 'ns_2d'"
+            f"Supported types: 'vs_pinn_channel_flow', 'ns_2d', 'kolmogorov_flow_2d'"
         )
     
     # 移至目標設備（僅對 nn.Module 子類有效）

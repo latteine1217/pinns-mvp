@@ -526,12 +526,25 @@ class SpatialInterpolator:
     def _regular_grid_interpolation(self, lowfi_data: LowFiData, 
                                   target_points: np.ndarray) -> Dict[str, np.ndarray]:
         """規則網格插值 - 增強版本"""
-        # 構建座標網格
-        spatial_coords = [lowfi_data.coordinates[k] for k in ['x', 'y'] 
-                         if k in lowfi_data.coordinates]
+        # 構建座標網格（支援 2D/3D）
+        axis_priority = ['x', 'y', 'z']
+        spatial_axes = [axis for axis in axis_priority if axis in lowfi_data.coordinates]
+        # 附加其他空間軸（排除時間維度）
+        spatial_axes.extend([
+            axis for axis in lowfi_data.coordinates.keys()
+            if axis not in spatial_axes and axis != 't'
+        ])
+        
+        if not spatial_axes:
+            raise ValueError("Low-fidelity data does not contain spatial coordinates suitable for interpolation")
+        
+        spatial_coords = [np.asarray(lowfi_data.coordinates[axis]) for axis in spatial_axes]
         
         if len(spatial_coords) != target_points.shape[1]:
-            raise ValueError("Coordinate dimensions mismatch")
+            raise ValueError(
+                f"Coordinate dimensions mismatch: low-fi axes {spatial_axes} "
+                f"expect {len(spatial_coords)}-D points but received shape {target_points.shape}"
+            )
         
         interpolated_fields = {}
         
@@ -1068,11 +1081,14 @@ class LowFiLoader:
         if HAS_NETCDF:
             self.base_readers.append(NetCDFReader())
         
-        # 總是添加HDF5和NPZ讀取器
-        self.base_readers.extend([
-            HDF5Reader(),
-            NPZReader()
-        ])
+        # 條件式添加 HDF5 讀取器
+        if HAS_HDF5:
+            self.base_readers.append(HDF5Reader())
+        else:
+            logging.warning("h5py not available. HDF5 file support will be disabled.")
+        
+        # NPZ 讀取器總是可用
+        self.base_readers.append(NPZReader())
         self.interpolator = SpatialInterpolator()
         self.dns_processor = DownsampledDNSProcessor()
     
@@ -1181,10 +1197,17 @@ class LowFiLoader:
             fields = list(lowfi_data.fields.keys())
         
         # 插值到目標點
-        interpolated = self.interpolator.interpolate_to_points(lowfi_data, target_points)
+        interpolated = self.interpolator.interpolate_to_points(
+            lowfi_data,
+            target_points,
+            quality_check=False
+        )
         
         # 只返回需要的場
-        return {k: v for k, v in interpolated.items() if k in fields}
+        return {
+            k: v for k, v in interpolated.items()
+            if k in fields and not k.startswith('_')
+        }
     
     def downsample_dns(self, hifi_data: LowFiData, 
                       factor: Union[int, Tuple[int, ...]] = 4,

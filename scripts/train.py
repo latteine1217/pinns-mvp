@@ -491,6 +491,11 @@ def prepare_training_data(config: Dict[str, Any], device: torch.device, config_p
     jhtdb_enabled = config.get('data', {}).get('jhtdb_config', {}).get('enabled', False)
     channel_flow_enabled = 'channel_flow' in config and config['channel_flow'].get('enabled', False)
     
+    kolmogorov_enabled = config.get('data', {}).get('kolmogorov_config', {}).get('enabled', False)
+    
+    if kolmogorov_enabled:
+        return prepare_kolmogorov_training_data(config, device)
+    
     if jhtdb_enabled or channel_flow_enabled:
         return prepare_channel_flow_training_data(config, device, config_path)
     else:

@@ -1,0 +1,220 @@
+experiment:
+  name: kolmogorov_re100_kf8_K50_t20_2k_adam
+  version: v2.0
+  seed: 42
+  device: mps
+  precision: float32
+  description: Adam optimizer with 5x256 network for Kolmogorov flow Re=100 with K=50 DEIM sensors
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+data:
+  source: kolmogorov_dns
+  dataset: re100_kf8
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns_re100_512x512_kf8_midway.h5
+    description: Kolmogorov flow (Re=100, k_f=8, 2D periodic)
+    domain:
+      x:
+      - 0.0
+      - 6.283185307179586
+      y:
+      - 0.0
+      - 6.283185307179586
+    resolution:
+      x: 512
+      y: 512
+    time_range:
+    - 15.0
+    - 20.0
+    dt: 0.05
+    variables:
+    - u
+    - v
+    - p
+    physics_params:
+      Re: 100
+      nu: 0.01
+      k_f: 8
+      forcing_amplitude: 1.0
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+normalization:
+  type: training_data_norm
+  params: {}
+  noise_sigma: 0.01
+  dropout_prob: 0.05
+  steady_state:
+    enabled: true
+    time_window:
+    - 15.0
+    - 20.0
+sensors:
+  K: 50
+  selection_method: precomputed
+  sensor_file: ./data/jhtdb/sensors_kf8_deim_K50.npz
+  quality_metrics:
+    condition_number: 334.48
+    energy_ratio: 1.0
+    min_distance: 0.0123
+model:
+  type: fourier_mlp
+  in_dim: 2
+  out_dim: 3
+  width: 256
+  depth: 5
+  activation: sine
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 64
+    fourier_sigma: 8.0
+    include_input: true
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.01
+  rho: 1.0
+  forcing:
+    k_f: 8
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 100
+    k_f: 8
+    forcing_amplitude: 1.0
+  domain:
+    x_range:
+    - 0.0
+    - 6.283185307179586
+    y_range:
+    - 0.0
+    - 6.283185307179586
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+losses:
+  data_weight: 100.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  periodicity_weight: 10.0
+  l2_regularization: 1.0e-06
+  gradient_penalty: 1.0e-05
+  normalize_losses: true
+  normalization_method: gradnorm
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 50
+  adaptation_alpha: 0.1
+  prior_weight: 0.0
+training:
+  optimizer:
+    type: adam
+    lr: 0.001
+    weight_decay: 1.0e-05
+    betas: [0.9, 0.999]
+    eps: 1.0e-08
+  lr: 0.001
+  weight_decay: 1.0e-05
+  lr_scheduler:
+    type: cosine_annealing
+    T_max: 2000
+    eta_min: 1.0e-06
+  epochs: 2000
+  max_epochs: 2000
+  batch_size: 512
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+  early_stopping:
+    enabled: false
+    patience: 300
+    min_delta: 1.0e-06
+  sampling:
+    pde_points: 20000
+    adaptive_sampling: false
+    boundary_points: 400
+  gradient_clip: 1.0
+  amp:
+    enabled: false
+optimizer_switching:
+  enabled: true
+  switch_epoch: 1600
+  lbfgs_config:
+    lr: 0.5
+    max_iter: 20
+    history_size: 50
+    line_search_fn: strong_wolfe
+curriculum:
+  enable: false
+ensemble:
+  enable: false
+evaluation:
+  grid_resolution:
+  - 512
+  - 512
+  metrics:
+  - relative_l2
+  - mass_conservation
+  - kinetic_energy
+  - enstrophy
+  - energy_spectrum
+  thresholds:
+    u_l2_error: 0.15
+    v_l2_error: 0.15
+    p_l2_error: 0.15
+    mass_conservation_error: 0.001
+    kinetic_energy_rmse: 0.05
+  reference_data: ./data/kolmogorov_dns_re100_512x512_kf8_midway.h5
+  reference_time_window:
+  - 15.0
+  - 20.0
+physics_validation:
+  enabled: true
+  save_metrics: true
+  thresholds:
+    mass_conservation: 0.001
+    momentum_conservation: 0.01
+    periodicity_error: 0.0001
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+output:
+  checkpoint_dir: ./checkpoints/kolmogorov_re100_kf8_K50_t20_2k_adam
+  results_dir: ./results/kolmogorov_re100_kf8_K50_t20_2k_adam
+  visualization_dir: ./results/kolmogorov_re100_kf8_K50_t20_2k_adam/visualizations
+test_acceptance:
+  stability:
+  - no_nan_inf: true
+  - loss_finite: true
+  - gradient_stable: true
+  physics:
+  - mass_conservation_satisfied: true
+  - momentum_residual_low: true
+  - periodicity_maintained: true
+  reconstruction:
+  - sensor_l2_error_target: 0.05
+  - field_l2_error_target: 0.15
+  - kinetic_energy_preserved: true
+usage_notes: "\U0001F3AF 訓練目標：\n  - 驗證稀疏資料（K=50）重建 Kolmogorov flow 的可行性\n  - 測試 DEIM\
+  \ 感測器（條件數 ~334）的訓練穩定性\n  - 建立 Re=100 基準，為 Re=500 做準備\n\n\U0001F4CA 預期結果：\n  - 訓練時間：~1-2\
+  \ 小時（1000 epochs, GPU）\n  - 感測點 L2：< 5%（稀疏點擬合良好）\n  - 全場 L2：10-15%（全場重建精度）\n  -\
+  \ 動能 RMSE：< 5%（統計特徵保持）\n\n\U0001F680 執行指令：\n  # 前台運行（監控訓練）\n  python scripts/train.py\
+  \ --cfg configs/kolmogorov_re100_kf8_K50_t20_2k.yml --device cuda\n  \n  # 背景運行（長時間訓練）\n\
+  \  nohup python scripts/train.py --cfg configs/kolmogorov_re100_kf8_K50_t20_2k.yml\
+  \ --device cuda \\\n    > log/kolmogorov_re100_kf8_K50_t20_2k/training.log 2>&1\
+  \ &\n\n\U0001F4C8 監控指令：\n  # 實時監控\n  python scripts/monitor_training.py --exp kolmogorov_re100_kf8_K50_t20_2k\n\
+  \  \n  # 檢查檢查點\n  python scripts/evaluate_checkpoint.py \\\n    --checkpoint checkpoints/kolmogorov_re100_kf8_K50_t20_2k/epoch_1000.pth\
+  \ \\\n    --config configs/kolmogorov_re100_kf8_K50_t20_2k.yml\n\n⚠️ 已知限制：\n  -\
+  \ 感測器條件數較高 (334)，需監控梯度穩定性\n  - 感測器有聚集現象 (min_dist=0.0123)，可能局部過擬合\n  - DNS 數據時間窗較短\
+  \ (t=15-20)，僅 100 snapshots\n\n\U0001F527 故障排除：\n  - NaN/Inf：降低學習率 (lr=5e-4)，增強梯度裁剪\
+  \ (clip=0.5)\n  - 過擬合感測點：增加 L2 正則化 (1e-5)，提高 PDE 權重\n  - 週期性破壞：提高 periodicity_weight\
+  \ (50.0)\n"

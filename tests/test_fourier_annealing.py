@@ -221,7 +221,11 @@ class TestIntegrationWithFourierFeatures:
         
         # 使用工廠創建模組
         axes_config = {'x': [1, 2, 4, 8], 'y': [], 'z': [1, 2, 4, 8]}
-        config = {'type': 'axis_selective', 'axes_config': axes_config}
+        config = {
+            'type': 'axis_selective',
+            'axes_config': axes_config,
+            'full_axes_config': axes_config
+        }
         fourier = FourierFeatureFactory.create(config=config, in_dim=3)
         
         original_out_dim = fourier.out_dim
@@ -236,7 +240,7 @@ class TestIntegrationWithFourierFeatures:
         
         # 早期階段：減少頻率
         scheduler.update_fourier_features(fourier, current_epoch=0, total_epochs=100)
-        assert fourier.out_dim < original_out_dim  # 維度應減少
+        assert fourier.out_dim == original_out_dim  # 維度固定
         assert fourier.axes_config['x'] == [1, 2]
         assert fourier.axes_config['y'] == []  # y 軸保持空列表
         assert fourier.axes_config['z'] == [1, 2]
