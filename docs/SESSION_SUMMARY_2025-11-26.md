@@ -249,5 +249,47 @@ python scripts/visualize_results.py \
 
 ---
 
-**Session End**: 2025-11-26 10:15 (Estimated)  
+**Session End**: 2025-11-26 10:30 (Estimated)  
 **Status**: ✅ All objectives completed successfully
+
+---
+
+## 🆕 Update: Sensor File KeyError Fix
+
+### **Issue Discovered**
+After deploying the notebook fixes, user encountered:
+```
+KeyError: 'coords is not a file in the archive'
+```
+
+### **Root Cause**
+- Sensor file format changed: uses `sensor_x`, `sensor_y` (not `'coords'`)
+- Old notebook code referenced deprecated `'coords'` key
+- Affected cells: 3.2.2, 3.3.1
+
+### **Fix Applied**
+**Commit**: `b5fa88d`
+
+1. **Part 3.2.2**: Use `sensors['K']` instead of `sensors['coords'].shape[0]`
+2. **Part 3.3.1**: Use `sensor_x`/`sensor_y` instead of `coords` array
+3. Added documentation comment explaining sensor file structure
+
+### **Documentation Created**
+**Commit**: `76fe75f`
+
+Created `docs/SENSOR_FILE_FORMAT.md` with:
+- Complete key reference table
+- Usage examples (loading, plotting, quality checks)
+- Backward compatibility notes
+- Common error fixes
+- Quality metric guidelines
+
+### **Final Git Status**
+- **Total commits**: 4
+  - `6f8d0f8` - Visualization command fixes
+  - `b5fa88d` - Sensor key fixes
+  - `142bb53` - Session summary
+  - `76fe75f` - Sensor format documentation
+- **Files added**: 2 (`SESSION_SUMMARY_2025-11-26.md`, `SENSOR_FILE_FORMAT.md`)
+- **Files modified**: 1 (`PINNs_MVP_Kolmogorov_Guide.ipynb`)
+- **Status**: ✅ All pushed to `origin/master`
