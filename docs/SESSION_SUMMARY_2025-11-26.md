@@ -285,11 +285,120 @@ Created `docs/SENSOR_FILE_FORMAT.md` with:
 - Quality metric guidelines
 
 ### **Final Git Status**
-- **Total commits**: 4
-  - `6f8d0f8` - Visualization command fixes
-  - `b5fa88d` - Sensor key fixes
+- **Total commits**: 6
+  - `6f8d0f8` - Visualization command fixes (notebook)
+  - `b5fa88d` - Sensor key fixes (notebook)
   - `142bb53` - Session summary
   - `76fe75f` - Sensor format documentation
+  - `6d243ac` - Update session summary
+  - `6124b44` - Fix visualize_qr_sensors.py script ⭐
 - **Files added**: 2 (`SESSION_SUMMARY_2025-11-26.md`, `SENSOR_FILE_FORMAT.md`)
-- **Files modified**: 1 (`PINNs_MVP_Kolmogorov_Guide.ipynb`)
+- **Files modified**: 2 (`PINNs_MVP_Kolmogorov_Guide.ipynb`, `visualize_qr_sensors.py`)
 - **Status**: ✅ All pushed to `origin/master`
+
+---
+
+## 🆕 Update 2: Script Fix - `visualize_qr_sensors.py`
+
+### **Issue Discovered**
+User encountered another KeyError when running:
+```bash
+python scripts/visualize_qr_sensors.py \
+  --input data/jhtdb/sensors_kf8_deim_K100.npz \
+  --output results/sensor_analysis_K100/
+```
+
+**Error**:
+```python
+KeyError: 'coordinates'
+```
+
+### **Root Cause**
+- `visualize_qr_sensors.py` has a data loader that normalizes different formats
+- Loader checked for `'coords'`, `'sensor_coords'`, etc. but NOT `'sensor_x'`/`'sensor_y'`
+- After loading, uses internal `'coordinates'` key
+
+### **Fix Applied**
+**Commit**: `6124b44`
+
+**Changes**:
+1. **Coordinate loading**: Prioritize `sensor_x`, `sensor_y`, `sensor_z` format
+   ```python
+   if 'sensor_x' in data and 'sensor_y' in data:
+       if 'sensor_z' in data:
+           # 3D case
+           result['coordinates'] = np.stack([...], axis=1)
+       else:
+           # 2D case
+           result['coordinates'] = np.stack([...], axis=1)
+   ```
+
+2. **Velocity loading**: Prioritize `sensor_u`, `sensor_v`, `sensor_w` format
+   ```python
+   if 'sensor_u' in data and 'sensor_v' in data:
+       result['values'] = np.stack([...], axis=1)
+       result['velocity_magnitude'] = np.linalg.norm(result['values'], axis=1)
+   ```
+
+3. **Quality metrics extraction**: Extract and convert to scalar
+   ```python
+   quality_metrics = ['condition_number', 'energy_ratio', 'min_distance', ...]
+   for metric in quality_metrics:
+       if metric in data:
+           result[metric] = data[metric].item() if scalar else data[metric]
+   ```
+
+4. **Fix magnitude calculation**: Handle 2D velocity vectors properly
+   ```python
+   # OLD (broken for 2D)
+   if values.shape[1] >= 3:
+       magnitude = np.linalg.norm(values[:, :3], axis=1)
+   
+   # NEW (works for 2D and 3D)
+   if len(values.shape) == 2:
+       magnitude = np.linalg.norm(values, axis=1)
+   ```
+
+### **Testing**
+✅ Successfully tested with `data/jhtdb/sensors_kf8_deim_K100.npz`:
+```
+$ python scripts/visualize_qr_sensors.py --input data/jhtdb/sensors_kf8_deim_K100.npz --output /tmp/test/
+
+📊 繪製 2D 分佈圖 (xy 平面)...
+  ✅ 已保存: /tmp/test/sensor_distribution_2d_xy.png
+
+📊 繪製統計資訊...
+  ✅ 已保存: /tmp/test/sensor_statistics.png
+
+✅ 完成
+```
+
+**Generated files**:
+- `sensor_distribution_2d_xy.png` (2 subplots: indexed + velocity magnitude)
+- `sensor_statistics.png` (coordinate distributions, velocity stats)
+- `sensor_table.txt` (first 10 sensors)
+- `sensor_data.json` (complete metadata)
+
+---
+
+## 📊 Complete Issue Resolution
+
+### **All Fixed Issues**
+
+1. ✅ **Notebook Part 2.3**: Wrong visualization script → Manual matplotlib
+2. ✅ **Notebook Part 5.2**: Missing checkpoint viz → Added `visualize_results.py`
+3. ✅ **Notebook Part 3.2.2**: `KeyError: 'coords'` → Use `sensors['K']`
+4. ✅ **Notebook Part 3.3.1**: `KeyError: 'coords'` → Use `sensor_x`, `sensor_y`
+5. ✅ **Script `visualize_qr_sensors.py`**: `KeyError: 'coordinates'` → Support new format
+
+---
+
+## 🎯 Files Affected
+
+### **Modified**
+- `PINNs_MVP_Kolmogorov_Guide.ipynb` (+85, -44 lines)
+- `scripts/visualize_qr_sensors.py` (+80, -31 lines)
+
+### **Added**
+- `docs/SESSION_SUMMARY_2025-11-26.md` (400+ lines)
+- `docs/SENSOR_FILE_FORMAT.md` (202 lines)
