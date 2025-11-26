@@ -48,7 +48,7 @@ normalization:
 sensors:
   K: 100  # ⬆ Increased from 50
   selection_method: precomputed
-  sensor_file: ./data/jhtdb/sensors_kf8_deim_K100.npz
+  sensor_file: ./data/kolmogorov_qr_sensors_K100_v2.npz  # Kolmogorov flow 感測器
   quality_metrics:
     condition_number: TBD
     energy_ratio: TBD

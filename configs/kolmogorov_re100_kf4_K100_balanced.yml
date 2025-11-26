@@ -2,7 +2,7 @@ experiment:
   name: kolmogorov_re100_kf4_K100_balanced
   version: v2.1
   seed: 42
-  device: mps
+  device: cuda  # 修正：Colab 使用 cuda
   precision: float32
   description: 'Balanced training: kf=4, K=100, data_w=10, pde_w=1, 50k PDE points,
     2k boundary'
@@ -55,7 +55,7 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./data/jhtdb/sensors_kf4_deim_K100.npz
+  sensor_file: ./data/kolmogorov_qr_sensors_K100_v2.npz  # Kolmogorov flow Re=100 感測器
   quality_metrics:
     condition_number: TBD
     energy_ratio: TBD

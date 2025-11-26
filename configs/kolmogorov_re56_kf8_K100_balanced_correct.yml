@@ -2,7 +2,7 @@ experiment:
   name: kolmogorov_re158_kf4_K100_balanced_correct
   version: v2.2_physics_corrected
   seed: 42
-  device: mps
+  device: cuda
   precision: float32
   description: 'Physics-corrected config: Re=157.5 (actual), kf=4, nu=0.0125, K=100, balanced weights'
 
@@ -48,7 +48,7 @@ normalization:
 sensors:
   K: 100  # ⬆ Increased from 50
   selection_method: precomputed
-  sensor_file: ./data/jhtdb/sensors_kf8_deim_K100.npz
+  sensor_file: ./data/kolmogorov_qr_sensors_K100_v2.npz  # Kolmogorov flow 感測器
   quality_metrics:
     condition_number: TBD
     energy_ratio: TBD

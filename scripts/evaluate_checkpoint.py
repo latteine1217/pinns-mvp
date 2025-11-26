@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """快速評估檢查點的流場誤差"""
 import sys
+import os
 import torch
 import numpy as np
 import yaml
@@ -95,10 +96,19 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
     
     # 載入測試數據
     if data_path is None:
-        data_path = cfg.get('data', {}).get('sensors_cache', 'data/jhtdb/channel_qr_K80_sensors.npz')
+        # 優先從 sensors 配置讀取，否則使用 data 配置
+        sensor_file = cfg.get('sensors', {}).get('sensor_file', None)
+        print(f"🔍 Debug - sensors.sensor_file: {sensor_file}")
+        if sensor_file is None:
+            sensor_file = cfg.get('data', {}).get('sensors_cache', 'data/jhtdb/sensors_kf8_qr_K100.npz')
+            print(f"🔍 Debug - data.sensors_cache (fallback): {sensor_file}")
+        data_path = sensor_file
     
     print("\n📁 載入測試數據...")
     print("-" * 70)
+    print(f"📍 數據路徑: {data_path}")
+    print(f"📍 檔案存在: {os.path.exists(data_path)}")
+    print(f"📍 檔案存在: {os.path.exists(data_path)}")
     
     try:
         data = np.load(data_path, allow_pickle=True)
@@ -112,12 +122,22 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
             w_true = data['w'].reshape(-1, 1) if 'w' in data else None
             p_true = data['p'].reshape(-1, 1)
         elif 'sensor_points' in data:
-            # 格式2: 感測點格式
+            # 格式2: 感測點格式 (3D Channel Flow)
             coords = data['sensor_points']
             u_true = data['sensor_u'].reshape(-1, 1)
             v_true = data['sensor_v'].reshape(-1, 1)
             w_true = data['sensor_w'].reshape(-1, 1) if 'sensor_w' in data else None
             p_true = data['sensor_p'].reshape(-1, 1)
+        elif 'sensor_x' in data and 'sensor_y' in data:
+            # 格式2.5: Kolmogorov flow 感測點格式 (2D)
+            sensor_x = data['sensor_x']
+            sensor_y = data['sensor_y']
+            coords = np.stack([sensor_x, sensor_y], axis=1)
+            u_true = data['sensor_u'].reshape(-1, 1)
+            v_true = data['sensor_v'].reshape(-1, 1)
+            w_true = None  # 2D flow 沒有 w
+            p_true = None  # Kolmogorov 感測器可能沒有壓力
+            print(f"✅ Kolmogorov 感測器格式 (2D): {len(sensor_x)} 個感測點")
         elif 'x' in data and 'y' in data:
             # 格式3: 網格格式 (支持 2D 和 3D)
             x = data['x']  # (Nx,)
@@ -201,15 +221,23 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
     # 計算誤差
     def relative_l2_error(pred, true):
         """相對 L2 誤差"""
+        if true is None or pred is None:
+            return None
         return np.linalg.norm(pred - true) / np.linalg.norm(true)
     
     def mean_absolute_error(pred, true):
         """平均絕對誤差"""
+        if true is None or pred is None:
+            return None
         return np.mean(np.abs(pred - true))
     
-    u_error = relative_l2_error(u_pred, u_true) * 100
-    v_error = relative_l2_error(v_pred, v_true) * 100
-    p_error = relative_l2_error(p_pred, p_true) * 100
+    u_error_raw = relative_l2_error(u_pred, u_true)
+    v_error_raw = relative_l2_error(v_pred, v_true)
+    p_error_raw = relative_l2_error(p_pred, p_true)
+    
+    u_error = u_error_raw * 100 if u_error_raw is not None else None
+    v_error = v_error_raw * 100 if v_error_raw is not None else None
+    p_error = p_error_raw * 100 if p_error_raw is not None else None
     
     u_mae = mean_absolute_error(u_pred, u_true)
     v_mae = mean_absolute_error(v_pred, v_true)
@@ -217,7 +245,8 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
     
     # 如果有 w 速度，也計算誤差
     if w_true is not None and w_pred is not None:
-        w_error = relative_l2_error(w_pred, w_true) * 100
+        w_error_raw = relative_l2_error(w_pred, w_true)
+        w_error = w_error_raw * 100 if w_error_raw is not None else None
         w_mae = mean_absolute_error(w_pred, w_true)
     else:
         w_error = None
@@ -248,44 +277,50 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
         print()
     
     print(f"  壓力場：")
-    print(f"    - 相對 L2 誤差: {p_error:.2f}%")
-    print(f"    - 平均絕對誤差: {p_mae:.6f}")
-    print(f"    - 預測範圍: [{p_pred.min():.3f}, {p_pred.max():.3f}]")
-    print(f"    - 真實範圍: [{p_true.min():.3f}, {p_true.max():.3f}]")
+    if p_error is not None and p_true is not None:
+        print(f"    - 相對 L2 誤差: {p_error:.2f}%")
+        print(f"    - 平均絕對誤差: {p_mae:.6f}")
+        print(f"    - 預測範圍: [{p_pred.min():.3f}, {p_pred.max():.3f}]")
+        print(f"    - 真實範圍: [{p_true.min():.3f}, {p_true.max():.3f}]")
+    else:
+        print(f"    - ⚠️ 無壓力場資料（Kolmogorov 感測器無壓力）")
     
     print("\n" + "=" * 70)
     print("🏆 成功指標檢查（目標: < 15%）：")
     print("=" * 70)
     
     success_count = 0
-    total_metrics = 3  # 基本: u, v, p
+    total_metrics = 2  # 基本: u, v (壓力場可能沒有)
     
-    if u_error < 15.0:
+    if u_error is not None and u_error < 15.0:
         print(f"  ✅ U 速度場: {u_error:.2f}% < 15%")
         success_count += 1
-    else:
+    elif u_error is not None:
         print(f"  ❌ U 速度場: {u_error:.2f}% >= 15%")
     
-    if v_error < 15.0:
+    if v_error is not None and v_error < 15.0:
         print(f"  ✅ V 速度場: {v_error:.2f}% < 15%")
         success_count += 1
-    else:
+    elif v_error is not None:
         print(f"  ❌ V 速度場: {v_error:.2f}% >= 15%")
     
     # 如果有 W 速度，也檢查
     if w_error is not None:
-        total_metrics = 4
+        total_metrics += 1
         if w_error < 15.0:
             print(f"  ✅ W 速度場: {w_error:.2f}% < 15%")
             success_count += 1
         else:
             print(f"  ❌ W 速度場: {w_error:.2f}% >= 15%")
     
-    if p_error < 15.0:
-        print(f"  ✅ 壓力場: {p_error:.2f}% < 15%")
-        success_count += 1
-    else:
-        print(f"  ❌ 壓力場: {p_error:.2f}% >= 15%")
+    # 如果有壓力場，也檢查
+    if p_error is not None:
+        total_metrics += 1
+        if p_error < 15.0:
+            print(f"  ✅ 壓力場: {p_error:.2f}% < 15%")
+            success_count += 1
+        else:
+            print(f"  ❌ 壓力場: {p_error:.2f}% >= 15%")
     
     print("\n" + "=" * 70)
     if success_count == total_metrics:
