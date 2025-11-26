@@ -12,7 +12,14 @@
 
 ---
 
-## 🎯 最新進展 (2025-11-25)
+## 🎯 最新進展 (2025-11-27)
+
+### ✅ 因果訓練 (Causal Training) 完整實作
+- **時間序列約束**: 引入 Causal Weighting 機制，確保早期時間點的物理殘差優先滿足
+- **自動時間範圍檢測**: 從配置文件自動讀取 `time_range`，避免時間坐標壓縮問題
+- **配置驅動**: 通過 `losses.causal_weighting: true` 即可啟用
+- **完整測試**: 新增 `tests/test_causal_training_integration.py`（4 個測試全部通過 ✅）
+- **文檔**: 因果權重公式 `w(t) = exp(-ε × ∫₀ᵗ Loss(τ) dτ)`，早期/晚期權重比約 2-3x
 
 ### ✅ Reynolds 數修正 & DNS 資料庫重組
 - **問題發現**: 所有 DNS 檔案的雷諾數標籤與實際物理參數不符
@@ -52,6 +59,46 @@
 
 兩者結合，使得模型能同時表達流場的宏觀結構與微觀渦旋。
 
+### PINNs 內部運作流 (Internal Workflow of PINNs)
+
+本專案的 PINNs 架構由多個精心設計的模組組成，確保了數據流、模型計算與物理約束的正確協同。以下是其核心組件及數據處理順序：
+
+1.  **輸入數據準備 (Input Data Preparation)**
+    *   **原始輸入**：包括物理坐標 (t, x, y, z) 和監測點的真實物理量 (u, v, w, p)。
+    *   **輸入標準化 (`pinnx/utils/normalization.py - InputTransform`)**：將物理坐標轉換到標準化空間 (例如 `[-1, 1]`)。這一步由 `UnifiedNormalizer` 管理。
+    *   **VS-PINN 坐標縮放 (`pinnx/physics/vs_pinn_channel_flow.py`)**：若啟用 VS-PINN，坐標會根據物理各向異性進行非等向縮放，平衡不同維度上的梯度。
+
+2.  **神經網路模型 (Neural Network Model)**
+    *   **傅立葉特徵 (Fourier Features - `pinnx/models/fourier_mlp.py`)**：經過準備的輸入坐標首先透過傅立葉特徵層映射到高維空間。
+        *   **安全機制**：為避免傅立葉特徵因坐標範圍過大而引入過高頻率，`PINNNet` 內部會執行額外的逆標準化與再標準化步驟 (`fourier_normalize_input`)，確保輸入到傅立葉特徵層的坐標處於穩定範圍。
+    *   **核心 MLP (`pinnx/models/fourier_mlp.py - PINNNet`)**：接著，數據傳入由 `RWFLinear` 層和 `SineActivation` 組成的多層感知器 (MLP)。
+        *   **RWF (Random Weight Factorization)**：`RWFLinear` 層採用權重分解技術，增強訓練穩定性，改善梯度流動。
+    *   **模型輸出**：網路輸出位於標準化空間的物理量預測值 (u, v, w, p)。
+
+3.  **模型輸出後處理 (Model Output Post-processing)**
+    *   **輸出逆標準化 (`pinnx/utils/normalization.py - OutputTransform`)**：Trainer 會將模型的標準化輸出轉換回真實的物理量 (u, v, w, p)，以便在物理單位下計算損失和進行分析。這一步由 `UnifiedNormalizer` 管理。
+
+4.  **損失函數計算與平衡 (Loss Function Calculation & Balancing)**
+    *   **物理殘差 (`pinnx/losses/residuals.py`)**：
+        *   **Navier-Stokes 方程**：計算動量方程 (Momentum) 和連續性方程 (Continuity) 的殘差。
+        *   **VS-PINN 修正**：殘差計算會考慮 VS-PINN 引入的鏈式法則修正。
+    *   **邊界條件損失 (`pinnx/losses/residuals.py`)**：計算壁面無滑移條件或週期性邊界條件的損失。
+    *   **數據監督損失 (`pinnx/losses/residuals.py`)**：將逆標準化後的模型預測與真實感測器數據進行比較。
+    *   **均值約束損失 (`pinnx/losses/priors.py - MeanConstraintLoss`)**：若啟用，約束物理量的平均值。
+    *   **動態權重平衡 (`pinnx/losses/weighting.py - MultiWeightManager`)**：
+        *   **GradNorm**：根據各損失項對模型參數的梯度範數，自適應調整權重，防止單一損失項主導訓練。
+        *   **Causal Weighting, Adaptive Scheduling**：也可根據訓練階段或時間序列表現應用其他權重策略。
+
+5.  **優化器與學習率調度 (Optimizer & Learning Rate Scheduling)**
+    *   **總損失**：所有加權後的損失項匯總成一個總損失。
+    *   **反向傳播 (Backward Propagation)**：計算總損失對模型參數的梯度。
+    *   **優化器 (`torch.optim.Adam`, `LBFGS`, `SOAP` 等)**：根據梯度更新模型參數。
+    *   **學習率調度器**：動態調整學習率，如 `WarmupCosineScheduler`。
+
+6.  **檢查點與物理驗證 (Checkpointing & Physics Validation)**
+    *   訓練過程中定期保存檢查點，包含模型狀態、優化器狀態、標準化參數等。
+    *   每次保存前會進行物理驗證，確保模型具備一定的物理合理性。
+
 ### 2. 物理引擎: 變數縮放PINN (VS-PINN)
 
 通道流（Channel Flow）在物理上具有強烈的「各向異性」：流場在靠近壁面（y方向）的梯度遠大於流向（x方向）和展向（z方向）。標準 PINN 在此類「剛性問題」中難以收斂。
@@ -69,11 +116,21 @@
 - **QR行選擇 (QR-Pivoting)**: 對矩陣 `A` 進行帶有列主元的QR分解。主元對應的行索引，即為資訊量最豐富的空間位置。
 - **離線生成**: 此過程在訓練前完成，生成感測器位置文件。訓練時，數據載入器僅讀取這些最優位置的數據作為監督信號。
 
-### 4. 訓練策略: 自適應權重與課程學習
+### 4. 訓練策略: 自適應權重、課程學習與因果訓練
 
 PINN的損失函數包含多個目標（數據匹配、動量方程、連續性方程等），它們的量級和重要性在訓練過程中動態變化。
 
-- **自適應權重 (GradNorm)**: 我們採用 GradNorm 算法，它在訓練中動態調整各個損失項的權重。其目標是使每個損失項回傳到網路權重的梯度範數大致相等，從而避免某個損失項（如初始階段的PDE loss）主導訓練，導致模型陷入局部最優。
+- **自適應權重 (GradNorm)**: 我們採用 GradNorm 算法,它在訓練中動態調整各個損失項的權重。其目標是使每個損失項回傳到網路權重的梯度範數大致相等，從而避免某個損失項（如初始階段的PDE loss）主導訓練，導致模型陷入局部最優。
+
+- **因果訓練 (Causal Training)**: 對於時間序列問題（如 Kolmogorov Flow DNS），我們引入因果權重機制：
+    - **權重公式**: `w(t) = exp(-ε × ∫₀ᵗ Loss(τ) dτ)`，其中 ε 控制因果強度
+    - **物理意義**: 早期時間點的物理殘差獲得更高權重，確保模型先學會物理規律再預測未來
+    - **實作優勢**: 
+        - 自動從配置讀取 `time_range`（如 [50.0, 100.0]）
+        - 分 bin 累積損失（如 20 bins，每 bin 覆蓋 2.5 時間單位）
+        - 與空間權重（如 wall-distance weighting）正交組合
+    - **啟用方式**: 配置文件中設置 `losses.causal_weighting: true` 和 `causal_eps: 0.5`
+
 - **課程學習 (Curriculum Learning)**: 對於複雜的3D生產級訓練，我們設計了多階段的「課程」。例如：
     1.  **階段一 (基礎建立)**: 使用較高的學習率和較大的數據損失權重，讓模型快速擬合感測器數據。
     2.  **階段二 (物理主導)**: 逐步降低學習率，同時增大物理殘差（PDE loss）的權重，強制模型學習物理規律。
@@ -166,7 +223,7 @@ python scripts/generate_sensors_k500.py \
 ```bash
 # 使用已優化的 Kolmogorov Flow 配置（Re=157.5, k_f=4, K=100）
 python scripts/train.py \
-  --cfg configs/kolmogorov_re56_kf8_K100_balanced_correct.yml
+  --cfg configs/kolmogorov_re100_kf4_K100.yml
 
 # 若有 NVIDIA A100 GPU（強烈推薦，快 50-100x）
 python scripts/train.py \
@@ -191,7 +248,7 @@ python scripts/train.py --cfg configs/my_experiment.yml
 ```bash
 # 使用 nohup 背景運行
 nohup python scripts/train.py \
-  --cfg configs/kolmogorov_re56_kf8_K100_balanced_correct.yml \
+  --cfg configs/kolmogorov_re100_kf4_K100.yml \
   > log/training_stdout.log 2>&1 &
 
 # 監控進度
@@ -216,6 +273,9 @@ tail -f log/training_stdout.log
 - **`losses`**: 定義損失函數及其權重。
   - `adaptive_weighting`: 是否啟用 GradNorm。
   - `grad_norm_alpha`: GradNorm 的平衡強度。
+  - `causal_weighting`: 是否啟用因果訓練（時間序列問題推薦）。
+  - `causal_eps`: 因果強度（0.1-2.0，推薦 0.5）。
+  - `causal_n_bins`: 時間分箱數量（推薦 10-20）。
   - `data_weight`, `momentum_x_weight`, etc.: 各損失項的基礎權重。
 - **`training`**: 定義訓練過程。
   - `optimizer`, `lr`: 優化器和學習率。
@@ -272,6 +332,7 @@ pinns-mvp/
 ├── 🧪 tests/                  # 單元測試與整合測試（50+ 測試）
 │   ├── test_physics_validation.py  # 物理方程驗證
 │   ├── test_kolmogorov_flow.py     # Kolmogorov Flow 測試
+│   ├── test_causal_training_integration.py  # ⭐ 因果訓練整合測試
 │   └── test_qr_pivoting_fix.py     # QR-Pivot 測試
 ├── 📈 results/                # 實驗結果輸出目錄
 ├── 💾 checkpoints/            # 模型檢查點
@@ -400,6 +461,7 @@ python scripts/visualize_kolmogorov_results.py \
 
 - **🚧 進行中**:
   - Kolmogorov Flow 穩定訓練（Re=56, k_f=8, K=100）
+  - 因果訓練 (Causal Training) 參數優化與消融研究
   - 不確定性量化 (UQ): Ensemble PINNs 框架
 
 - **📋 規劃中**:

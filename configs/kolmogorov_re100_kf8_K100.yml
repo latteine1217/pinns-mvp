@@ -1,0 +1,360 @@
+# ====================================================================
+# Kolmogorov Flow Re=100 kf=8 K=100 訓練配置
+# ====================================================================
+# 實驗目標：使用 K=100 QR-pivot 感測點重建 Kolmogorov flow 全場
+# DNS 數據：re100_kf8 (1001 snapshots, 強湍流狀態)
+# 感測器：QR-pivot (條件數 7.66, 能量比 1.0)
+# 預期訓練時間：1-2 小時 (2000 epochs)
+# 創建日期：2025-11-26
+# ====================================================================
+
+experiment:
+  name: kolmogorov_re100_kf8_K100
+  version: v1.0
+  seed: 42
+  device: auto
+  precision: float32
+  description: "Kolmogorov flow Re=100 with K=100 QR-pivot sensors, turbulent regime"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# 數據配置
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re100_kf8
+  
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns_re100_kf8_T100_pert10.h5
+    description: "Kolmogorov flow (Re=100, k_f=8, 2D periodic, turbulent)"
+    
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]  # 2π
+    
+    resolution:
+      x: 512
+      y: 512
+    
+    time_range: [50.0, 100.0]  # 使用穩態區域
+    dt: 0.1
+    
+    variables: [u, v, p]
+    
+    physics_params:
+      Re: 55.68  # 實際雷諾數 (基於 Musacchio & Boffetta 2014 定義)
+      Re_definition: "Musacchio_Boffetta_2014"
+      nu: 0.0125  # 動力黏度
+      k_f: 8      # 強迫波數
+      forcing_amplitude: 1.0
+  
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# 數據標準化
+# ====================================================================
+normalization:
+  type: training_data_norm
+  params: {}
+  
+  noise_sigma: 0.01      # 1% 高斯噪聲
+  dropout_prob: 0.05     # 5% 隨機遺失
+  
+  steady_state:
+    enabled: true
+    time_window: [50.0, 100.0]  # 統計穩定區間
+
+# ====================================================================
+# 感測點配置
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./data/kolmogorov_qr_sensors_re100_kf8_K100.npz
+  
+  quality_metrics:
+    condition_number: 7.66     # ✅ 優秀 (< 50)
+    energy_ratio: 1.0000       # ✅ 完整能量覆蓋
+    min_distance: 0.0123       # 最小空間距離
+
+# ====================================================================
+# 模型架構
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3       # (t, x, y) - 時空座標（非穩態問題）
+  out_dim: 3      # (u, v, p)
+  width: 256      # 隱藏層寬度（8×256 架構）
+  depth: 8        # 隱藏層深度
+  activation: swish
+  
+  # Fourier Features 配置
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 64           # Fourier 特徵數（時空混合編碼）
+    fourier_sigma: 8.0      # 空間頻率尺度（匹配 k_f=8）
+    include_input: true
+  
+  # 時間處理策略（參考 PirateNet）
+  temporal_encoding:
+    enabled: false          # 基礎版：直接輸入 t
+    type: "sinusoidal"      # 可選：sinusoidal/learned (未來擴展)
+    num_frequencies: 10     # 時間編碼頻率數
+
+# ====================================================================
+# 物理設定
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.0125      # 動力黏度
+  rho: 1.0        # 密度
+  
+  forcing:
+    k_f: 8
+    amplitude: 1.0
+  
+  kolmogorov_flow:
+    Re: 55.68
+    k_f: 8
+    forcing_amplitude: 1.0
+  
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+  
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# 損失函數權重
+# ====================================================================
+losses:
+  # 基礎損失
+  data_weight: 100.0           # 資料監督（感測點）
+  
+  # PDE 殘差
+  momentum_x_weight: 1.0       # x 動量方程
+  momentum_y_weight: 1.0       # y 動量方程
+  continuity_weight: 1.0       # 不可壓縮條件
+  
+  # 物理約束
+  periodicity_weight: 10.0     # 週期性邊界
+  
+  # 正則化
+  l2_regularization: 1.0e-6
+  gradient_penalty: 1.0e-5
+  prior_weight: 0.0            # 無低保真先驗
+  
+  # 損失標準化
+  normalize_losses: true
+  normalization_method: gradnorm
+  
+  # 自適應權重 (GradNorm)
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 50     # 每 50 epochs 更新權重
+  adaptation_alpha: 1.5        # GradNorm 平衡強度
+  
+  # 🆕 Causal Training (時間因果權重)
+  causal_weighting: true
+  causal_eps: 0.5              # 因果約束強度 (0.5 = 中等強度，適合 T=50 時間跨度)
+  causal_n_bins: 20            # 時間分窗數量 (20 bins × 2.5 時間單位/bin = 50 總跨度)
+
+
+# ====================================================================
+# 訓練配置
+# ====================================================================
+training:
+  # 優化器
+  optimizer:
+    type: soap
+    lr: 1.0e-3
+    betas: [0.9, 0.999]              # Adam 標準 β (穩定二階動量)
+    weight_decay: 1.0e-5
+    precondition_frequency: 5        # 平衡計算效率與適應性 (折衷於 2 和 10)
+    shampoo_beta: 0.999              # 預條件矩陣穩定性與 β2 一致
+  
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  
+  # 學習率調度
+  lr_scheduler:
+    type: cosine_annealing
+    T_max: 2000
+    eta_min: 1.0e-6
+  
+  # 訓練循環
+  epochs: 2000
+  max_epochs: 2000
+  batch_size: 512
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+  
+  # 早停
+  early_stopping:
+    enabled: true
+    patience: 300      # 增加耐心（湍流訓練較難收斂）
+    min_delta: 1.0e-6
+  
+  # 採樣策略
+  sampling:
+    pde_points: 20000          # PDE 碰撞點
+    adaptive_sampling: false
+    boundary_points: 400       # 邊界點（週期性）
+  
+  # 穩定性
+  gradient_clip: 1.0
+  
+  amp:
+    enabled: false
+
+# 優化器切換 (Adam → L-BFGS)
+optimizer_switching:
+  enabled: true
+  switch_epoch: 1600    # 在 1600 epoch 後切換到 L-BFGS
+  lbfgs_config:
+    lr: 1.0
+    max_iter: 20
+    history_size: 100
+    line_search_fn: strong_wolfe
+
+# ====================================================================
+# 課程學習與 Ensemble（暫時禁用）
+# ====================================================================
+curriculum:
+  enable: false
+
+ensemble:
+  enable: false
+
+# ====================================================================
+# 評估配置
+# ====================================================================
+evaluation:
+  grid_resolution: [512, 512]  # 與 DNS 解析度一致
+  
+  metrics:
+    - relative_l2
+    - mass_conservation
+    - kinetic_energy
+    - enstrophy
+    - energy_spectrum
+  
+  thresholds:
+    u_l2_error: 0.15           # 速度 L2 ≤ 15%
+    v_l2_error: 0.15
+    p_l2_error: 0.20           # 壓力允許稍高
+    mass_conservation_error: 0.001  # 散度誤差 < 0.1%
+    kinetic_energy_rmse: 0.05  # 動能誤差 < 5%
+  
+  reference_data: ./data/kolmogorov_dns_re100_kf8_T100_pert10.h5
+  reference_time_window: [50.0, 100.0]
+
+# ====================================================================
+# 物理驗證
+# ====================================================================
+physics_validation:
+  enabled: true
+  save_metrics: true
+  
+  thresholds:
+    mass_conservation: 0.001      # 質量守恆 < 0.1%
+    momentum_conservation: 0.01   # 動量守恆 < 1%
+    periodicity_error: 0.0001     # 週期性誤差 < 0.01%
+
+# ====================================================================
+# 日誌與輸出
+# ====================================================================
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+
+output:
+  checkpoint_dir: ./checkpoints/kolmogorov_re100_kf8_K100
+  results_dir: ./results/kolmogorov_re100_kf8_K100
+  visualization_dir: ./results/kolmogorov_re100_kf8_K100/visualizations
+
+# ====================================================================
+# 驗收標準
+# ====================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+  
+  physics:
+    - mass_conservation_satisfied: true
+    - momentum_residual_low: true
+    - periodicity_maintained: true
+  
+  reconstruction:
+    - sensor_l2_error_target: 0.05   # 感測點擬合 < 5%
+    - field_l2_error_target: 0.15    # 全場重建 < 15%
+    - kinetic_energy_preserved: true
+
+# ====================================================================
+# 使用說明
+# ====================================================================
+usage_notes: |
+  🎯 訓練目標：
+    - 驗證 K=100 QR-pivot 感測點重建 Kolmogorov flow 全場
+    - 測試湍流態（Re=55.7, 強渦結構）的 PINNs 重建能力
+    - 建立 K 點數與重建精度的基準曲線
+  
+  📊 預期結果：
+    - 訓練時間：1-2 小時（2000 epochs, GPU）
+    - 感測點 L2：< 5%（QR-pivot 條件數優秀）
+    - 全場 L2：10-15%（湍流重建目標）
+    - 動能 RMSE：< 5%（統計特徵保持）
+    - 能譜匹配：k^(-5/3) 逆級串區域
+  
+  🚀 執行指令：
+    # 前台運行（監控訓練）
+    python scripts/train.py --cfg configs/kolmogorov_re100_kf8_K100.yml --device cuda
+    
+    # 背景運行（長時間訓練）
+    nohup python scripts/train.py --cfg configs/kolmogorov_re100_kf8_K100.yml --device cuda \
+      > log/kolmogorov_re100_kf8_K100/training.log 2>&1 &
+  
+  📈 監控指令：
+    # 實時監控
+    python scripts/monitor_training.py --exp kolmogorov_re100_kf8_K100
+    
+    # 檢查檢查點
+    python scripts/evaluate_checkpoint.py \
+      --checkpoint checkpoints/kolmogorov_re100_kf8_K100/epoch_1000.pth \
+      --config configs/kolmogorov_re100_kf8_K100.yml
+  
+  ✅ 優勢（相比 K=50）：
+    - 條件數更低（7.66 vs 5.31）：梯度更穩定
+    - 更多感測點：覆蓋更多渦結構
+    - 訓練穩定性更好
+  
+  ⚠️ 注意事項：
+    - DNS 數據時間窗：t=50-100（穩態區域，501 snapshots）
+    - 雷諾數定義：基於 Musacchio & Boffetta (2014)
+    - SOAP 優化器：betas=[0.9, 0.999], precondition_freq=5 (平衡效率與穩定性)
+    - 1600 epoch 後自動切換到 L-BFGS 精調
+  
+  🔍 故障排除：
+    - NaN/Inf：降低學習率 (lr=5e-4)，增強梯度裁剪 (clip=0.5)
+    - 過擬合感測點：增加 L2 正則 (1e-5)，提高 PDE 權重
+    - 週期性破壞：提高 periodicity_weight (50.0)
+    - 能譜不匹配：檢查 Fourier 特徵 sigma 與 k_f 匹配
+
+# ====================================================================
+# 結束
+# ====================================================================

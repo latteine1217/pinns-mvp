@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -44,6 +45,130 @@ from pinnx.utils.setup import (
     setup_logging,
     set_random_seed,
 )
+
+# Kolmogorov flow data preparation (inline implementation)
+def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.device) -> Dict[str, torch.Tensor]:
+    """準備 Kolmogorov Flow 訓練資料
+    
+    Args:
+        config: 配置字典
+        device: PyTorch 設備
+        
+    Returns:
+        訓練資料字典，包含感測點、PDE 點、邊界條件點等
+    """
+    import h5py
+    
+    # 載入配置
+    kol_cfg = config['data']['kolmogorov_config']
+    data_path = kol_cfg['data_path']
+    time_range = kol_cfg['time_range']
+    K = config['sensors']['K']
+    
+    # 載入 DNS 數據
+    with h5py.File(data_path, 'r') as f:
+        u_all = np.array(f['u'])  # [T, Ny, Nx]
+        v_all = np.array(f['v'])
+        p_all = np.array(f['p']) if 'p' in f else None
+        time_all = np.array(f['time'])
+        
+    # 選擇時間範圍
+    t_start, t_end = time_range
+    time_mask = (time_all >= t_start) & (time_all <= t_end)
+    time_selected = time_all[time_mask]
+    u_data = u_all[time_mask]  # [T', Ny, Nx]
+    v_data = v_all[time_mask]
+    p_data = p_all[time_mask] if p_all is not None else None
+    
+    # 獲取空間網格
+    Nx, Ny = kol_cfg['resolution']['x'], kol_cfg['resolution']['y']
+    x_range = kol_cfg['domain']['x']
+    y_range = kol_cfg['domain']['y']
+    x_grid = np.linspace(x_range[0], x_range[1], Nx)
+    y_grid = np.linspace(y_range[0], y_range[1], Ny)
+    
+    # 重塑數據為 [N_total, 3] (x, y, t) 和場變量
+    T = len(time_selected)
+    X_mesh, Y_mesh = np.meshgrid(x_grid, y_grid, indexing='ij')
+    
+    # 構建完整數據矩陣 [T*Ny*Nx, features]
+    coords = []
+    u_flat = []
+    v_flat = []
+    p_flat = []
+    
+    for ti in range(T):
+        x_flat = X_mesh.flatten()
+        y_flat = Y_mesh.flatten()
+        t_flat = np.full_like(x_flat, time_selected[ti])
+        
+        coords.append(np.stack([x_flat, y_flat, t_flat], axis=1))
+        u_flat.append(u_data[ti].T.flatten())  # 轉置以匹配網格索引
+        v_flat.append(v_data[ti].T.flatten())
+        if p_data is not None:
+            p_flat.append(p_data[ti].T.flatten())
+    
+    coords_all = np.vstack(coords)  # [T*Ny*Nx, 3]
+    u_all_flat = np.concatenate(u_flat)
+    v_all_flat = np.concatenate(v_flat)
+    p_all_flat = np.concatenate(p_flat) if p_data is not None else None
+    
+    # 簡單隨機採樣感測點（TODO: 使用 QR-Pivot）
+    np.random.seed(config.get('seed', 42))
+    sensor_indices = np.random.choice(len(coords_all), K, replace=False)
+    
+    # 提取感測點數據
+    x_sensors = torch.tensor(coords_all[sensor_indices, 0], dtype=torch.float32, device=device).unsqueeze(1)
+    y_sensors = torch.tensor(coords_all[sensor_indices, 1], dtype=torch.float32, device=device).unsqueeze(1)
+    t_sensors = torch.tensor(coords_all[sensor_indices, 2], dtype=torch.float32, device=device).unsqueeze(1)
+    u_sensors = torch.tensor(u_all_flat[sensor_indices], dtype=torch.float32, device=device).unsqueeze(1)
+    v_sensors = torch.tensor(v_all_flat[sensor_indices], dtype=torch.float32, device=device).unsqueeze(1)
+    
+    if p_all_flat is not None:
+        p_sensors = torch.tensor(p_all_flat[sensor_indices], dtype=torch.float32, device=device).unsqueeze(1)
+    else:
+        p_sensors = torch.zeros_like(u_sensors)
+    
+    # PDE 配點採樣（均勻採樣）
+    N_pde = config.get('sampling', {}).get('N_pde', 10000)
+    pde_indices = np.random.choice(len(coords_all), N_pde, replace=False)
+    x_pde = torch.tensor(coords_all[pde_indices, 0], dtype=torch.float32, device=device).unsqueeze(1)
+    y_pde = torch.tensor(coords_all[pde_indices, 1], dtype=torch.float32, device=device).unsqueeze(1)
+    t_pde = torch.tensor(coords_all[pde_indices, 2], dtype=torch.float32, device=device).unsqueeze(1)
+    
+    # 構建訓練數據字典
+    training_data = {
+        # 感測點
+        'x_sensors': x_sensors,
+        'y_sensors': y_sensors,
+        't_sensors': t_sensors,
+        'u_sensors': u_sensors,
+        'v_sensors': v_sensors,
+        'p_sensors': p_sensors,
+        
+        # PDE 配點
+        'x_pde': x_pde,
+        'y_pde': y_pde,
+        't_pde': t_pde,
+        
+        # 邊界條件（2D 周期性，無需硬邊界）
+        'x_bc': torch.empty(0, 1, device=device),
+        'y_bc': torch.empty(0, 1, device=device),
+        't_bc': torch.empty(0, 1, device=device),
+        
+        # 初始條件（使用第一個時間步）
+        'x_ic': torch.empty(0, 1, device=device),
+        'y_ic': torch.empty(0, 1, device=device),
+        't_ic': torch.empty(0, 1, device=device),
+    }
+    
+    logging.info(f"✅ Kolmogorov 訓練數據準備完成:")
+    logging.info(f"   感測點: {K}")
+    logging.info(f"   PDE 配點: {N_pde}")
+    logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}]")
+    logging.info(f"   空間解析度: {Nx}×{Ny}")
+    
+    return training_data
 
 # ============================================================================
 # 全局變數（保留訓練專用快取）
@@ -456,10 +581,30 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
     
     # 因果權重器
     if loss_cfg.get('causal_weighting', False):
+        # 🆕 從配置中提取時間範圍（支援 Kolmogorov 和其他數據源）
+        time_range = config.get('data', {}).get('kolmogorov_config', {}).get('time_range')
+        if time_range is None:
+            # 回退：嘗試從 JHTDB 配置提取
+            time_range = config.get('data', {}).get('jhtdb_config', {}).get('time_range')
+        if time_range is None:
+            # 默認範圍
+            time_range = [0.0, 1.0]
+            logging.warning(
+                f"⚠️ Causal weighting enabled but no time_range found in config, "
+                f"using default {time_range}"
+            )
+        
         weighters['causal'] = CausalWeighter(
-            causality_strength=loss_cfg.get('causal_eps', 1.0)
+            epsilon=loss_cfg.get('causal_eps', 1.0),
+            n_time_bins=loss_cfg.get('causal_n_bins', 10),
+            t_min=float(time_range[0]),
+            t_max=float(time_range[1])
         )
-        logging.info("Causal weighting enabled")
+        logging.info(
+            f"✅ Causal weighting enabled: ε={loss_cfg.get('causal_eps', 1.0):.2f}, "
+            f"bins={loss_cfg.get('causal_n_bins', 10)}, "
+            f"t_range=[{time_range[0]}, {time_range[1]}]"
+        )
     else:
         weighters['causal'] = None
     
