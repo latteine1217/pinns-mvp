@@ -125,37 +125,73 @@ def load_sensor_data(input_path: str) -> Dict[str, Any]:
                 break
         
         # 提取座標
-        for key in possible_keys['coordinates']:
-            if key in data:
-                result['coordinates'] = data[key]
-                break
+        # 優先處理分離的 sensor_x, sensor_y, sensor_z 格式
+        if 'sensor_x' in data and 'sensor_y' in data:
+            if 'sensor_z' in data:
+                # 3D case
+                result['coordinates'] = np.stack([
+                    data['sensor_x'],
+                    data['sensor_y'],
+                    data['sensor_z']
+                ], axis=1)
+            else:
+                # 2D case
+                result['coordinates'] = np.stack([
+                    data['sensor_x'],
+                    data['sensor_y']
+                ], axis=1)
+        else:
+            # 嘗試其他格式
+            for key in possible_keys['coordinates']:
+                if key in data:
+                    result['coordinates'] = data[key]
+                    break
         
         # 提取數值（處理 object array）
-        for key in possible_keys['values']:
-            if key in data:
-                val = data[key]
-                # 處理 numpy object array (需要 .item() 提取)
-                if val.dtype == np.object_ and val.shape == ():
-                    val = val.item()
-                
-                # 如果是字典，提取速度場
-                if isinstance(val, dict):
-                    # 假設有 u, v, w, p 鍵
-                    if 'u' in val:
-                        u = val['u']
-                        v = val.get('v', np.zeros_like(u))
-                        w = val.get('w', np.zeros_like(u))
-                        # 堆疊為 (N, 3) 或 (N, 4) 包含壓力
-                        if 'p' in val:
-                            result['values'] = np.stack([u, v, w, val['p']], axis=1)
-                        else:
-                            result['values'] = np.stack([u, v, w], axis=1)
-                    result['velocity_magnitude'] = np.linalg.norm(
-                        np.stack([val.get('u', 0), val.get('v', 0), val.get('w', 0)], axis=1), axis=1
-                    ) if 'u' in val else None
-                else:
-                    result['values'] = val
-                break
+        # 優先處理分離的 sensor_u, sensor_v, sensor_w 格式
+        if 'sensor_u' in data and 'sensor_v' in data:
+            if 'sensor_w' in data:
+                # 3D case
+                result['values'] = np.stack([
+                    data['sensor_u'],
+                    data['sensor_v'],
+                    data['sensor_w']
+                ], axis=1)
+            else:
+                # 2D case
+                result['values'] = np.stack([
+                    data['sensor_u'],
+                    data['sensor_v']
+                ], axis=1)
+            # 計算速度大小
+            result['velocity_magnitude'] = np.linalg.norm(result['values'], axis=1)
+        else:
+            # 嘗試其他格式
+            for key in possible_keys['values']:
+                if key in data:
+                    val = data[key]
+                    # 處理 numpy object array (需要 .item() 提取)
+                    if val.dtype == np.object_ and val.shape == ():
+                        val = val.item()
+                    
+                    # 如果是字典，提取速度場
+                    if isinstance(val, dict):
+                        # 假設有 u, v, w, p 鍵
+                        if 'u' in val:
+                            u = val['u']
+                            v = val.get('v', np.zeros_like(u))
+                            w = val.get('w', np.zeros_like(u))
+                            # 堆疊為 (N, 3) 或 (N, 4) 包含壓力
+                            if 'p' in val:
+                                result['values'] = np.stack([u, v, w, val['p']], axis=1)
+                            else:
+                                result['values'] = np.stack([u, v, w], axis=1)
+                        result['velocity_magnitude'] = np.linalg.norm(
+                            np.stack([val.get('u', 0), val.get('v', 0), val.get('w', 0)], axis=1), axis=1
+                        ) if 'u' in val else None
+                    else:
+                        result['values'] = val
+                    break
         
         # 如果有完整的 JHTDB 資料，提取其他資訊
         if 'x' in data and 'y' in data and 'z' in data:
@@ -191,6 +227,15 @@ def load_sensor_data(input_path: str) -> Dict[str, Any]:
                     v = data['v'].flatten()[indices] if 'v' in data else np.zeros_like(u)
                     w = data['w'].flatten()[indices] if 'w' in data else np.zeros_like(u)
                     result['values'] = np.stack([u, v, w], axis=1)
+        
+        # 提取品質指標（如果有的話）
+        quality_metrics = ['condition_number', 'energy_ratio', 'min_distance', 
+                          'mean_distance', 'K', 'K_requested', 'n_modes_used']
+        for metric in quality_metrics:
+            if metric in data:
+                result[metric] = data[metric]
+                if isinstance(result[metric], np.ndarray) and result[metric].shape == ():
+                    result[metric] = result[metric].item()
         
         print(f"  ✅ 載入成功")
         print(f"     包含鍵: {list(data.keys())}")
@@ -579,8 +624,12 @@ def plot_sensor_distribution_2d(sensor_data: Dict[str, Any], output_dir: Path, v
     
     if values is not None:
         # 使用速度大小
-        if len(values.shape) == 2 and values.shape[1] >= 3:
-            magnitude = np.linalg.norm(values[:, :3], axis=1)
+        if len(values.shape) == 2:
+            # 2D or 3D velocity vectors
+            magnitude = np.linalg.norm(values, axis=1)
+        elif len(values.shape) == 1:
+            # Scalar values (e.g., pressure)
+            magnitude = np.abs(values)
         else:
             magnitude = np.abs(values.flatten())
         
