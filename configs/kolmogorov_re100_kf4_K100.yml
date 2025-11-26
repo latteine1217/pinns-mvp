@@ -1,0 +1,527 @@
+# ====================================================================
+# Kolmogorov Flow Re=100 kf=4 K=100 訓練配置
+# ====================================================================
+# 實驗目標：使用 K=100 QR-pivot 感測點重建 Kolmogorov flow 全場
+# DNS 數據：re100_kf4 (k_f=4, 較低波數，更簡單的流型)
+# 感測器：QR-pivot K=100
+# 預期訓練時間：2-4 小時 (4000 epochs with curriculum)
+# 創建日期：2025-11-27 (更新至最新配置標準)
+# ====================================================================
+
+experiment:
+  name: kolmogorov_re100_kf4_K100
+  version: v3.0_causal_training
+  seed: 42
+  device: auto
+  precision: float32
+  description: "Kolmogorov flow Re=100 kf=4 with K=100 sensors, curriculum learning"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# 數據配置
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re100_kf4
+  
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns_re100_512x512_kf4.h5
+    description: "Kolmogorov flow (Re=100, k_f=4, 2D periodic, turbulent)"
+    
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]  # 2π
+    
+    resolution:
+      x: 512
+      y: 512
+    
+    time_range: [20.0, 40.0]  # 使用穩態區域
+    dt: 0.05
+    
+    variables: [u, v, p]
+    
+    physics_params:
+      Re: 100.0  # 雷諾數 (基於 Musacchio & Boffetta 2014 定義)
+      Re_definition: "Musacchio_Boffetta_2014"
+      nu: 0.019687  # 動力黏度 (匹配 DNS 檔案)
+      k_f: 4        # 強迫波數
+      forcing_amplitude: 1.0
+  
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# 數據標準化
+# ====================================================================
+normalization:
+  type: training_data_norm
+  params: {}
+  
+  noise_sigma: 0.01      # 1% 高斯噪聲
+  dropout_prob: 0.05     # 5% 隨機遺失
+  
+  steady_state:
+    enabled: true
+    time_window: [20.0, 40.0]  # 統計穩定區間
+
+# ====================================================================
+# 感測點配置
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./data/kolmogorov_qr_sensors_re100_kf4_K100.npz
+  
+  quality_metrics:
+    condition_number: TBD     # 待生成感測點後更新
+    energy_ratio: TBD
+    min_distance: TBD
+
+# ====================================================================
+# 模型架構
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3       # (t, x, y) - 時空座標
+  out_dim: 3      # (u, v, p)
+  width: 256      # 隱藏層寬度
+  depth: 8        # 隱藏層深度
+  activation: swish
+  
+  # Fourier Features 配置
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 64           # Fourier 特徵數
+    fourier_sigma: 4.0      # 空間頻率尺度（匹配 k_f=4）
+    include_input: true
+  
+  # 初始化
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+
+# ====================================================================
+# 物理設定
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.019687    # 動力黏度 (匹配 DNS)
+  rho: 1.0        # 密度
+  
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  
+  kolmogorov_flow:
+    Re: 100.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+  
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# 損失函數權重
+# ====================================================================
+losses:
+  # 基礎損失
+  data_weight: 10.0            # 資料監督（降低避免過擬合）
+  
+  # PDE 殘差
+  momentum_x_weight: 1.0       # x 動量方程
+  momentum_y_weight: 1.0       # y 動量方程
+  continuity_weight: 1.0       # 不可壓縮條件
+  
+  # 物理約束
+  periodicity_weight: 10.0     # 週期性邊界
+  
+  # 正則化
+  l2_regularization: 1.0e-6
+  gradient_penalty: 1.0e-5
+  prior_weight: 0.0            # 無低保真先驗
+  
+  # 損失標準化
+  normalize_losses: true
+  normalization_method: gradnorm
+  
+  # 自適應權重 (GradNorm)
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 50     # 每 50 epochs 更新權重
+  adaptation_alpha: 1.5        # GradNorm 平衡強度
+  
+  # 🆕 Causal Training (時間因果權重)
+  causal_weighting: true
+  causal_eps: 0.5              # 因果約束強度 (0.5 = 中等強度)
+  causal_n_bins: 10            # 時間分窗數量 (10 bins × 2.0 時間單位/bin = 20 總跨度)
+
+# ====================================================================
+# 訓練配置
+# ====================================================================
+training:
+  # 優化器
+  optimizer:
+    type: soap
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+    precondition_frequency: 5
+    shampoo_beta: 0.999
+  
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  
+  # 學習率調度
+  lr_scheduler:
+    type: cosine_annealing
+    T_max: 4000
+    eta_min: 1.0e-6
+  
+  # 訓練循環
+  epochs: 4000
+  max_epochs: 4000
+  batch_size: 512
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+  
+  # 早停
+  early_stopping:
+    enabled: true
+    patience: 500      # 課程學習需要更長耐心
+    min_delta: 1.0e-6
+  
+  # 採樣策略
+  sampling:
+    N_pde: 20000           # PDE 碰撞點
+    adaptive_sampling: false
+    boundary_points: 1000  # 邊界點（週期性）
+  
+  # 穩定性
+  gradient_clip: 1.0
+  
+  amp:
+    enabled: false
+
+# ====================================================================
+# 優化器切換 (SOAP → L-BFGS)
+# ====================================================================
+optimizer_switching:
+  enabled: true
+  switch_epoch: 3000    # 在 3000 epoch 後切換到 L-BFGS
+  lbfgs_config:
+    lr: 0.5
+    max_iter: 20
+    history_size: 50
+    line_search_fn: strong_wolfe
+
+# ====================================================================
+# 課程學習配置 (雷諾數遞增)
+# ====================================================================
+curriculum:
+  enable: true
+  
+  stages:
+    # ================================================================
+    # 階段 1: Re=10 層流暖啟
+    # 目的：建立基本流場結構，數值穩定
+    # ================================================================
+    - name: "Stage1_Re10_Laminar"
+      epoch_range: [0, 300]
+      
+      # 物理參數 (Re=10)
+      nu: 0.196870
+      Re: 10.0
+      
+      lr: 0.001
+      
+      weights:
+        data: 10.0
+        momentum_x: 2.0
+        momentum_y: 2.0
+        continuity: 2.0
+        periodicity: 10.0
+      
+      sampling:
+        pde_points: 10000
+        boundary_points: 500
+      
+      stage_goals:
+        u_l2_target: 0.30
+        mass_conservation_target: 0.01
+    
+    # ================================================================
+    # 階段 2: Re=30 過渡流
+    # 目的：引入弱湍流特性
+    # ================================================================
+    - name: "Stage2_Re30_Transition"
+      epoch_range: [300, 800]
+      
+      # 物理參數 (Re=30)
+      nu: 0.065623
+      Re: 30.0
+      
+      lr: 0.0008
+      
+      weights:
+        data: 10.0
+        momentum_x: 3.0
+        momentum_y: 3.0
+        continuity: 3.0
+        periodicity: 10.0
+      
+      sampling:
+        pde_points: 15000
+        boundary_points: 800
+      
+      stage_goals:
+        u_l2_target: 0.25
+        mass_conservation_target: 0.005
+    
+    # ================================================================
+    # 階段 3: Re=50 弱湍流
+    # 目的：發展渦結構
+    # ================================================================
+    - name: "Stage3_Re50_WeakTurbulence"
+      epoch_range: [800, 1500]
+      
+      # 物理參數 (Re=50)
+      nu: 0.039374
+      Re: 50.0
+      
+      lr: 0.0005
+      
+      weights:
+        data: 10.0
+        momentum_x: 4.0
+        momentum_y: 4.0
+        continuity: 4.0
+        periodicity: 10.0
+      
+      sampling:
+        pde_points: 20000
+        boundary_points: 1000
+      
+      stage_goals:
+        u_l2_target: 0.20
+        mass_conservation_target: 0.003
+    
+    # ================================================================
+    # 階段 4: Re=80 湍流強化
+    # 目的：接近目標 Re，強化湍流結構
+    # ================================================================
+    - name: "Stage4_Re80_Turbulent"
+      epoch_range: [1500, 2500]
+      
+      # 物理參數 (Re=80)
+      nu: 0.024609
+      Re: 80.0
+      
+      lr: 0.0003
+      
+      weights:
+        data: 10.0
+        momentum_x: 5.0
+        momentum_y: 5.0
+        continuity: 5.0
+        periodicity: 10.0
+      
+      sampling:
+        pde_points: 25000
+        boundary_points: 1200
+      
+      stage_goals:
+        u_l2_target: 0.18
+        mass_conservation_target: 0.002
+    
+    # ================================================================
+    # 階段 5: Re=100 目標收斂
+    # 目的：達到目標 Re，最終精煉
+    # ================================================================
+    - name: "Stage5_Re100_Target"
+      epoch_range: [2500, 4000]
+      
+      # 物理參數 (Re=100)
+      nu: 0.019687
+      Re: 100.0
+      
+      lr: 0.0001
+      
+      weights:
+        data: 8.0       # 降低資料權重，提升物理約束
+        momentum_x: 6.0
+        momentum_y: 6.0
+        continuity: 6.0
+        periodicity: 10.0
+      
+      sampling:
+        pde_points: 30000
+        boundary_points: 1500
+      
+      stage_goals:
+        u_l2_target: 0.15
+        v_l2_target: 0.15
+        p_l2_target: 0.20
+        mass_conservation_target: 0.001
+        kinetic_energy_rmse: 0.05
+
+# ====================================================================
+# Ensemble（暫時禁用）
+# ====================================================================
+ensemble:
+  enable: false
+
+# ====================================================================
+# 評估配置
+# ====================================================================
+evaluation:
+  grid_resolution: [512, 512]  # 與 DNS 解析度一致
+  
+  metrics:
+    - relative_l2
+    - mass_conservation
+    - kinetic_energy
+    - enstrophy
+    - energy_spectrum
+  
+  thresholds:
+    u_l2_error: 0.15           # 速度 L2 ≤ 15%
+    v_l2_error: 0.15
+    p_l2_error: 0.20           # 壓力允許稍高
+    mass_conservation_error: 0.001  # 散度誤差 < 0.1%
+    kinetic_energy_rmse: 0.05  # 動能誤差 < 5%
+  
+  reference_data: ./data/kolmogorov_dns_re100_512x512_kf4.h5
+  reference_time_window: [20.0, 40.0]
+
+# ====================================================================
+# 物理驗證
+# ====================================================================
+physics_validation:
+  enabled: true
+  save_metrics: true
+  
+  thresholds:
+    mass_conservation: 0.001      # 質量守恆 < 0.1%
+    momentum_conservation: 0.01   # 動量守恆 < 1%
+    periodicity_error: 0.0001     # 週期性誤差 < 0.01%
+
+# ====================================================================
+# 日誌與輸出
+# ====================================================================
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+
+output:
+  checkpoint_dir: ./checkpoints/kolmogorov_re100_kf4_K100
+  results_dir: ./results/kolmogorov_re100_kf4_K100
+  visualization_dir: ./results/kolmogorov_re100_kf4_K100/visualizations
+
+# ====================================================================
+# 驗收標準
+# ====================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+  
+  physics:
+    - mass_conservation_satisfied: true
+    - momentum_residual_low: true
+    - periodicity_maintained: true
+  
+  reconstruction:
+    - sensor_l2_error_target: 0.05   # 感測點擬合 < 5%
+    - field_l2_error_target: 0.15    # 全場重建 < 15%
+    - kinetic_energy_preserved: true
+
+# ====================================================================
+# 使用說明
+# ====================================================================
+usage_notes: |
+  🔬 物理參數驗證：
+    - Re = 100 (Musacchio & Boffetta 2014 定義)
+    - nu = 0.019687 (匹配 DNS 檔案)
+    - k_f = 4 (較低波數，流型較簡單)
+    - forcing_amplitude = 1.0
+    - Flow regime: Turbulence
+  
+  🎯 訓練策略：
+    - 課程學習：Re=10 → 30 → 50 → 80 → 100
+    - 因果訓練：早期時間點優先滿足物理約束
+    - 自適應權重：GradNorm 動態平衡損失項
+    - 優化器切換：SOAP (0-3000) → L-BFGS (3000-4000)
+  
+  📊 預期結果：
+    - 訓練時間：3-4 小時（4000 epochs, GPU）
+    - 感測點 L2：< 5%（K=100 QR-pivot）
+    - 全場 L2：10-15%（湍流重建目標）
+    - 動能 RMSE：< 5%（統計特徵保持）
+  
+  🚀 執行指令：
+    # 前台運行（監控訓練）
+    python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml --device cuda
+    
+    # 背景運行（長時間訓練）
+    nohup python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml --device cuda \
+      > log/kolmogorov_re100_kf4_K100/training.log 2>&1 &
+  
+  📈 監控指令：
+    # 實時監控
+    python scripts/monitor_training.py --exp kolmogorov_re100_kf4_K100
+    
+    # 檢查檢查點
+    python scripts/evaluate_checkpoint.py \
+      --checkpoint checkpoints/kolmogorov_re100_kf4_K100/epoch_2000.pth \
+      --config configs/kolmogorov_re100_kf4_K100.yml
+  
+  ✅ 優勢（相比 k_f=8）：
+    - 流場結構更簡單（較低波數）
+    - 訓練更容易收斂
+    - 適合作為基準實驗
+  
+  ⚠️ 注意事項：
+    - DNS 數據時間窗：t=20-40（穩態區域）
+    - 雷諾數定義：基於 Musacchio & Boffetta (2014)
+    - SOAP 優化器：betas=[0.9, 0.999], precondition_freq=5
+    - 3000 epoch 後自動切換到 L-BFGS 精調
+    - 因果訓練：causal_eps=0.5, causal_n_bins=10
+  
+  🔍 故障排除：
+    - NaN/Inf：降低學習率 (lr=5e-4)，增強梯度裁剪 (clip=0.5)
+    - 過擬合感測點：降低 data_weight (5.0)，提高 PDE 權重
+    - 週期性破壞：提高 periodicity_weight (20.0)
+    - 能譜不匹配：檢查 Fourier 特徵 sigma 與 k_f 匹配（sigma=4.0）
+
+# ====================================================================
+# 更新歷史
+# ====================================================================
+# v3.0_causal_training (2025-11-27):
+#   - 新增因果訓練機制（causal_weighting: true）
+#   - 更新至最新配置標準（與 kf8 配置一致）
+#   - 優化課程學習參數（5 階段）
+#   - 調整 Fourier 特徵 sigma=4.0（匹配 k_f=4）
+#   - 更新優化器切換時機（3000 epoch）
+# 
+# v2.3_re100_corrected (2025-11-25):
+#   - 修正 Re=100 物理參數（nu=0.019687）
+#   - K=100 感測點配置
+# ====================================================================
