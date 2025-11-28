@@ -462,8 +462,13 @@ class Trainer:
         self.patience = self.early_stopping_cfg.get('patience', 50)
         self.min_delta = self.early_stopping_cfg.get('min_delta', 1e-6)
         
+        # ⭐ 快速收斂閾值（可配置，預設禁用）
+        self.convergence_threshold = self.early_stopping_cfg.get('convergence_threshold', None)
+        
         if self.early_stopping_enabled:
             logging.info(f"✅ 早停機制啟用（patience={self.patience}, min_delta={self.min_delta}）")
+        if self.convergence_threshold is not None:
+            logging.info(f"✅ 快速收斂檢查啟用（threshold={self.convergence_threshold:.2e}）")
     
     def _setup_adaptive_sampling(self):
         """配置自適應採樣"""
@@ -641,15 +646,12 @@ class Trainer:
         
         # ✅ 調用輔助函數處理標準化與縮放
         # 注意：這裡傳入 coords_full，它可能包含 t
-        _, coords_full_norm, model_coords_pde = prepare_model_coords(coords_full, require_grad=True)
+        coords_full_physical, coords_full_norm, model_coords_pde = prepare_model_coords(coords_full, require_grad=True)
         
-        # ⚠️ 再次分離出物理空間坐標（帶有梯度），供物理模組使用
-        # 因為 prepare_model_coords 返回的 coords_physical 是 coords_full
-        if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
-            # 如果有時間，coords_full[:, :-1] 是空間
-            coords_pde_physical = coords_full[:, :-1]
-        else:
-            coords_pde_physical = coords_full
+        # ⚠️ 關鍵修正：不要在這裡切片！
+        # 傳遞完整的 coords_full_physical（可能包含時間維度）給物理模組
+        # 讓物理模組自行處理維度切片，以保持計算圖連接
+        coords_pde_physical = coords_full_physical
         
         #調試：打印維度（僅第一個 epoch）
         if epoch == 0 and not hasattr(self, '_debug_printed'):
@@ -775,7 +777,11 @@ class Trainer:
         
         except Exception as e:
             logging.error(f"🚨 物理殘差計算失敗: {e}")
-            logging.error(f"coords_pde shape: {coords_pde.shape}, u_pred_norm shape: {u_pred_norm.shape}, u_pred_pde_physical shape: {u_pred_pde_physical.shape}")
+            logging.error(f"coords_pde_physical shape: {coords_pde_physical.shape}, requires_grad: {coords_pde_physical.requires_grad}")
+            logging.error(f"u_pred_norm shape: {u_pred_norm.shape}, requires_grad: {u_pred_norm.requires_grad}")
+            logging.error(f"u_pred_pde_physical shape: {u_pred_pde_physical.shape}, requires_grad: {u_pred_pde_physical.requires_grad}")
+            if is_vs_pinn:
+                logging.error(f"predictions_phys shape: {predictions_phys.shape if predictions_phys is not None else None}")
             raise
         
         # ==================== 1B. RANS 已移除（僅保留為 LoFi 場診斷工具）====================
@@ -826,7 +832,11 @@ class Trainer:
         else:
             wall_loss = torch.tensor(0.0, device=self.device)
             if epoch == 0:
-                logging.warning(f"⚠️ 未檢測到壁面邊界點！y_bc 範圍: [{y_bc.min():.6f}, {y_bc.max():.6f}]")
+                # ⚠️ 修正：處理 y_bc 為空的情況
+                if y_bc.numel() > 0:
+                    logging.warning(f"⚠️ 未檢測到壁面邊界點！y_bc 範圍: [{y_bc.min():.6f}, {y_bc.max():.6f}]")
+                else:
+                    logging.info(f"ℹ️ 無壁面邊界點（純週期性系統，如 Kolmogorov Flow）")
 
         # ==================== 2B. 週期性邊界條件損失 ====================
         # 僅用於 Kolmogorov Flow 或其他週期性系統
@@ -1438,9 +1448,9 @@ class Trainer:
                     
                     break
             
-            # 快速收斂檢查
-            if loss_dict['total_loss'] < 1e-6:
-                logging.info(f"✅ 快速收斂於 epoch {epoch}（loss < 1e-6）")
+            # 快速收斂檢查（可配置）
+            if self.convergence_threshold is not None and loss_dict['total_loss'] < self.convergence_threshold:
+                logging.info(f"✅ 快速收斂於 epoch {epoch}（loss < {self.convergence_threshold:.2e}）")
                 break
         
         # 訓練結束（處理 epoch 變數作用域）

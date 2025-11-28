@@ -51,7 +51,8 @@ def compute_gradient_2d(
 
     Args:
         field: 標量場 [batch, 1]（需要在計算圖中）
-        coords: 2D 坐標 [batch, 2]（需要 requires_grad=True）
+        coords: N-D 坐標 [batch, N]（需要 requires_grad=True，N >= 2）
+                ⚠️ 修正：coords 可能包含額外維度（如時間 t），自動處理
         component: 微分分量 (0=x, 1=y)
 
     Returns:
@@ -76,6 +77,13 @@ def compute_gradient_2d(
             f"field.requires_grad={field.requires_grad}, coords.requires_grad={coords.requires_grad}"
         )
 
+    # ⚠️ 關鍵修正：coords 可能有 >2 個維度（如 [x, y, t]）
+    # 只取指定的空間分量（0=x, 1=y）
+    if component >= grads.shape[1]:
+        raise ValueError(
+            f"component={component} 超出範圍，coords.shape={coords.shape}, grads.shape={grads.shape}"
+        )
+    
     return grads[:, component:component+1]
 
 
@@ -472,9 +480,9 @@ class KolmogorovFlow2D(nn.Module):
                 'momentum_z': [batch, 1] = 0  # 2D 無 z 分量，為兼容性返回 0
             }
         """
-        # ⚠️ 關鍵修復：不要重新創建座標張量！
-        # trainer 已經確保傳入的 coords 與 predictions 來自同一計算路徑
-        # 任何 clone/detach 操作都會斷開計算圖連接
+        # ⚠️ 關鍵修復：不要對座標進行切片！
+        # trainer 已經確保傳入的 coords 包含所有必要維度（可能是 [x, y] 或 [x, y, t]）
+        # compute_gradient_2d 已更新為自動處理多維座標，只取前兩個分量的梯度
 
         # 只檢查梯度追蹤狀態，不修改張量
         if not coords.requires_grad:
@@ -482,18 +490,14 @@ class KolmogorovFlow2D(nn.Module):
                 f"傳入的 coords 必須啟用梯度追蹤！當前 requires_grad={coords.requires_grad}"
             )
 
-        # ⚠️ 關鍵修復：在物理模組內部進行切片，保持與原始張量的計算圖連接
-        # 只取前 2 個維度用於 2D 計算（如果 coords 是 3D，例如 [x, y, z]）
-        coords_2d = coords[:, :2] if coords.shape[1] > 2 else coords
-
         # 只取前 3 個分量 [u, v, p]（忽略可能的第 4 個分量 S）
         predictions_3d = predictions[:, :3] if predictions.shape[1] >= 3 else predictions
 
-        # 計算動量殘差（使用切片後的 2D 座標）
-        momentum_residuals = self.compute_momentum_residuals(coords_2d, predictions_3d, time)
+        # ⚠️ 關鍵：直接使用原始 coords（不切片），讓 compute_gradient_2d 自動處理
+        momentum_residuals = self.compute_momentum_residuals(coords, predictions_3d, time)
 
-        # 計算連續性殘差（⚠️ 修復：使用 2D 座標，與動量殘差一致）
-        continuity_residual = self.compute_continuity_residual(coords_2d, predictions_3d)
+        # 計算連續性殘差
+        continuity_residual = self.compute_continuity_residual(coords, predictions_3d)
 
         # 組合成統一格式（添加 momentum_z = 0 以兼容 3D 訓練器）
         return {

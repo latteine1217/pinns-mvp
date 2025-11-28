@@ -12,7 +12,7 @@ import argparse
 
 def generate_qr_sensors_kolmogorov(
     dns_file: str,
-    snapshot_idx: int = 100,  # t=10.0
+    snapshot_idx: int = 30,  # t=30.0 (穩態區域中點)
     K: int = 100,
     output_file: str = None,
     n_modes: int = 50  # 使用前 50 個 POD 模態
@@ -26,12 +26,20 @@ def generate_qr_sensors_kolmogorov(
     print("🔬 Kolmogorov Flow QR-Pivot 感測點生成 (POD-based)")
     print("=" * 70)
     
+    # 先檢查數據範圍
+    with h5py.File(dns_file, 'r') as f:
+        n_timesteps = len(f['time'])
+        t_range = [f['time'][0], f['time'][-1]]
+        print(f"\n📊 DNS 數據檢查:")
+        print(f"   時間步數: {n_timesteps}")
+        print(f"   時間範圍: [{t_range[0]:.2f}, {t_range[1]:.2f}]")
+    
     # 讀取多個快照用於 POD
     with h5py.File(dns_file, 'r') as f:
-        # 使用 t=5 到 t=15 的快照
-        idx_start = 50  # t=5
-        idx_end = 150   # t=15
-        idx_step = 5
+        # 使用穩態區域 t=20 到 t=40 的快照
+        idx_start = 20  # t=20.0
+        idx_end = min(41, len(f['time']))   # t=40.0 或最大索引
+        idx_step = 2    # 每 2 步取一個快照（避免過多數據）
         
         snapshots_u = []
         snapshots_v = []

@@ -80,45 +80,84 @@ check_dependencies()
 
 # 核心功能模組導入
 try:
-    # 物理與數值計算 - 只匯入實際存在的函數
+    # 物理與數值計算
     from .physics import (
         ns_residual_2d,
         VSScaler,
         compute_derivatives,
         check_conservation_laws,
-        ns_2d,
         compute_vorticity,
-        incompressible_ns_2d
+        incompressible_ns_2d,
+        NSEquations3DTemporal,
+        RANSEquations2D,
+        reynolds_number,
+        PhysicsConstants
     )
     
-    # 神經網路模型 - 只匯入實際存在的類別
+    # 神經網路模型
     from .models import (
         FourierFeatures,
         PINNNet,
-        create_pinn_model
+        create_pinn_model,
+        ScaledPINNWrapper,
+        create_scaled_pinn
     )
     
-    # 損失函數 - 只匯入實際存在的類別
+    # 損失函數
     from .losses import (
         CompleteLossManager,
         GradNormWeighter,
         CausalWeighter,
-        create_loss_manager
+        MeanConstraintLoss,
+        create_loss_manager,
+        ns_residual_2d as loss_ns_residual_2d,
+        BoundaryConditionLoss,
+        InitialConditionLoss
     )
     
-    # 感測點選擇 - 只匯入實際存在的類別
+    # 感測點選擇
     from .sensors import (
         QRPivotSelector,
+        PhysicsGuidedQRPivotSelector,
+        StratifiedChannelFlowSelector,
         create_sensor_selector,
         evaluate_sensor_placement
     )
     
-    # 資料處理 - 只匯入實際存在的類別
+    # 資料處理
     from .dataio import (
         JHTDBClient,
         ChannelFlowLoader,
         LowFiLoader,
-        load_lowfi_data
+        load_lowfi_data,
+        StructuredGrid,
+        FlowDataBundle
+    )
+    
+    # 訓練管理
+    from .train import (
+        load_config as train_load_config,
+        save_checkpoint,
+        load_checkpoint,
+        create_model,
+        create_physics,
+        create_optimizer,
+        get_device as train_get_device
+    )
+    
+    # 評估模組
+    try:
+        from .evals import metrics, visualizer
+    except ImportError:
+        logger.warning("Evaluation module (evals) not fully available")
+        metrics = None
+        visualizer = None
+    
+    # 工具模組
+    from .utils import (
+        setup_logging,
+        set_random_seed,
+        get_device as utils_get_device
     )
     
     logger.info("Successfully imported all available PINNx modules")
@@ -178,13 +217,14 @@ class Config:
         logger.info(f"Precision set to: {dtype}")
     
     @classmethod
-    def ensure_reproducibility(cls, seed: int = None):
+    def ensure_reproducibility(cls, seed: 'int | None' = None):
         """確保實驗重現性"""
         import torch
         import numpy as np
         import random
         
-        seed = seed or cls.default_seed
+        if seed is None:
+            seed = cls.default_seed
         
         # 設定所有隨機種子
         random.seed(seed)
@@ -202,32 +242,37 @@ class Config:
         logger.info(f"Reproducibility ensured with seed: {seed}")
 
 # 便捷函數
-def load_config(config_path: str = None, config_name: str = "defaults"):
+def load_config(config_path: 'str | None' = None, config_name: str = "defaults"):
     """載入配置檔案"""
     import yaml
+    from pathlib import Path
     
     if config_path is None:
-        config_path = Config.config_dir / f"{config_name}.yml"
+        final_path = Config.config_dir / f"{config_name}.yml"
+    else:
+        final_path = Path(config_path)
     
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(final_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
-    logger.info(f"Loaded configuration from: {config_path}")
+    logger.info(f"Loaded configuration from: {final_path}")
     return config
 
-def setup_experiment(config_name: str = "defaults", device: str = None, seed: int = None):
+def setup_experiment(config_name: str = "defaults", device: 'str | None' = None, seed: 'int | None' = None):
     """設定實驗環境"""
     # 載入配置
     config = load_config(config_name=config_name)
     
     # 設定裝置
     if device is None:
-        device = config.get('experiment', {}).get('device', Config.default_device)
+        device_from_config = config.get('experiment', {}).get('device', Config.default_device)
+        device = str(device_from_config)
     Config.set_device(device)
     
     # 設定重現性
     if seed is None:
-        seed = config.get('experiment', {}).get('seed', Config.default_seed)
+        seed_from_config = config.get('experiment', {}).get('seed', Config.default_seed)
+        seed = int(seed_from_config)
     Config.ensure_reproducibility(seed)
     
     # 創建輸出目錄
@@ -237,26 +282,42 @@ def setup_experiment(config_name: str = "defaults", device: str = None, seed: in
     logger.info(f"Experiment setup complete for: {config_name}")
     return config
 
-# 模組資訊 - 只包含實際可用的函數
+# 模組資訊 - 包含所有公開 API
 __all__ = [
     # 版本與配置
     '__version__', 'Config', 'load_config', 'setup_experiment',
     
     # 物理模組
     'ns_residual_2d', 'VSScaler', 'compute_derivatives', 'check_conservation_laws',
-    'ns_2d', 'compute_vorticity', 'incompressible_ns_2d',
+    'compute_vorticity', 'incompressible_ns_2d', 'NSEquations3DTemporal',
+    'RANSEquations2D', 'reynolds_number', 'PhysicsConstants',
     
     # 模型模組
-    'FourierFeatures', 'PINNNet', 'create_pinn_model',
+    'FourierFeatures', 'PINNNet', 'create_pinn_model', 
+    'ScaledPINNWrapper', 'create_scaled_pinn',
     
     # 損失模組
-    'CompleteLossManager', 'GradNormWeighter', 'CausalWeighter', 'create_loss_manager',
+    'CompleteLossManager', 'GradNormWeighter', 'CausalWeighter', 
+    'MeanConstraintLoss', 'create_loss_manager', 'BoundaryConditionLoss', 
+    'InitialConditionLoss',
     
     # 感測器模組
-    'QRPivotSelector', 'create_sensor_selector', 'evaluate_sensor_placement',
+    'QRPivotSelector', 'PhysicsGuidedQRPivotSelector', 'StratifiedChannelFlowSelector',
+    'create_sensor_selector', 'evaluate_sensor_placement',
     
     # 資料模組
     'JHTDBClient', 'ChannelFlowLoader', 'LowFiLoader', 'load_lowfi_data',
+    'StructuredGrid', 'FlowDataBundle',
+    
+    # 訓練模組
+    'train_load_config', 'save_checkpoint', 'load_checkpoint',
+    'create_model', 'create_physics', 'create_optimizer', 'train_get_device',
+    
+    # 評估模組
+    'metrics', 'visualizer',
+    
+    # 工具模組
+    'setup_logging', 'set_random_seed', 'utils_get_device',
 ]
 
 # 套件初始化完成

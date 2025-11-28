@@ -389,7 +389,15 @@ class CurriculumScheduler:
         for i, s in enumerate(self.stages, 1):
             logging.info(f"Stage {i}: {s['name']}")
             logging.info(f"  Epochs: {s['epoch_range'][0]}-{s['epoch_range'][1]}")
-            logging.info(f"  Re_tau: {s['Re_tau']:.1f}, nu: {s['nu']:.6f}, dP/dx: {s['pressure_gradient']:.3f}")
+            
+            # 根據場景類型顯示不同的物理參數
+            if 'Re_tau' in s:  # Channel Flow
+                logging.info(f"  Re_tau: {s['Re_tau']:.1f}, nu: {s['nu']:.6f}, dP/dx: {s['pressure_gradient']:.3f}")
+            elif 'Re' in s:  # Kolmogorov Flow
+                logging.info(f"  Re: {s['Re']:.1f}, nu: {s['nu']:.6f}")
+            else:
+                logging.info(f"  nu: {s['nu']:.6f}")
+            
             logging.info(f"  PDE points: {s['sampling']['pde_points']}, BC points: {s['sampling']['boundary_points']}")
             logging.info(f"  Learning rate: {s['lr']:.6f}")
         logging.info("="*80)
@@ -427,46 +435,83 @@ class CurriculumScheduler:
                     logging.info("="*80)
                     logging.info(f"🎯 CURRICULUM STAGE TRANSITION at Epoch {epoch}")
                     logging.info(f"📚 New Stage: {stage['name']}")
-                    logging.info(f"🔬 Re_tau: {stage['Re_tau']:.1f}, nu: {stage['nu']:.6f}")
+                    
+                    # 根據場景類型顯示不同的物理參數
+                    if 'Re_tau' in stage:  # Channel Flow
+                        logging.info(f"🔬 Re_tau: {stage['Re_tau']:.1f}, nu: {stage['nu']:.6f}")
+                    elif 'Re' in stage:  # Kolmogorov Flow
+                        logging.info(f"🔬 Re: {stage['Re']:.1f}, nu: {stage['nu']:.6f}")
+                    else:
+                        logging.info(f"🔬 nu: {stage['nu']:.6f}")
+                    
                     logging.info(f"⚙️  PDE/BC points: {stage['sampling']['pde_points']}/{stage['sampling']['boundary_points']}")
                     logging.info(f"📊 Weights: {stage['weights']}")
                     logging.info(f"📉 Learning rate: {stage['lr']:.6f}")
                     logging.info("="*80)
                 
-                return {
+                # 構建返回配置（只包含實際存在的參數）
+                config_dict = {
                     'stage_name': stage['name'],
                     'is_transition': is_transition,
                     'weights': stage['weights'],
-                    'Re_tau': stage['Re_tau'],
                     'nu': stage['nu'],
-                    'pressure_gradient': stage['pressure_gradient'],
                     'sampling': stage['sampling'],
                     'lr': stage['lr']
                 }
+                
+                # 根據場景添加特定參數
+                if 'Re_tau' in stage:
+                    config_dict['Re_tau'] = stage['Re_tau']
+                if 'pressure_gradient' in stage:
+                    config_dict['pressure_gradient'] = stage['pressure_gradient']
+                if 'Re' in stage:
+                    config_dict['Re'] = stage['Re']
+                
+                return config_dict
         
         # 超出範圍，返回最後階段
         last_stage = self.stages[-1]
-        return {
+        config_dict = {
             'stage_name': last_stage['name'],
             'is_transition': False,
             'weights': last_stage['weights'],
-            'Re_tau': last_stage['Re_tau'],
             'nu': last_stage['nu'],
-            'pressure_gradient': last_stage['pressure_gradient'],
             'sampling': last_stage['sampling'],
             'lr': last_stage['lr']
         }
+        
+        # 根據場景添加特定參數
+        if 'Re_tau' in last_stage:
+            config_dict['Re_tau'] = last_stage['Re_tau']
+        if 'pressure_gradient' in last_stage:
+            config_dict['pressure_gradient'] = last_stage['pressure_gradient']
+        if 'Re' in last_stage:
+            config_dict['Re'] = last_stage['Re']
+        
+        return config_dict
     
     def _update_physics_parameters(self, stage: Dict[str, Any]):
         """更新物理方程模組的參數"""
         if hasattr(self.physics, 'nu'):
             self.physics.nu = stage['nu']
-        if hasattr(self.physics, 'Re_tau'):
+        
+        # Channel Flow 參數
+        if hasattr(self.physics, 'Re_tau') and 'Re_tau' in stage:
             self.physics.Re_tau = stage['Re_tau']
-        if hasattr(self.physics, 'pressure_gradient'):
+        if hasattr(self.physics, 'pressure_gradient') and 'pressure_gradient' in stage:
             self.physics.pressure_gradient = stage['pressure_gradient']
         
-        logging.debug(f"✅ Physics parameters updated: Re_tau={stage['Re_tau']}, nu={stage['nu']}")
+        # Kolmogorov Flow 參數
+        if hasattr(self.physics, 'Re') and 'Re' in stage:
+            self.physics.Re = stage['Re']
+        
+        # 日誌輸出
+        if 'Re_tau' in stage:
+            logging.debug(f"✅ Physics parameters updated: Re_tau={stage['Re_tau']}, nu={stage['nu']}")
+        elif 'Re' in stage:
+            logging.debug(f"✅ Physics parameters updated: Re={stage['Re']}, nu={stage['nu']}")
+        else:
+            logging.debug(f"✅ Physics parameters updated: nu={stage['nu']}")
 
 # 全域快取，用於存儲 Channel Flow 資料和統計資訊
 _channel_data_cache: Optional[Dict[str, Any]] = None

@@ -30,7 +30,7 @@ data:
   
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns_re100_512x512_kf4.h5
+    data_path: ./data/kolmogorov_dns_re100_kf4_T100_pert10.h5
     description: "Kolmogorov flow (Re=100, k_f=4, 2D periodic, turbulent)"
     
     domain:
@@ -63,12 +63,12 @@ normalization:
   type: training_data_norm
   params: {}
   
-  noise_sigma: 0.01      # 1% 高斯噪聲
-  dropout_prob: 0.05     # 5% 隨機遺失
+  noise_sigma: 0.0      # 1% 高斯噪聲
+  dropout_prob: 0.0     # 5% 隨機遺失
   
   steady_state:
     enabled: true
-    time_window: [20.0, 40.0]  # 統計穩定區間
+    time_window: [40.0, 60.0]  # 統計穩定區間
 
 # ====================================================================
 # 感測點配置
@@ -98,7 +98,7 @@ model:
   fourier_features:
     enabled: true
     type: standard
-    fourier_m: 64           # Fourier 特徵數
+    fourier_m: 12           # Fourier 特徵數
     fourier_sigma: 4.0      # 空間頻率尺度（匹配 k_f=4）
     include_input: true
   
@@ -160,7 +160,7 @@ losses:
   # 自適應權重 (GradNorm)
   adaptive_weighting: true
   adaptation_method: gradnorm
-  adaptation_frequency: 50     # 每 50 epochs 更新權重
+  adaptation_frequency: 500     # 每 500 epochs 更新權重
   adaptation_alpha: 1.5        # GradNorm 平衡強度
   
   # 🆕 Causal Training (時間因果權重)
@@ -186,23 +186,26 @@ training:
   
   # 學習率調度
   lr_scheduler:
-    type: cosine_annealing
-    T_max: 4000
+    type: step
+    step_size: 2000
+    gamma: 0.9
     eta_min: 1.0e-6
   
   # 訓練循環
-  epochs: 4000
-  max_epochs: 4000
-  batch_size: 512
+  epochs: 10000
+  max_epochs: 10000
+  batch_size: 21000
   validation_freq: 50
   checkpoint_freq: 100
   log_interval: 10
   
   # 早停
   early_stopping:
-    enabled: true
+    enabled: false
     patience: 500      # 課程學習需要更長耐心
     min_delta: 1.0e-6
+    # convergence_threshold: null  # 快速收斂閾值 (null=禁用, 1e-8=啟用)
+                                   # 預設：禁用（不要過早停止）
   
   # 採樣策略
   sampling:
@@ -221,7 +224,7 @@ training:
 # ====================================================================
 optimizer_switching:
   enabled: true
-  switch_epoch: 3000    # 在 3000 epoch 後切換到 L-BFGS
+  switch_epoch: 8000    # 在 8000 epoch 後切換到 L-BFGS
   lbfgs_config:
     lr: 0.5
     max_iter: 20
@@ -240,7 +243,7 @@ curriculum:
     # 目的：建立基本流場結構，數值穩定
     # ================================================================
     - name: "Stage1_Re10_Laminar"
-      epoch_range: [0, 300]
+      epoch_range: [0, 2000]
       
       # 物理參數 (Re=10)
       nu: 0.196870
@@ -268,7 +271,7 @@ curriculum:
     # 目的：引入弱湍流特性
     # ================================================================
     - name: "Stage2_Re30_Transition"
-      epoch_range: [300, 800]
+      epoch_range: [2000, 4000]
       
       # 物理參數 (Re=30)
       nu: 0.065623
@@ -296,7 +299,7 @@ curriculum:
     # 目的：發展渦結構
     # ================================================================
     - name: "Stage3_Re50_WeakTurbulence"
-      epoch_range: [800, 1500]
+      epoch_range: [4000, 6000]
       
       # 物理參數 (Re=50)
       nu: 0.039374
@@ -324,7 +327,7 @@ curriculum:
     # 目的：接近目標 Re，強化湍流結構
     # ================================================================
     - name: "Stage4_Re80_Turbulent"
-      epoch_range: [1500, 2500]
+      epoch_range: [6000, 8000]
       
       # 物理參數 (Re=80)
       nu: 0.024609
@@ -352,7 +355,7 @@ curriculum:
     # 目的：達到目標 Re，最終精煉
     # ================================================================
     - name: "Stage5_Re100_Target"
-      epoch_range: [2500, 4000]
+      epoch_range: [8000, 10000]
       
       # 物理參數 (Re=100)
       nu: 0.019687

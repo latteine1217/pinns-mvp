@@ -10,11 +10,10 @@ dependencies:
   # Python 基礎
   - python=3.10
   
-  # 深度學習框架
-  - pytorch>=2.9.1
-  - pytorch-cuda=12.1  # CUDA 支援，可根據實際GPU調整（macOS 使用 MPS）
-  - torchvision>=0.24.1
-  - torchaudio>=2.9.1
+  # 深度學習框架（macOS Apple Silicon 版本）
+  - pytorch>=2.0
+  - torchvision
+  - torchaudio
   
   # 科學計算核心
   - numpy>=1.24
@@ -82,11 +81,11 @@ dependencies:
       - scipy-interpolate  # 高級插值方法
       
       # 平行處理
-      - ray[default]>=2.7  # 分散式計算 (可選)
+      # - ray[default]>=2.7  # 分散式計算 (可選，macOS 上可能有相容性問題)
       
-      # 高效能數值計算
-      - jax[cpu]           # JAX 計算框架 (可選)
-      - jaxlib             # JAX 函式庫
+      # 高效能數值計算 (macOS Apple Silicon 需要特殊安裝)
+      # - jax[cpu]           # JAX 計算框架 (可選)
+      # - jaxlib             # JAX 函式庫
       
       # 最佳化器
       - torch-optimizer    # 額外的 PyTorch 最佳化器
@@ -117,30 +116,30 @@ dependencies:
       - psutil             # 系統資源監控
       - gpustat            # GPU 狀態監控
       
-      # 科學繪圖
-      - mayavi             # 3D 科學可視化 (可選)
-      - vtk                # 可視化工具包
+      # 科學繪圖 (macOS 上 mayavi 安裝複雜，暫時跳過)
+      # - mayavi             # 3D 科學可視化 (可選)
+      # - vtk                # 可視化工具包
       
       # 頻譜分析
       - pyfftw             # 快速傅立葉變換
       
-      # 網格生成 (可選)
+      # 網格生成 (可選，pygmsh 需要額外依賴)
       - meshio             # 網格 I/O
-      - pygmsh             # 網格生成
+      # - pygmsh             # 網格生成
       
-      # CUDA 工具 (如果需要)
-      - cupy-cuda12x       # GPU 加速 NumPy
+      # CUDA 工具 (macOS 不需要)
+      # - cupy-cuda12x       # GPU 加速 NumPy (僅限 Linux/Windows CUDA)
       
       # 高級數學函數
       - mpmath             # 任意精度算術
       
       # 資料庫連接 (用於結果儲存)
       - sqlalchemy         # SQL 工具包
-      - sqlite3
+      # sqlite3 已內建於 Python，不需要透過 pip 安裝
 
-# 環境變量設定 (可選)
+# 環境變量設定 (macOS 版本)
 variables:
-  CUDA_VISIBLE_DEVICES: "0"
+  # macOS 使用 MPS (Metal Performance Shaders) 而非 CUDA
+  PYTORCH_ENABLE_MPS_FALLBACK: "1"
   OMP_NUM_THREADS: "8"
   MKL_NUM_THREADS: "8"
-  PYTORCH_CUDA_ALLOC_CONF: "max_split_size_mb:128"

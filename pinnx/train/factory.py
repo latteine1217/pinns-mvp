@@ -1076,6 +1076,16 @@ def create_optimizer(
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
         logging.info(f"✅ Using ExponentialLR (gamma={gamma})")
     
+    elif scheduler_type == 'step':
+        step_size = scheduler_cfg.get('step_size', 1000)
+        gamma = scheduler_cfg.get('gamma', 0.1)
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=step_size,
+            gamma=gamma
+        )
+        logging.info(f"✅ Using StepLR (step_size={step_size}, gamma={gamma})")
+    
     elif scheduler_type in ['none', None]:
         logging.info("No learning rate scheduler configured")
     
@@ -1083,7 +1093,7 @@ def create_optimizer(
         raise ValueError(
             f"Unsupported scheduler type: '{scheduler_type}'. "
             f"Supported types: 'warmup_cosine', 'cosine_warm_restarts', "
-            f"'cosine', 'exponential', 'none'"
+            f"'cosine', 'exponential', 'step', 'none'"
         )
     
     return optimizer, scheduler

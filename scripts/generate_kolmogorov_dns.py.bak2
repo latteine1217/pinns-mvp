@@ -176,18 +176,18 @@ class KolmogorovFlowDNS:
         # 策略: 使用較弱初始場 (alpha < 1) + 後續擾動，避免數值不穩定但能激發湍流
         alpha_formula = nu * k_f**2 / A
         alpha = max(0.4, min(1.0, alpha_formula))  # 保守值 0.4-1.0
-        U_amp = alpha * A / (nu * k_f**2)  # ✅ 修正變數名：U_amp → U_amp
+        U_amp = alpha * A / (nu * k_f**2)  # ✅ 修正變數名：V_amp → U_amp
         
         if self.use_torch:
-            U_init = U_amp * torch.sin(k_phys * self.Y)
+            U_init = V_amp * torch.sin(k_phys * self.Y)
             self.U_hat = self.fft2(U_init)
             self.V_hat = torch.zeros((N, N), dtype=torch.complex64, device=self.device)
         else:
-            U_init = U_amp * np.sin(k_phys * Y)
+            U_init = V_amp * np.sin(k_phys * Y)
             self.U_hat = np.fft.fft2(U_init)
             self.V_hat = np.zeros((N, N), dtype=complex)
         
-        logging.info(f"✅ 初始化弱化層流解：U_max = {U_amp:.6f} (alpha = {alpha:.6f})")
+        logging.info(f"✅ 初始化弱化層流解：U_max = {V_amp:.6f} (alpha = {alpha:.6f})")
         
         # ✅ 關鍵修正：初始化後立即投影，確保 ∇·u = 0
         self.project_incompressible()
@@ -250,26 +250,13 @@ class KolmogorovFlowDNS:
         else:
             k2_safe[0, 0] = 1.0
 
-        # ===== 壓力投影步驟（確保無散度）=====
-        # 目標：û^(n+1) = û* - ∇φ (頻譜空間：û = û* - ik φ̂)
-        # Poisson 方程：∇²φ = ∇·û* (頻譜空間：-k² φ̂ = div_hat)
-        #
-        # 步驟 1：計算暫時速度的散度
         div_hat = 1j * self.kx * tentative_U + 1j * self.ky * tentative_V
-        #
-        # 步驟 2：求解壓力（φ̂ = -div_hat / k²）
-        # 注意：k²=0 時不投影（平均流不受壓力影響）
-        P_hat = -div_hat / k2_safe  # 負號確保投影正確
+        P_hat = div_hat / k2_safe
         if self.use_torch:
-            P_hat[0, 0] = 0.0  # 壓力常數任意（不影響梯度）
+            P_hat[0, 0] = 0.0
         else:
             P_hat[0, 0] = 0.0
-        #
-        # 步驟 3：投影校正（û = û* - ik φ̂）
-        # 將 φ̂ = -div_hat/k² 代入：
-        # û = û* - ik × (-div_hat/k²) = û* + ik×div_hat/k²
-        # 但由於我們定義 P_hat = -div_hat/k²，所以：
-        # û = û* - ik × P_hat
+
         rhs_U = tentative_U - 1j * self.kx * P_hat
         rhs_V = tentative_V - 1j * self.ky * P_hat
 
@@ -331,7 +318,7 @@ class KolmogorovFlowDNS:
         else:
             k2_safe[0, 0] = 1.0
 
-        P_hat = -rhs_hat / k2_safe
+        P_hat = rhs_hat / k2_safe
         if self.use_torch:
             P_hat[0, 0] = 0.0
         else:

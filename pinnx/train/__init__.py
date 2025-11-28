@@ -40,6 +40,9 @@ from .schedulers import (
     WarmupCosineScheduler
 )
 
+# 訓練器類（核心）
+from .trainer import Trainer
+
 # TODO: ensemble 模組尚未完整實現，以下導入會觸發 NotImplementedError
 # 取消註解以啟用 ensemble 功能（當實現完成後）
 # from .ensemble import (
@@ -50,6 +53,9 @@ from .schedulers import (
 # )
 
 __all__ = [
+    # 核心訓練器
+    'Trainer',
+    
     # 自適應殘差點採樣
     'AdaptiveCollocationSampler',
     'create_adaptive_collocation_sampler',

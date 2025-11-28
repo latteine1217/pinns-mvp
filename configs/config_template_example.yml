@@ -140,9 +140,11 @@ model:
   use_layer_norm: false               # Layer Normalization（可能影響梯度計算）
   dropout: 0.0                        # Dropout 比例（正則化，0.0=禁用）
 
-  # ⚠️ 已移除：use_rwf, rwf_scale_std（功能已整合至 fourier_vs_mlp）
-
-  sine_omega_0: 1.0                   # SIREN omega_0 參數：
+      # Random Weight Factorization (RWF) - 改善訓練穩定性
+      use_rwf: false                    # 是否啟用 RWF
+      rwf_scale_mean: 0.0               # s 的初始化均值 (exp(0)=1.0)
+      rwf_scale_std: 0.1                # s 的初始化標準差
+    sine_omega_0: 1.0                   # SIREN omega_0 參數：
                                       #   - 與 Fourier 特徵結合：1.0-30.0
                                       #   - 無 Fourier 特徵：30.0-60.0
 
@@ -256,8 +258,8 @@ losses:
   momentum_x_weight: 1.0              # x 方向動量方程
   momentum_y_weight: 1.0              # y 方向動量方程
   momentum_z_weight: 1.0              # z 方向動量方程
-  continuity_weight: 1.0              # 連續方程（質量守恆，∇·u=0）
-                                      # 說明：基準權重設為 1.0，由 GradNorm 動態調整
+  div_weight: 1.0                     # 🆕 散度損失權重（獨立控制不可壓縮條件 ∇·u=0）
+                                      # 若未設定，預設回退到 continuity_weight
 
   # 物理約束權重
   wall_constraint_weight: 10.0        # 壁面約束增強（⚠️ 重要，防止壁面剪應力歸零）
@@ -287,12 +289,20 @@ losses:
     - momentum_x                      # x 動量方程
     - momentum_y                      # y 動量方程
     - momentum_z                      # z 動量方程
-    - continuity                      # 連續方程
+    - divergence                      # 🆕 散度損失 (原 continuity)
     - wall_constraint                 # 壁面約束
     - periodicity                     # 週期性
     # 說明：未列出的項（如 prior, gradient_penalty）保持固定權重
 
-  causal_weighting: false             # 因果權重（時間演化問題，通道流不需要）
+  causal_weighting: false             # 因果權重（Causal Training）
+                                      # 適用於：瞬態 (Transient) 問題，強制時間因果性
+                                      # 機制：w(t) = exp(-ε * ∫L(τ)dτ)，前期損失高時抑制後期權重
+  causal_eps: 1.0                     # 因果強度 ε (epsilon)
+                                      # 典型範圍：1.0-100.0
+                                      #   - 1.0：弱因果（允許後期有些許反饋）
+                                      #   - 10.0：強因果（嚴格遵守時間順序）
+                                      #   - 100.0：極強因果（逐時間步推進）
+  causal_n_bins: 10                   # 時間分窗數（用於近似積分）
 
 # ====================================================================
 # 9. 訓練設定

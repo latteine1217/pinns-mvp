@@ -148,14 +148,14 @@ def validate_momentum_conservation(
                                create_graph=True, retain_graph=True)[0]
 
         # 計算對流項 (u·∇)u
-        if coords.shape[1] == 2:  # 2D
+        if coords.shape[1] == 2 or w is None:  # 2D 或無 w 分量
             du_dx, du_dy = u_grad[:, 0:1], u_grad[:, 1:2]
             dv_dx, dv_dy = v_grad[:, 0:1], v_grad[:, 1:2]
 
             conv_u = u * du_dx + v * du_dy
             conv_v = u * dv_dx + v * dv_dy
 
-        else:  # 3D
+        else:  # 3D（且 w 不為 None）
             w_grad = autograd.grad(w, coords, grad_outputs=torch.ones_like(w),
                                    create_graph=True, retain_graph=True)[0]
             du_dx, du_dy, du_dz = u_grad[:, 0:1], u_grad[:, 1:2], u_grad[:, 2:3]
