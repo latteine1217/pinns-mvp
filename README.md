@@ -79,28 +79,28 @@ python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml
 
 ```mermaid
 graph TD
-    A[JHTDB 高保真數據] --> B{QR-Pivot 離線分析};
-    B --> C[生成最優感測器位置文件];
-    C --> D[訓練數據載入器];
-    A --> D;
-    D --> E{模型訓練};
-    subgraph E [訓練循環]
-        direction LR
-        E1[座標輸入] --> E2(Fourier-SIREN MLP);
-        E2 --> E3[預測流場 u,v,w,p];
-        E3 --> E4[損失計算];
-        subgraph E4
-            direction TB
-            L1[數據損失]
-            L2[物理殘差 (VS-PINN)]
-            L3[邊界條件]
-        end
-        E4 --> E5{GradNorm 動態加權};
-        E5 --> E6[總損失];
-        E6 --> E7[反向傳播與優化];
-    end
-    F[課程學習調度器] --> E;
-    E --> G[重建的完整流場];
+    A[Kolmogorov DNS 數據] --> B[QR-Pivot 離線分析]
+    B --> C[生成最優感測器位置]
+    C --> D[訓練數據載入器]
+    A --> D
+    D --> E[模型訓練循環]
+
+    E --> E1[座標輸入]
+    E1 --> E2[Fourier-SIREN MLP]
+    E2 --> E3[預測流場 u,v,w,p]
+    E3 --> L1[數據損失]
+    E3 --> L2[物理殘差 VS-PINN]
+    E3 --> L3[邊界條件]
+    L1 --> E5[GradNorm 動態加權]
+    L2 --> E5
+    L3 --> E5
+    E5 --> E6[總損失]
+    E6 --> E7[反向傳播與優化]
+    E7 --> E8{收斂?}
+    E8 -->|否| E1
+    E8 -->|是| G[重建的完整流場]
+
+    F[課程學習調度器] -.-> E7
 ```
 
 ---
