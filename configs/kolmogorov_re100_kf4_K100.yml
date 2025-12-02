@@ -30,7 +30,7 @@ data:
   
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns_re100_kf4_T100_pert10.h5
+    data_path: ./data/kolmogorov_dns/dns_re100_t100.h5
     description: "Kolmogorov flow (Re=100, k_f=4, 2D periodic, turbulent)"
     
     domain:
@@ -38,11 +38,11 @@ data:
       y: [0.0, 6.283185307179586]  # 2π
     
     resolution:
-      x: 512
-      y: 512
+      x: 256
+      y: 256
     
     time_range: [20.0, 40.0]  # 使用穩態區域
-    dt: 0.05
+    dt: 0.001
     
     variables: [u, v, p]
     
@@ -76,7 +76,7 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./data/kolmogorov_qr_sensors_re100_kf4_K100.npz
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re100_K100/sensor_data.json
   
   quality_metrics:
     condition_number: TBD     # 待生成感測點後更新

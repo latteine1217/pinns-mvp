@@ -1,0 +1,147 @@
+# ====================================================================
+# Quick Smoke Test Configuration (Kolmogorov Re=100)
+# ====================================================================
+
+experiment:
+  name: quick_test_re100
+  version: v1.0_test
+  seed: 42
+  device: auto
+  precision: float32
+  description: "Quick smoke test for fixed sensor data loading and training loop"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 0
+
+data:
+  source: kolmogorov_dns
+  dataset: re100_kf4
+  
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re100_t100.h5
+    domain:
+      x: [0.0, 6.283185307179586]
+      y: [0.0, 6.283185307179586]
+    resolution:
+      x: 256
+      y: 256
+    time_range: [20.0, 40.0]
+    dt: 0.001
+    variables: [u, v, p]
+    physics_params:
+      Re: 100.0
+      nu: 0.019687
+      k_f: 4
+      forcing_amplitude: 1.0
+  
+  normalize: true
+
+normalization:
+  type: training_data_norm
+  params: {}
+
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re100_K100/sensor_data.json
+
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 64       # Smaller model for speed
+  depth: 3
+  activation: swish
+  
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 6
+    fourier_sigma: 4.0
+    include_input: true
+  
+  initialization:
+    type: siren
+
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.019687
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+losses:
+  data_weight: 1.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  periodicity_weight: 1.0
+  
+  prior_weight: 0.0
+  l2_regularization: 0.0
+  gradient_penalty: 0.0
+  
+  normalize_losses: false # Disable GradNorm for simple test
+  adaptive_weighting: false
+  
+  causal_weighting: true
+  causal_eps: 1.0
+  causal_n_bins: 5
+
+training:
+  optimizer:
+    type: adam
+    lr: 1.0e-3
+  
+  lr: 1.0e-3
+  epochs: 10      # Only 10 epochs
+  max_epochs: 10
+  batch_size: 10000 # Small batch
+  validation_freq: 5
+  checkpoint_freq: 10
+  log_interval: 1
+  
+  sampling:
+    N_pde: 1000   # Few PDE points
+    boundary_points: 100
+
+  amp:
+    enabled: false
+
+optimizer_switching:
+  enabled: false
+
+curriculum:
+  enable: false
+
+evaluation:
+  grid_resolution: [64, 64] # Low res eval
+  metrics: [relative_l2]
+  thresholds:
+    u_l2_error: 1.0 
+  reference_data: ./data/kolmogorov_dns/dns_re100_t100.h5
+  reference_time_window: [20.0, 40.0]
+
+physics_validation:
+  enabled: false
+
+logging:
+  level: info
+  save_predictions: false
+  tensorboard: false
+  wandb: false
+
+output:
+  checkpoint_dir: ./checkpoints/quick_test
+  results_dir: ./results/quick_test
+  visualization_dir: ./results/quick_test/viz

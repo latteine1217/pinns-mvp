@@ -462,20 +462,83 @@ def compute_sensors_from_jhtdb(jhtdb_path: str, n_sensors: int, strategy: str = 
                 raise ValueError("JHTDB 資料中未找到座標 'x', 'y'")
         
         elif jhtdb_path_obj.suffix in ['.h5', '.hdf5']:
-            with h5py.File(str(jhtdb_path_obj), 'r') as f:
-                # 根據實際 HDF5 結構調整
-                x = np.array(f['x'])
-                y = np.array(f['y'])
-                z = np.array(f['z'])
-                u = np.array(f['u'])
-                v = np.array(f['v'])
-                w = np.array(f['w'])
+            with h5py.File(jhtdb_path, 'r') as f:
+                print(f"   📂 載入 JHTDB 資料: {jhtdb_path}")
                 
-                X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-                coords = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
-                velocities = np.stack([u.flatten(), v.flatten(), w.flatten()], axis=1)
-                data_matrix = velocities
-        
+                # 1. 提取座標
+                if 'x' in f and 'y' in f:
+                    x = np.array(f['x'])
+                    y = np.array(f['y'])
+                    if 'z' in f:
+                        z = np.array(f['z'])
+                    else:
+                        z = np.zeros_like(x)
+                    
+                    # 如果座標是 1D 網格點
+                    if x.ndim == 1:
+                        N = len(x)
+                        # 假設是正方形網格
+                        X, Y = np.meshgrid(x, y, indexing='ij')
+                        x = X.flatten()
+                        y = Y.flatten()
+                        z = np.zeros_like(x)
+                        
+                elif 'config' in f:
+                    print("   ℹ️  未發現顯式座標，從 config 生成網格...")
+                    N = int(f['config'].attrs['N'])
+                    L = float(f['config'].attrs['L'])
+                    
+                    x_1d = np.linspace(0, L, N, endpoint=False)
+                    y_1d = np.linspace(0, L, N, endpoint=False)
+                    X, Y = np.meshgrid(x_1d, y_1d, indexing='ij')
+                    
+                    x = X.flatten()
+                    y = Y.flatten()
+                    z = np.zeros_like(x)
+                else:
+                    raise KeyError("無法找到或生成座標數據")
+                
+                coords = np.stack([x, y, z], axis=1)
+                
+                # 2. 提取速度場並建立資料矩陣
+                print("   🔄 讀取速度場...")
+                if 'u' in f:
+                    u_dset = f['u']
+                    # 檢查形狀: (T, N, N) 或 (N, N)
+                    if u_dset.ndim == 3:
+                        # 時間序列數據: (T, N, N)
+                        n_time = u_dset.shape[0]
+                        print(f"      檢測到時間序列數據: {n_time} 個快照")
+                        
+                        # 策略：將每個時間步作為特徵 [n_space, n_time]
+                        # 為了記憶體效率，我們可能需要對時間進行降採樣
+                        t_stride = max(1, n_time // 100)  # 最多取 100 個時間步
+                        print(f"      時間降採樣: 每 {t_stride} 步取樣")
+                        
+                        u_data = u_dset[::t_stride].reshape(-1, N*N).T  # [N*N, T_sub]
+                        v_data = f['v'][::t_stride].reshape(-1, N*N).T
+                        
+                        # 組合 u, v 特徵
+                        data_matrix = np.hstack([u_data, v_data])
+                        
+                        # 速度值用於視覺化（取最後一幀）
+                        velocities = np.stack([
+                            u_dset[-1].flatten(),
+                            f['v'][-1].flatten(),
+                            np.zeros(N*N)
+                        ], axis=1)
+                        
+                    else:
+                        # 單一快照
+                        u = np.array(f['u']).flatten()
+                        v = np.array(f['v']).flatten()
+                        w = np.zeros_like(u)
+                        
+                        velocities = np.stack([u, v, w], axis=1)
+                        data_matrix = velocities # [N*N, 3]
+                else:
+                    raise KeyError("未找到速度場 'u'")
+
         else:
             raise ValueError(f"不支援的檔案格式: {jhtdb_path_obj.suffix}")
     

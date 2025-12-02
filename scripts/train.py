@@ -46,99 +46,136 @@ from pinnx.utils.setup import (
     set_random_seed,
 )
 
-# Kolmogorov flow data preparation (inline implementation)
+# Kolmogorov flow data preparation (Fixed Sensors x Time Series)
 def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.device) -> Dict[str, torch.Tensor]:
-    """準備 Kolmogorov Flow 訓練資料
+    """準備 Kolmogorov Flow 訓練資料 (固定感測器 x 時間序列)
     
     Args:
         config: 配置字典
         device: PyTorch 設備
         
     Returns:
-        訓練資料字典，包含感測點、PDE 點、邊界條件點等
+        訓練資料字典
     """
     import h5py
+    import json
     
     # 載入配置
     kol_cfg = config['data']['kolmogorov_config']
     data_path = kol_cfg['data_path']
     time_range = kol_cfg['time_range']
-    K = config['sensors']['K']
     
-    # 載入 DNS 數據
+    # 1. 讀取感測器位置檔案 (QR-Pivot 結果)
+    sensor_file = config.get('sensors', {}).get('sensor_file')
+    if not sensor_file:
+        raise ValueError("必須在 config['sensors']['sensor_file'] 指定感測器位置檔案 (.json)")
+        
+    logging.info(f"📂 載入感測器位置: {sensor_file}")
+    with open(sensor_file, 'r') as f:
+        sensor_data = json.load(f)
+        
+    # sensor_indices 是展平後的空間索引 (0 ~ N*N-1)
+    spatial_indices = np.array(sensor_data['indices'])
+    K = len(spatial_indices)
+    logging.info(f"   已選定 {K} 個固定空間感測點")
+
+    # 2. 載入 DNS 全場數據
+    logging.info(f"📂 載入 DNS 數據: {data_path}")
     with h5py.File(data_path, 'r') as f:
-        u_all = np.array(f['u'])  # [T, Ny, Nx]
-        v_all = np.array(f['v'])
-        p_all = np.array(f['p']) if 'p' in f else None
+        # 讀取時間軸
         time_all = np.array(f['time'])
         
-    # 選擇時間範圍
-    t_start, t_end = time_range
-    time_mask = (time_all >= t_start) & (time_all <= t_end)
-    time_selected = time_all[time_mask]
-    u_data = u_all[time_mask]  # [T', Ny, Nx]
-    v_data = v_all[time_mask]
-    p_data = p_all[time_mask] if p_all is not None else None
-    
-    # 獲取空間網格
-    Nx, Ny = kol_cfg['resolution']['x'], kol_cfg['resolution']['y']
-    x_range = kol_cfg['domain']['x']
-    y_range = kol_cfg['domain']['y']
-    x_grid = np.linspace(x_range[0], x_range[1], Nx)
-    y_grid = np.linspace(y_range[0], y_range[1], Ny)
-    
-    # 重塑數據為 [N_total, 3] (x, y, t) 和場變量
-    T = len(time_selected)
-    X_mesh, Y_mesh = np.meshgrid(x_grid, y_grid, indexing='ij')
-    
-    # 構建完整數據矩陣 [T*Ny*Nx, features]
-    coords = []
-    u_flat = []
-    v_flat = []
-    p_flat = []
-    
-    for ti in range(T):
-        x_flat = X_mesh.flatten()
-        y_flat = Y_mesh.flatten()
-        t_flat = np.full_like(x_flat, time_selected[ti])
+        # 選擇時間範圍
+        t_start, t_end = time_range
+        time_mask = (time_all >= t_start) & (time_all <= t_end)
+        time_selected = time_all[time_mask]
+        T_selected = len(time_selected)
         
-        coords.append(np.stack([x_flat, y_flat, t_flat], axis=1))
-        u_flat.append(u_data[ti].T.flatten())  # 轉置以匹配網格索引
-        v_flat.append(v_data[ti].T.flatten())
-        if p_data is not None:
-            p_flat.append(p_data[ti].T.flatten())
+        logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}], 共 {T_selected} 個時間步")
+        
+        # 讀取空間網格資訊
+        N = int(f['config'].attrs['N'])
+        L = float(f['config'].attrs['L'])
+        
+        # 建立空間座標網格
+        x_1d = np.linspace(0, L, N, endpoint=False)
+        y_1d = np.linspace(0, L, N, endpoint=False)
+        X_mesh, Y_mesh = np.meshgrid(x_1d, y_1d, indexing='ij')
+        
+        # 提取感測點的 (x, y) 座標
+        X_flat = X_mesh.flatten()
+        Y_flat = Y_mesh.flatten()
+        
+        x_sensor_locs = X_flat[spatial_indices]  # [K]
+        y_sensor_locs = Y_flat[spatial_indices]  # [K]
+        
+        # 3. 提取感測點的時間序列數據
+        # 策略：讀取需要的時間步，然後只取選定的空間點
+        # 為了效率，我們先讀取所需的時間切片 [T_selected, N, N]
+        # 注意：如果是大檔案，可能需要更精細的讀取策略
+        u_slice = f['u'][time_mask]  # [T, N, N]
+        v_slice = f['v'][time_mask]
+        if 'p' in f:
+            p_slice = f['p'][time_mask]
+        else:
+            p_slice = None
+            
+        # 展平空間維度 [T, N*N]
+        u_flat = u_slice.reshape(T_selected, -1)
+        v_flat = v_slice.reshape(T_selected, -1)
+        p_flat = p_slice.reshape(T_selected, -1) if p_slice is not None else None
+        
+        # 提取感測點的值 [T, K]
+        u_sensors_vals = u_flat[:, spatial_indices]
+        v_sensors_vals = v_flat[:, spatial_indices]
+        p_sensors_vals = p_flat[:, spatial_indices] if p_flat is not None else None
+        
+    # 4. 構建訓練張量 (T * K 樣本)
+    # 我們需要將 [T, K] 展平成 [T*K, 1]
     
-    coords_all = np.vstack(coords)  # [T*Ny*Nx, 3]
-    u_all_flat = np.concatenate(u_flat)
-    v_all_flat = np.concatenate(v_flat)
-    p_all_flat = np.concatenate(p_flat) if p_data is not None else None
+    # 時間座標: 每個感測點重複 T 次
+    # [t0, t1, ..., t0, t1, ...]
+    # 為了方便，我們使用 meshgrid 構造 (t, k)
+    T_grid, K_grid = np.meshgrid(time_selected, np.arange(K), indexing='ij')
     
-    # 簡單隨機採樣感測點（TODO: 使用 QR-Pivot）
-    np.random.seed(config.get('seed', 42))
-    sensor_indices = np.random.choice(len(coords_all), K, replace=False)
+    # 展平
+    t_train = T_grid.flatten()  # [T*K]
+    k_indices = K_grid.flatten() # [T*K] 用於索引空間座標
     
-    # 提取感測點數據
-    x_sensors = torch.tensor(coords_all[sensor_indices, 0], dtype=torch.float32, device=device).unsqueeze(1)
-    y_sensors = torch.tensor(coords_all[sensor_indices, 1], dtype=torch.float32, device=device).unsqueeze(1)
-    t_sensors = torch.tensor(coords_all[sensor_indices, 2], dtype=torch.float32, device=device).unsqueeze(1)
-    u_sensors = torch.tensor(u_all_flat[sensor_indices], dtype=torch.float32, device=device).unsqueeze(1)
-    v_sensors = torch.tensor(v_all_flat[sensor_indices], dtype=torch.float32, device=device).unsqueeze(1)
+    x_train = x_sensor_locs[k_indices]
+    y_train = y_sensor_locs[k_indices]
     
-    if p_all_flat is not None:
-        p_sensors = torch.tensor(p_all_flat[sensor_indices], dtype=torch.float32, device=device).unsqueeze(1)
+    u_train = u_sensors_vals.flatten()
+    v_train = v_sensors_vals.flatten()
+    if p_sensors_vals is not None:
+        p_train = p_sensors_vals.flatten()
     else:
-        p_sensors = torch.zeros_like(u_sensors)
+        p_train = np.zeros_like(u_train)
+        
+    # 轉換為 Tensor
+    x_sensors = torch.tensor(x_train, dtype=torch.float32, device=device).unsqueeze(1)
+    y_sensors = torch.tensor(y_train, dtype=torch.float32, device=device).unsqueeze(1)
+    t_sensors = torch.tensor(t_train, dtype=torch.float32, device=device).unsqueeze(1)
+    u_sensors = torch.tensor(u_train, dtype=torch.float32, device=device).unsqueeze(1)
+    v_sensors = torch.tensor(v_train, dtype=torch.float32, device=device).unsqueeze(1)
+    p_sensors = torch.tensor(p_train, dtype=torch.float32, device=device).unsqueeze(1)
     
-    # PDE 配點採樣（均勻採樣）
+    # 5. PDE 配點採樣 (隨機時空採樣)
+    # 從全域 (x, y, t) 中隨機採樣
     N_pde = config.get('sampling', {}).get('N_pde', 10000)
-    pde_indices = np.random.choice(len(coords_all), N_pde, replace=False)
-    x_pde = torch.tensor(coords_all[pde_indices, 0], dtype=torch.float32, device=device).unsqueeze(1)
-    y_pde = torch.tensor(coords_all[pde_indices, 1], dtype=torch.float32, device=device).unsqueeze(1)
-    t_pde = torch.tensor(coords_all[pde_indices, 2], dtype=torch.float32, device=device).unsqueeze(1)
     
-    # 構建訓練數據字典
+    x_pde = torch.rand(N_pde, 1, device=device) * L
+    y_pde = torch.rand(N_pde, 1, device=device) * L
+    t_pde = torch.rand(N_pde, 1, device=device) * (t_end - t_start) + t_start
+    
+    # 排序 t_pde 以優化因果訓練效率 (雖然 CausalWeighter 會自己處理，但排序好是個好習慣)
+    t_pde, sort_idx = torch.sort(t_pde, dim=0)
+    x_pde = x_pde[sort_idx].reshape(-1, 1)
+    y_pde = y_pde[sort_idx].reshape(-1, 1)
+    
+    # 構建訓練資料字典
     training_data = {
-        # 感測點
+        # 感測點 (固定位置 x 時間序列)
         'x_sensors': x_sensors,
         'y_sensors': y_sensors,
         't_sensors': t_sensors,
@@ -146,27 +183,29 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
         'v_sensors': v_sensors,
         'p_sensors': p_sensors,
         
-        # PDE 配點
+        # PDE 配點 (隨機時空)
         'x_pde': x_pde,
         'y_pde': y_pde,
         't_pde': t_pde,
         
-        # 邊界條件（2D 周期性，無需硬邊界）
+        # 邊界條件 (Kolmogorov 是週期性的，這裡留空或設為空集合)
         'x_bc': torch.empty(0, 1, device=device),
         'y_bc': torch.empty(0, 1, device=device),
         't_bc': torch.empty(0, 1, device=device),
         
-        # 初始條件（使用第一個時間步）
+        # 初始條件 (t=0 全場快照，可選)
+        # 若需要強 IC 約束，可在此添加 t=t_start 的全場數據
         'x_ic': torch.empty(0, 1, device=device),
         'y_ic': torch.empty(0, 1, device=device),
         't_ic': torch.empty(0, 1, device=device),
     }
     
-    logging.info(f"✅ Kolmogorov 訓練數據準備完成:")
-    logging.info(f"   感測點: {K}")
+    logging.info(f"✅ Kolmogorov 訓練數據準備完成 (Fixed Sensors):")
+    logging.info(f"   感測點數 K: {K}")
+    logging.info(f"   時間步數 T: {T_selected}")
+    logging.info(f"   總監督樣本 (K*T): {len(x_sensors)}")
     logging.info(f"   PDE 配點: {N_pde}")
     logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}]")
-    logging.info(f"   空間解析度: {Nx}×{Ny}")
     
     return training_data
 
