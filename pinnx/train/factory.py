@@ -378,6 +378,12 @@ def create_model(
         logging.info(
             f"🔧 VS-PINN + Fourier 修復啟用：縮放因子 N=[{N_x}, {N_y}, {N_z}]"
         )
+
+    # 將 VS-PINN 縮放資訊透傳到模型配置（確保 Fourier 正確還原）
+    model_cfg = dict(model_cfg)
+    if is_vs_pinn and use_fourier:
+        model_cfg.setdefault('input_scale_factors', input_scale_factors.tolist())  # type: ignore
+        model_cfg.setdefault('fourier_normalize_input', True)
     
     # === 3. 建立基礎模型 ===
     model_type = model_cfg.get('type', 'fourier_mlp')
@@ -395,6 +401,19 @@ def create_model(
         # Fourier-VS MLP 統一架構
         base_model = create_pinn_model(model_cfg).to(device)
         logging.info(f"✅ Created Fourier-VS MLP (use_fourier={use_fourier})")
+
+    elif model_type == 'resnet':
+        # ResNet 架構：改為統一 PINNNet block_type=resnet2 以消除重複
+        res_cfg = dict(model_cfg)
+        res_cfg['type'] = 'fourier_vs_mlp'
+        res_cfg.setdefault('block_type', 'resnet2')
+        res_cfg.setdefault('res_block_alpha_init', 0.1)
+        res_cfg.setdefault('use_input_projection', True)  # 保持維度對齊一致
+        base_model = create_pinn_model(res_cfg).to(device)
+        logging.info(
+            f"✅ Created ResNet-style PINN via PINNNet (block=resnet2, depth={res_cfg.get('depth')})"
+        )
+
     else:
         # 基礎 PINN
         base_model = PINNNet(

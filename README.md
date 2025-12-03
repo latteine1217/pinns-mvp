@@ -72,6 +72,7 @@ python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml
 ### 1. 模型架構: Fourier-SIREN MLP
 - **傅立葉特徵**：先將 `(t, x, y, z)` 映射到高維頻域，消除 MLP 的頻譜偏差。
 - **正弦激活 (SIREN)**：`sin(ωx)` 使高階導數平滑，適合 PDE 殘差計算。
+- **ResNet 機制 (New)**：透過 `block_type='resnet2'` 啟用 Learnable Skip Connection (`y = x + α·f(x)`)，改善深層網路的梯度流動與訓練穩定性。
 - **整體效果**：同時捕捉宏觀結構與微觀渦旋，並保持梯度穩定。
 
 ### PINNs 內部運作流 (Internal Workflow)

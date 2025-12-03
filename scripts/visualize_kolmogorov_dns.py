@@ -59,7 +59,7 @@ def compute_kinetic_energy(u, v):
     return 0.5 * (u**2 + v**2)
 
 
-def plot_snapshots(data, output_dir, time_indices=None):
+def plot_snapshots(data, output_dir, time_indices=None, time_range=None):
     """繪製多個時間點的速度場與渦度場快照"""
     u = data['u']
     v = data['v']
@@ -74,9 +74,25 @@ def plot_snapshots(data, output_dir, time_indices=None):
     
     # 如果未指定時間索引，選擇關鍵時間點
     if time_indices is None:
-        # 選擇初始、1/4、1/2、3/4、最終時間
-        n_frames = len(time)
-        time_indices = [0, n_frames//4, n_frames//2, 3*n_frames//4, -1]
+        if time_range:
+            t_start, t_end = time_range
+            # 找出範圍內的索引
+            mask = (time >= t_start) & (time <= t_end)
+            available_indices = np.where(mask)[0]
+            
+            if len(available_indices) > 0:
+                # 在範圍內均勻選擇最多 5 個點 (包括邊界)
+                indices_to_pick = np.linspace(0, len(available_indices)-1, min(5, len(available_indices)), dtype=int)
+                time_indices = available_indices[indices_to_pick]
+                print(f"   📸 在時間範圍 [{t_start}, {t_end}] 內選擇了 {len(time_indices)} 個快照")
+            else:
+                print(f"⚠️  時間範圍 {time_range} 內無快照，回退到預設")
+                n_frames = len(time)
+                time_indices = [0, n_frames//4, n_frames//2, 3*n_frames//4, -1]
+        else:
+            # 選擇初始、1/4、1/2、3/4、最終時間
+            n_frames = len(time)
+            time_indices = [0, n_frames//4, n_frames//2, 3*n_frames//4, -1]
     
     for idx in time_indices:
         t = time[idx]
@@ -572,6 +588,8 @@ def main():
                        help='Output directory for plots')
     parser.add_argument('--snapshots', nargs='+', type=int,
                        help='Time indices for snapshots (default: auto-select)')
+    parser.add_argument('--time-range', type=float, nargs=2, default=None,
+                        help='Time range [t_start, t_end] for visualizations')
     
     args = parser.parse_args()
     
@@ -594,7 +612,7 @@ def main():
     
     # 生成視覺化
     print("🎨 生成快照...")
-    plot_snapshots(data, output_dir, time_indices=args.snapshots)
+    plot_snapshots(data, output_dir, time_indices=args.snapshots, time_range=args.time_range)
     print()
     
     print("📈 生成時間演化圖...")

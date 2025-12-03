@@ -286,6 +286,95 @@ class DenseLayer(nn.Module):
         return out
 
 
+class ResBlock2(nn.Module):
+    """
+    Two-layer residual block with learnable alpha scaling.
+
+    y = x + alpha * f(x), where f is two Linear/RWF layers with activation.
+    This mirrors the ResNetPINN block but lives inside PINNNet to avoid code duplication.
+    """
+
+    def __init__(
+        self,
+        width: int,
+        activation: str = 'tanh',
+        use_rwf: bool = False,
+        rwf_scale_mean: float = 0.0,
+        rwf_scale_std: float = 0.1,
+        sine_omega_0: float = 1.0,
+        use_layer_norm: bool = False,
+        dropout: float = 0.0,
+        alpha_init: float = 1.0,
+    ):
+        super().__init__()
+
+        linear_cls = RWFLinear if use_rwf else nn.Linear
+        
+        if use_rwf:
+            self.fc1 = RWFLinear(width, width, scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
+            self.fc2 = RWFLinear(width, width, scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
+        else:
+            self.fc1 = nn.Linear(width, width)
+            self.fc2 = nn.Linear(width, width)
+
+        self.use_layer_norm = use_layer_norm
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else None
+
+        if activation == 'tanh':
+            self.activation = nn.Tanh()
+        elif activation == 'swish':
+            self.activation = nn.SiLU()
+        elif activation == 'gelu':
+            self.activation = nn.GELU()
+        elif activation == 'sine':
+            self.activation = SineActivation(omega_0=sine_omega_0)
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+
+        self.layer_norm1 = nn.LayerNorm(width) if use_layer_norm else None
+        self.layer_norm2 = nn.LayerNorm(width) if use_layer_norm else None
+        self.alpha = nn.Parameter(torch.tensor(float(alpha_init)))
+
+        self._init_weights(activation, sine_omega_0)
+
+    def _init_weights(self, activation: str, sine_omega_0: float) -> None:
+        # Mirror DenseLayer initialization to keep behaviour consistent
+        for linear in (self.fc1, self.fc2):
+            if isinstance(linear, RWFLinear):
+                # RWFLinear internally initializes; apply SIREN init when needed
+                if activation == 'sine':
+                    linear.apply_siren_init(sine_omega_0, is_first=False)
+                continue
+
+            if activation in ['swish', 'relu', 'elu']:
+                nn.init.kaiming_normal_(linear.weight, nonlinearity='relu')
+            elif activation == 'sine':
+                import numpy as np
+                n_in = linear.weight.shape[1]
+                bound = np.sqrt(6 / n_in) / sine_omega_0
+                nn.init.uniform_(linear.weight, -bound, bound)
+                nn.init.zeros_(linear.bias)
+            else:
+                nn.init.xavier_normal_(linear.weight)
+                nn.init.zeros_(linear.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.fc1(x)
+        if self.layer_norm1 is not None:
+            out = self.layer_norm1(out)
+        out = self.activation(out)
+
+        out = self.fc2(out)
+        if self.layer_norm2 is not None:
+            out = self.layer_norm2(out)
+        out = self.activation(out)
+
+        if self.dropout is not None:
+            out = self.dropout(out)
+
+        return x + self.alpha * out
+
+
 class PINNNet(nn.Module):
     """
     基於 Fourier 特徵的 PINN 神經網路 (統一版)
@@ -318,7 +407,9 @@ class PINNNet(nn.Module):
                  rwf_scale_std: float = 0.1, # RWF 尺度標準差
                  sine_omega_0: float = 1.0, # Sine 激活函數頻率參數 (較保守以配合 Fourier 特徵)
                  fourier_normalize_input: bool = False, # 🔧 是否在 Fourier 前標準化輸入（修復 VS-PINN 縮放問題）
-                 input_scale_factors: Optional[torch.Tensor] = None): # 🔧 輸入縮放因子 [N_x, N_y, N_z]（用於 VS-PINN）
+                 input_scale_factors: Optional[torch.Tensor] = None, # 🔧 輸入縮放因子 [N_x, N_y, N_z]（用於 VS-PINN）
+                 block_type: str = 'dense', # 🔧 block 型式：dense（預設）或 resnet2（兩層殘差）
+                 res_block_alpha_init: float = 1.0): # 🔧 resnet2 block 的 alpha 初值
         
         super().__init__()
         
@@ -327,6 +418,7 @@ class PINNNet(nn.Module):
         self.use_fourier = use_fourier
         self.use_input_projection = use_input_projection
         self.fourier_normalize_input = fourier_normalize_input
+        self.block_type = block_type
         self._fourier_norm_type: Optional[str] = None
         self._fourier_shift: Optional[torch.Tensor] = None
         self._fourier_scale: Optional[torch.Tensor] = None
@@ -363,22 +455,46 @@ class PINNNet(nn.Module):
         
         # 隱藏層
         layers = []
-        for i in range(depth):
-            # 第一層的輸入維度可能與後續層不同
-            layer_in_dim = current_dim if i == 0 else width
-            
-            layers.append(DenseLayer(
-                layer_in_dim, width, 
-                activation=activation,
-                use_residual=use_residual and i > 0,  # 第一層不用殘差
-                use_layer_norm=use_layer_norm,
-                dropout=dropout,
-                use_rwf=use_rwf,
-                rwf_scale_mean=rwf_scale_mean,
-                rwf_scale_std=rwf_scale_std,
-                sine_omega_0=sine_omega_0
-            ))
-            current_dim = width
+        if block_type not in ('dense', 'resnet2'):
+            raise ValueError(f"Unsupported block_type: {block_type}")
+
+        if block_type == 'dense':
+            for i in range(depth):
+                layer_in_dim = current_dim if i == 0 else width
+                
+                layers.append(DenseLayer(
+                    layer_in_dim, width, 
+                    activation=activation,
+                    use_residual=use_residual and i > 0,  # 第一層不用殘差
+                    use_layer_norm=use_layer_norm,
+                    dropout=dropout,
+                    use_rwf=use_rwf,
+                    rwf_scale_mean=rwf_scale_mean,
+                    rwf_scale_std=rwf_scale_std,
+                    sine_omega_0=sine_omega_0
+                ))
+                current_dim = width
+        else:
+            # resnet2: enforce uniform width and residual skip
+            if current_dim != width:
+                # align dimensions if input projection disabled
+                proj = nn.Linear(current_dim, width)
+                nn.init.xavier_normal_(proj.weight)
+                nn.init.zeros_(proj.bias)
+                layers.append(proj)
+                current_dim = width
+            for _ in range(depth):
+                layers.append(ResBlock2(
+                    width=width,
+                    activation=activation,
+                    use_rwf=use_rwf,
+                    rwf_scale_mean=rwf_scale_mean,
+                    rwf_scale_std=rwf_scale_std,
+                    sine_omega_0=sine_omega_0,
+                    use_layer_norm=use_layer_norm,
+                    dropout=dropout,
+                    alpha_init=res_block_alpha_init,
+                ))
         
         self.hidden_layers = nn.ModuleList(layers)
         
@@ -386,7 +502,8 @@ class PINNNet(nn.Module):
         self.output_layer = nn.Linear(width, out_dim)
         
         # 輸出層特殊初始化：較小的權重，有助於訓練穩定
-        output_gain = 0.01 if use_residual else 0.1
+        residual_enabled = use_residual or block_type == 'resnet2'
+        output_gain = 0.01 if residual_enabled else 0.1
         nn.init.xavier_normal_(self.output_layer.weight, gain=output_gain)
         nn.init.zeros_(self.output_layer.bias)
     
@@ -427,7 +544,13 @@ class PINNNet(nn.Module):
         
         # 隱藏層前向傳播
         for layer in self.hidden_layers:
-            h = layer(h)
+            if isinstance(layer, ResBlock2):
+                h = layer(h)
+            elif isinstance(layer, nn.Linear):
+                h = layer(h)
+                h = F.silu(h)  # keep activation when aligning dims
+            else:
+                h = layer(h)
         
         # 輸出層
         output = self.output_layer(h)
@@ -532,15 +655,32 @@ class PINNNet(nn.Module):
         width = 0
         if self.hidden_layers:
             layer = self.hidden_layers[0]
-            if isinstance(layer.linear, nn.Linear):
-                width = layer.linear.out_features
-            elif isinstance(layer.linear, RWFLinear):
-                width = layer.linear.out_features
+            if isinstance(layer, DenseLayer):
+                if isinstance(layer.linear, (nn.Linear, RWFLinear)):
+                    width = layer.linear.out_features  # type: ignore
+            elif isinstance(layer, ResBlock2):
+                width = getattr(layer.fc1, 'out_features', 0)
+            elif isinstance(layer, nn.Linear):
+                width = layer.out_features
         
         fourier_features = 0
         if self.use_fourier and self.fourier is not None:
             fourier_features = self.fourier.m
         
+        use_residual = False
+        use_layer_norm = False
+        use_rwf = False
+        if self.hidden_layers:
+            first = self.hidden_layers[0]
+            if isinstance(first, DenseLayer):
+                use_residual = first.use_residual
+                use_layer_norm = first.use_layer_norm
+                use_rwf = first.use_rwf
+            elif isinstance(first, ResBlock2):
+                use_residual = True
+                use_layer_norm = bool(first.use_layer_norm)
+                use_rwf = isinstance(first.fc1, RWFLinear)
+
         return {
             'input_dim': self.in_dim,
             'output_dim': self.out_dim,
@@ -548,16 +688,18 @@ class PINNNet(nn.Module):
             'width': width,
             'total_params': self.get_num_params(),
             'fourier_features': fourier_features,
-            'use_residual': self.hidden_layers[0].use_residual if self.hidden_layers else False,
-            'use_layer_norm': self.hidden_layers[0].use_layer_norm if self.hidden_layers else False,
-            'use_rwf': self.hidden_layers[0].use_rwf if self.hidden_layers else False
+            'use_residual': use_residual,
+            'use_layer_norm': use_layer_norm,
+            'use_rwf': use_rwf,
+            'block_type': self.block_type
         }
     
     def extra_repr(self) -> str:
         summary = self.get_model_summary()
         fourier_info = f", fourier_m={summary['fourier_features']}" if self.use_fourier else ""
         return (f"in_dim={summary['input_dim']}, out_dim={summary['output_dim']}, "
-                f"width={summary['width']}, depth={summary['depth']}{fourier_info}, "
+                f"width={summary['width']}, depth={summary['depth']}, block={summary['block_type']}"
+                f"{fourier_info}, "
                 f"params={summary['total_params']:,}")
 
 
@@ -645,7 +787,9 @@ def create_pinn_model(config: dict) -> nn.Module:
             rwf_scale_std=config.get('rwf_scale_std', 0.1),
             sine_omega_0=config.get('sine_omega_0', 1.0),
             fourier_normalize_input=config.get('fourier_normalize_input', False),
-            input_scale_factors=input_scale_factors
+            input_scale_factors=input_scale_factors,
+            block_type=config.get('block_type', 'dense'),
+            res_block_alpha_init=config.get('res_block_alpha_init', 1.0)
         )
 
     else:
