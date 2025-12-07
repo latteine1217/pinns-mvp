@@ -1,20 +1,20 @@
 # ====================================================================
-# Kolmogorov Flow Re=100 kf=4 K=100 訓練配置
+# Kolmogorov Flow Re=50 kf=4 K=100 訓練配置
 # ====================================================================
 # 實驗目標：使用 K=100 QR-pivot 感測點重建 Kolmogorov flow 全場
-# DNS 數據：re100_kf4 (k_f=4, 較低波數，更簡單的流型)
+# DNS 數據：re50_kf4 (k_f=4, 較低波數，更簡單的流型)
 # 感測器：QR-pivot K=100
-# 預期訓練時間：2-4 小時 (4000 epochs with curriculum)
-# 創建日期：2025-11-27 (更新至最新配置標準)
+# 預期訓練時間：2-4 小時 (10000 epochs with curriculum)
+# 創建日期：2025-12-07 (更新至 Re=50)
 # ====================================================================
 
 experiment:
-  name: kolmogorov_re100_kf4_K100
+  name: kolmogorov_re50_kf4_K100
   version: v3.0_causal_training
   seed: 42
   device: auto
   precision: float32
-  description: "Kolmogorov flow Re=100 kf=4 with K=100 sensors, curriculum learning"
+  description: "Kolmogorov flow Re=50 kf=4 with K=100 sensors, curriculum learning"
 
 reproducibility:
   deterministic: true
@@ -26,30 +26,30 @@ reproducibility:
 # ====================================================================
 data:
   source: kolmogorov_dns
-  dataset: re100_kf4
-  
+  dataset: re50_kf4
+
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns/dns_re100_t100.h5
-    description: "Kolmogorov flow (Re=100, k_f=4, 2D periodic, turbulent)"
-    
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: "Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)"
+
     domain:
       x: [0.0, 6.283185307179586]  # 2π
       y: [0.0, 6.283185307179586]  # 2π
-    
+
     resolution:
       x: 256
       y: 256
-    
-    time_range: [20.0, 40.0]  # 使用穩態區域
+
+    time_range: [15.0, 35.0]  # 使用穩態區域
     dt: 0.001
-    
+
     variables: [u, v, p]
-    
+
     physics_params:
-      Re: 100.0  # 雷諾數 (基於 Musacchio & Boffetta 2014 定義)
+      Re: 50.0  # 雷諾數 (基於 Musacchio & Boffetta 2014 定義)
       Re_definition: "Musacchio_Boffetta_2014"
-      nu: 0.019687  # 動力黏度 (匹配 DNS 檔案)
+      nu: 0.039374  # 動力黏度 (匹配 DNS 檔案)
       k_f: 4        # 強迫波數
       forcing_amplitude: 1.0
   
@@ -68,7 +68,7 @@ normalization:
   
   steady_state:
     enabled: true
-    time_window: [40.0, 60.0]  # 統計穩定區間
+    time_window: [15.0, 35.0]  # 統計穩定區間
 
 # ====================================================================
 # 感測點配置
@@ -76,11 +76,11 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./results/kolmogorov_dns/sensor_viz_re100_K100/sensor_data.json
-  
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100/sensor_data.json
+
   quality_metrics:
-    condition_number: TBD     # 待生成感測點後更新
-    energy_ratio: TBD
+    condition_number: 530.30  # 從已有的 sensor_data.json
+    energy_ratio: 0.9998
     min_distance: TBD
 
 # ====================================================================
@@ -92,8 +92,10 @@ model:
   out_dim: 3      # (u, v, p)
   width: 256      # 隱藏層寬度
   depth: 8        # 隱藏層深度
-  activation: swish
-  
+  activation: sine  # 使用 sine 激活函數（對高階導數更敏感）
+  block_type: resnet2            # 可切換為 resnet2（兩層殘差+alpha）以用 ResNet 樣式
+  res_block_alpha_init: 0.1    # resnet2 時的 alpha 初值（skip-init）
+
   # Fourier Features 配置
   fourier_features:
     enabled: true
@@ -101,27 +103,32 @@ model:
     fourier_m: 12           # Fourier 特徵數
     fourier_sigma: 4.0      # 空間頻率尺度（匹配 k_f=4）
     include_input: true
-  
-  # 初始化
+
+  # 初始化（sine activation 搭配 SIREN 初始化）
   initialization:
     type: siren
     first_omega_0: 30.0
     hidden_omega_0: 30.0
+
+  # Random Weight Factorization (RWF) 配置
+  use_rwf: true
+  rwf_scale_mean: 0.0 # s 的初始化均值 (exp(0)=1.0)，可根據實驗調整
+  rwf_scale_std: 0.1  # s 的初始化標準差，建議 0.05-0.2
 
 # ====================================================================
 # 物理設定
 # ====================================================================
 physics:
   type: kolmogorov_flow_2d
-  nu: 0.019687    # 動力黏度 (匹配 DNS)
+  nu: 0.039374    # 動力黏度 (匹配 DNS Re=50)
   rho: 1.0        # 密度
-  
+
   forcing:
     k_f: 4
     amplitude: 1.0
-  
+
   kolmogorov_flow:
-    Re: 100.0
+    Re: 50.0
     k_f: 4
     forcing_amplitude: 1.0
   
@@ -165,7 +172,7 @@ losses:
   
   # 🆕 Causal Training (時間因果權重)
   causal_weighting: true
-  causal_eps: 0.5              # 因果約束強度 (0.5 = 中等強度)
+  causal_eps: 1.0              # 因果約束強度 (0.5 = 中等強度)
   causal_n_bins: 10            # 時間分窗數量 (10 bins × 2.0 時間單位/bin = 20 總跨度)
 
 # ====================================================================
@@ -209,8 +216,8 @@ training:
   
   # 採樣策略
   sampling:
-    N_pde: 20000           # PDE 碰撞點
-    adaptive_sampling: false
+    N_pde: 10000           # PDE 碰撞點
+    adaptive_sampling: true
     boundary_points: 1000  # 邊界點（週期性）
   
   # 穩定性
@@ -271,7 +278,7 @@ curriculum:
     # 目的：引入弱湍流特性
     # ================================================================
     - name: "Stage2_Re30_Transition"
-      epoch_range: [2000, 4000]
+      epoch_range: [2000, 5000]
       
       # 物理參數 (Re=30)
       nu: 0.065623
@@ -295,11 +302,11 @@ curriculum:
         mass_conservation_target: 0.005
     
     # ================================================================
-    # 階段 3: Re=50 弱湍流
-    # 目的：發展渦結構
+    # 階段 3: Re=50 目標收斂 (弱湍流)
+    # 目的：達到目標 Re，最終精煉
     # ================================================================
-    - name: "Stage3_Re50_WeakTurbulence"
-      epoch_range: [4000, 6000]
+    - name: "Stage3_Re50_Target"
+      epoch_range: [5000, 10000]
       
       # 物理參數 (Re=50)
       nu: 0.039374
@@ -308,35 +315,7 @@ curriculum:
       lr: 0.0005
       
       weights:
-        data: 10.0
-        momentum_x: 4.0
-        momentum_y: 4.0
-        continuity: 4.0
-        periodicity: 10.0
-      
-      sampling:
-        pde_points: 20000
-        boundary_points: 1000
-      
-      stage_goals:
-        u_l2_target: 0.20
-        mass_conservation_target: 0.003
-    
-    # ================================================================
-    # 階段 4: Re=80 湍流強化
-    # 目的：接近目標 Re，強化湍流結構
-    # ================================================================
-    - name: "Stage4_Re80_Turbulent"
-      epoch_range: [6000, 8000]
-      
-      # 物理參數 (Re=80)
-      nu: 0.024609
-      Re: 80.0
-      
-      lr: 0.0003
-      
-      weights:
-        data: 10.0
+        data: 8.0       # 降低資料權重，提升物理約束
         momentum_x: 5.0
         momentum_y: 5.0
         continuity: 5.0
@@ -344,41 +323,11 @@ curriculum:
       
       sampling:
         pde_points: 25000
-        boundary_points: 1200
-      
-      stage_goals:
-        u_l2_target: 0.18
-        mass_conservation_target: 0.002
-    
-    # ================================================================
-    # 階段 5: Re=100 目標收斂
-    # 目的：達到目標 Re，最終精煉
-    # ================================================================
-    - name: "Stage5_Re100_Target"
-      epoch_range: [8000, 10000]
-      
-      # 物理參數 (Re=100)
-      nu: 0.019687
-      Re: 100.0
-      
-      lr: 0.0001
-      
-      weights:
-        data: 8.0       # 降低資料權重，提升物理約束
-        momentum_x: 6.0
-        momentum_y: 6.0
-        continuity: 6.0
-        periodicity: 10.0
-      
-      sampling:
-        pde_points: 30000
         boundary_points: 1500
       
       stage_goals:
         u_l2_target: 0.15
-        v_l2_target: 0.15
-        p_l2_target: 0.20
-        mass_conservation_target: 0.001
+        mass_conservation_target: 0.002
         kinetic_energy_rmse: 0.05
 
 # ====================================================================
@@ -391,7 +340,7 @@ ensemble:
 # 評估配置
 # ====================================================================
 evaluation:
-  grid_resolution: [512, 512]  # 與 DNS 解析度一致
+  grid_resolution: [256, 256]  # 與 DNS 解析度一致
   
   metrics:
     - relative_l2
@@ -407,8 +356,8 @@ evaluation:
     mass_conservation_error: 0.001  # 散度誤差 < 0.1%
     kinetic_energy_rmse: 0.05  # 動能誤差 < 5%
   
-  reference_data: ./data/kolmogorov_dns_re100_512x512_kf4.h5
-  reference_time_window: [20.0, 40.0]
+  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_time_window: [15.0, 35.0]
 
 # ====================================================================
 # 物理驗證
@@ -433,9 +382,9 @@ logging:
   wandb: false
 
 output:
-  checkpoint_dir: ./checkpoints/kolmogorov_re100_kf4_K100
-  results_dir: ./results/kolmogorov_re100_kf4_K100
-  visualization_dir: ./results/kolmogorov_re100_kf4_K100/visualizations
+  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100
+  results_dir: ./results/kolmogorov_re50_kf4_K100
+  visualization_dir: ./results/kolmogorov_re50_kf4_K100/visualizations
 
 # ====================================================================
 # 驗收標準
@@ -461,40 +410,40 @@ test_acceptance:
 # ====================================================================
 usage_notes: |
   🔬 物理參數驗證：
-    - Re = 100 (Musacchio & Boffetta 2014 定義)
-    - nu = 0.019687 (匹配 DNS 檔案)
+    - Re = 50 (Musacchio & Boffetta 2014 定義)
+    - nu = 0.039374 (匹配 DNS 檔案)
     - k_f = 4 (較低波數，流型較簡單)
     - forcing_amplitude = 1.0
-    - Flow regime: Turbulence
+    - Flow regime: Weak Turbulence
   
   🎯 訓練策略：
-    - 課程學習：Re=10 → 30 → 50 → 80 → 100
+    - 課程學習：Re=10 → 30 → 50
     - 因果訓練：早期時間點優先滿足物理約束
     - 自適應權重：GradNorm 動態平衡損失項
-    - 優化器切換：SOAP (0-3000) → L-BFGS (3000-4000)
+    - 優化器切換：SOAP (0-8000) → L-BFGS (8000-10000)
   
   📊 預期結果：
-    - 訓練時間：3-4 小時（4000 epochs, GPU）
+    - 訓練時間：3-4 小時（10000 epochs, GPU）
     - 感測點 L2：< 5%（K=100 QR-pivot）
     - 全場 L2：10-15%（湍流重建目標）
     - 動能 RMSE：< 5%（統計特徵保持）
   
   🚀 執行指令：
     # 前台運行（監控訓練）
-    python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml --device cuda
+    python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml --device cuda
     
     # 背景運行（長時間訓練）
-    nohup python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml --device cuda \
-      > log/kolmogorov_re100_kf4_K100/training.log 2>&1 &
+    nohup python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml --device cuda \
+      > log/kolmogorov_re50_kf4_K100/training.log 2>&1 &
   
   📈 監控指令：
     # 實時監控
-    python scripts/monitor_training.py --exp kolmogorov_re100_kf4_K100
+    python scripts/monitor_training.py --exp kolmogorov_re50_kf4_K100
     
     # 檢查檢查點
     python scripts/evaluate_checkpoint.py \
-      --checkpoint checkpoints/kolmogorov_re100_kf4_K100/epoch_2000.pth \
-      --config configs/kolmogorov_re100_kf4_K100.yml
+      --checkpoint checkpoints/kolmogorov_re50_kf4_K100/epoch_2000.pth \
+      --config configs/kolmogorov_re50_kf4_K100.yml
   
   ✅ 優勢（相比 k_f=8）：
     - 流場結構更簡單（較低波數）
@@ -502,29 +451,8 @@ usage_notes: |
     - 適合作為基準實驗
   
   ⚠️ 注意事項：
-    - DNS 數據時間窗：t=20-40（穩態區域）
+    - DNS 數據時間窗：t=15-35（穩態區域）
     - 雷諾數定義：基於 Musacchio & Boffetta (2014)
     - SOAP 優化器：betas=[0.9, 0.999], precondition_freq=5
-    - 3000 epoch 後自動切換到 L-BFGS 精調
-    - 因果訓練：causal_eps=0.5, causal_n_bins=10
-  
-  🔍 故障排除：
-    - NaN/Inf：降低學習率 (lr=5e-4)，增強梯度裁剪 (clip=0.5)
-    - 過擬合感測點：降低 data_weight (5.0)，提高 PDE 權重
-    - 週期性破壞：提高 periodicity_weight (20.0)
-    - 能譜不匹配：檢查 Fourier 特徵 sigma 與 k_f 匹配（sigma=4.0）
-
-# ====================================================================
-# 更新歷史
-# ====================================================================
-# v3.0_causal_training (2025-11-27):
-#   - 新增因果訓練機制（causal_weighting: true）
-#   - 更新至最新配置標準（與 kf8 配置一致）
-#   - 優化課程學習參數（5 階段）
-#   - 調整 Fourier 特徵 sigma=4.0（匹配 k_f=4）
-#   - 更新優化器切換時機（3000 epoch）
-# 
-# v2.3_re100_corrected (2025-11-25):
-#   - 修正 Re=100 物理參數（nu=0.019687）
-#   - K=100 感測點配置
-# ====================================================================
+    - 8000 epoch 後自動切換到 L-BFGS 精調
+    - 因果訓練：causal_eps=1.0, causal_n_bins=10

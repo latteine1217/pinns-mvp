@@ -38,6 +38,7 @@ Detailed visualization reports (animations, energy spectra) are available in `re
 ## 📌 項目速覽
 - 針對稀疏觀測的湍流逆問題，結合物理約束與神經網路實現穩健重建。
 - Fourier-SIREN MLP + VS-PINN + GradNorm/因果訓練，兼顧高頻細節與梯度穩定。
+- **Random Weight Factorization (RWF)**：提升深層網路訓練穩定性。
 - 配置驅動：所有實驗由 YAML 控制；自動裝置選擇支援 CUDA/MPS/CPU。
 - 感測器佈局離線優化（QR-Pivot/DEIM）；DNS 生成與 Re 校準工具內建。
 
@@ -58,7 +59,8 @@ python scripts/generate_kolmogorov_dns.py \
   --output data/kolmogorov_dns_re56_512x512_kf8_midway.h5
 
 # 3) 執行訓練（配置驅動）
-python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml
+# 最新的 Re=50 基準實驗，啟用 RWF 與 Causal Training
+python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 ```
 
 更多硬體與部署建議：`A100_DEPLOYMENT_GUIDE.md`。配置模板：`configs/templates/`。
@@ -69,15 +71,15 @@ python scripts/train.py --cfg configs/kolmogorov_re100_kf4_K100.yml
 
 本專案結合多項技術，解決湍流重建的高頻、多尺度與梯度剛性挑戰。
 
-### 1. 模型架構: Fourier-SIREN MLP
+### 1. 模型架構: Fourier-SIREN MLP + RWF
 - **傅立葉特徵**：先將 `(t, x, y, z)` 映射到高維頻域，消除 MLP 的頻譜偏差。
 - **正弦激活 (SIREN)**：`sin(ωx)` 使高階導數平滑，適合 PDE 殘差計算。
+- **Random Weight Factorization (RWF)**：分解權重為方向與長度 ($W=g \frac{v}{||v||}$)，改善深層網路的優化風景與收斂性。
 - **ResNet 機制 (New)**：透過 `block_type='resnet2'` 啟用 Learnable Skip Connection (`y = x + α·f(x)`)，改善深層網路的梯度流動與訓練穩定性。
-- **整體效果**：同時捕捉宏觀結構與微觀渦旋，並保持梯度穩定。
 
 ### PINNs 內部運作流 (Internal Workflow)
 1. **輸入準備**：原始座標與監測點物理量 → `UnifiedNormalizer` 標準化；VS-PINN 依各向異性縮放座標。
-2. **神經網路**：`fourier_mlp.PINNNet` 進行 Fourier 特徵映射與 SIREN MLP；內建 `fourier_normalize_input` 確保頻率穩定。
+2. **神經網路**：`fourier_mlp.PINNNet` (with RWFLinear) 進行 Fourier 特徵映射與 SIREN MLP；內建 `fourier_normalize_input` 確保頻率穩定。
 3. **輸出後處理**：`OutputTransform` 將標準化輸出還原至物理量 (u, v, w, p)。
 4. **損失與權重**：`residuals.py` 計算 PDE/邊界/數據損失，`priors.py` 提供均值約束；`weighting.py` 中的 GradNorm/因果/自適應排程平衡權重。
 5. **優化流程**：彙總總損失 → 反向傳播 → `Adam/LBFGS/SOAP` 更新；學習率由 `WarmupCosineScheduler` 等策略調度。
@@ -110,7 +112,7 @@ graph TD
     D --> E[模型訓練循環]
 
     E --> E1[座標輸入]
-    E1 --> E2[Fourier-SIREN MLP]
+    E1 --> E2[Fourier-SIREN MLP + RWF]
     E2 --> E3[預測流場 u,v,w,p]
     E3 --> L1[數據損失]
     E3 --> L2[物理殘差 VS-PINN]
