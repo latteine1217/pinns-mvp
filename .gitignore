@@ -58,6 +58,9 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+.mypy.ini
+.mypy_cache/
+*.ini
 
 # Temporary files
 *.tmp
