@@ -11,25 +11,37 @@ from matplotlib.colors import Normalize
 import h5py
 from pathlib import Path
 
-# 設置matplotlib中文字體和風格
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
 # 使用內建風格替代seaborn
 plt.style.use('default')
+
+# 設置matplotlib中文字體和風格
+# 優先順序：MacOS (Arial Unicode MS, PingFang HK) -> Windows (Microsoft JhengHei, SimHei) -> Linux (WenQuanYi) -> Fallback
+# Note: 'PingFang TC' might not be available, 'PingFang HK' was found on this system.
+font_list = ['Arial Unicode MS', 'Heiti TC', 'PingFang HK', 'PingFang TC', 'Microsoft JhengHei', 'SimHei', 'WenQuanYi Micro Hei', 'Noto Sans CJK TC', 'sans-serif']
+plt.rcParams['font.sans-serif'] = font_list
+plt.rcParams['axes.unicode_minus'] = False
+
+print(f"ℹ️ Matplotlib font configuration set to: {plt.rcParams['font.sans-serif']}")
 plt.rcParams['axes.grid'] = True
 plt.rcParams['grid.alpha'] = 0.3
 
 def load_jhtdb_data():
     """載入JHTDB流場數據"""
-    file_path = './data/jhtdb/channel_9af48b78776a7ba299b1ae14c283ceba.h5'
+    velocity_path = 'data/jhtdb/channel_flow_re1000/raw/JHU Turbulence Channel_velocity_t1.h5'
+    pressure_path = 'data/jhtdb/channel_flow_re1000/raw/JHU Turbulence Channel_pressure_t1.h5'
     
-    print(f"🔄 載入JHTDB數據: {file_path}")
+    print(f"🔄 載入JHTDB數據: {velocity_path} & {pressure_path}")
     
-    with h5py.File(file_path, 'r') as f:
-        u = np.array(f['u'])  # 流向速度 (8,8,8)
-        v = np.array(f['v'])  # 法向速度 (8,8,8) 
-        w = np.array(f['w'])  # 展向速度 (8,8,8)
-        p = np.array(f['p'])  # 壓力場 (8,8,8)
+    with h5py.File(velocity_path, 'r') as f:
+        # Shape (512, 128, 512, 3) -> (x, y, z, component)
+        # Loading full data might be heavy, but let's try.
+        vel = f['Velocity_0001'][:]
+        u = vel[..., 0]
+        v = vel[..., 1]
+        w = vel[..., 2]
+        
+    with h5py.File(pressure_path, 'r') as f:
+        p = f['Pressure_0001'][..., 0]
     
     print(f"✅ 數據載入成功: u{u.shape}, v{v.shape}, w{w.shape}, p{p.shape}")
     return u, v, w, p
@@ -42,7 +54,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     vorticity_z = np.gradient(v, axis=0) - np.gradient(u, axis=1)  # 簡化渦量
     
     # 選擇中間切片進行可視化
-    mid_idx = 4  # 8//2
+    mid_idx = u.shape[2] // 2
     
     # 創建大圖布局
     fig = plt.figure(figsize=(20, 16))
@@ -56,7 +68,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     
     # u 分量 (流向速度)
     ax1 = plt.subplot(3, 4, 1)
-    im1 = ax1.contourf(u[:, :, mid_idx], levels=20, cmap='RdBu_r', extend='both')
+    im1 = ax1.contourf(u[:, :, mid_idx].T, levels=20, cmap='RdBu_r', extend='both')
     ax1.set_title('Streamwise Velocity (u)\n流向速度', fontsize=12, fontweight='bold')
     ax1.set_xlabel('x direction')
     ax1.set_ylabel('y direction')
@@ -64,7 +76,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     
     # v 分量 (法向速度)
     ax2 = plt.subplot(3, 4, 2)
-    im2 = ax2.contourf(v[:, :, mid_idx], levels=20, cmap='RdBu_r', extend='both')
+    im2 = ax2.contourf(v[:, :, mid_idx].T, levels=20, cmap='RdBu_r', extend='both')
     ax2.set_title('Wall-normal Velocity (v)\n壁面法向速度', fontsize=12, fontweight='bold')
     ax2.set_xlabel('x direction')
     ax2.set_ylabel('y direction')
@@ -72,7 +84,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     
     # w 分量 (展向速度)
     ax3 = plt.subplot(3, 4, 3)
-    im3 = ax3.contourf(w[:, :, mid_idx], levels=20, cmap='RdBu_r', extend='both')
+    im3 = ax3.contourf(w[:, :, mid_idx].T, levels=20, cmap='RdBu_r', extend='both')
     ax3.set_title('Spanwise Velocity (w)\n展向速度', fontsize=12, fontweight='bold')
     ax3.set_xlabel('x direction')
     ax3.set_ylabel('y direction')
@@ -80,7 +92,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     
     # 速度幅值
     ax4 = plt.subplot(3, 4, 4)
-    im4 = ax4.contourf(velocity_magnitude[:, :, mid_idx], levels=20, cmap='viridis', extend='both')
+    im4 = ax4.contourf(velocity_magnitude[:, :, mid_idx].T, levels=20, cmap='viridis', extend='both')
     ax4.set_title('Velocity Magnitude\n速度幅值', fontsize=12, fontweight='bold')
     ax4.set_xlabel('x direction')
     ax4.set_ylabel('y direction')
@@ -90,7 +102,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     
     # 壓力場
     ax5 = plt.subplot(3, 4, 5)
-    im5 = ax5.contourf(p[:, :, mid_idx], levels=20, cmap='coolwarm', extend='both')
+    im5 = ax5.contourf(p[:, :, mid_idx].T, levels=20, cmap='coolwarm', extend='both')
     ax5.set_title('Pressure Field\n壓力場', fontsize=12, fontweight='bold')
     ax5.set_xlabel('x direction')
     ax5.set_ylabel('y direction')
@@ -98,12 +110,15 @@ def create_comprehensive_field_plots(u, v, w, p):
     
     # 速度向量場
     ax6 = plt.subplot(3, 4, 6)
-    x, y = np.meshgrid(range(8), range(8))
     # 降採樣以避免向量過於密集
-    skip = 2
+    skip = 32
+    # 注意：因為使用了 .T (轉置)，這裡的 meshgrid 也要對應
+    ny, nx = u[:, :, mid_idx].T.shape
+    x, y = np.meshgrid(range(nx), range(ny))
+    
     ax6.quiver(x[::skip, ::skip], y[::skip, ::skip], 
-               u[::skip, ::skip, mid_idx], v[::skip, ::skip, mid_idx],
-               velocity_magnitude[::skip, ::skip, mid_idx], 
+               u[::skip, ::skip, mid_idx].T, v[::skip, ::skip, mid_idx].T,
+               velocity_magnitude[::skip, ::skip, mid_idx].T, 
                cmap='viridis', alpha=0.8)
     ax6.set_title('Velocity Vector Field\n速度向量場', fontsize=12, fontweight='bold')
     ax6.set_xlabel('x direction')
@@ -112,7 +127,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     
     # 簡化渦量 (z方向)
     ax7 = plt.subplot(3, 4, 7)
-    im7 = ax7.contourf(vorticity_z[:, :, mid_idx], levels=20, cmap='RdBu_r', extend='both')
+    im7 = ax7.contourf(vorticity_z[:, :, mid_idx].T, levels=20, cmap='RdBu_r', extend='both')
     ax7.set_title('Vorticity (ωz)\n渦量', fontsize=12, fontweight='bold')
     ax7.set_xlabel('x direction')
     ax7.set_ylabel('y direction')
@@ -121,7 +136,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     # 散度檢查
     ax8 = plt.subplot(3, 4, 8)
     div_u = np.gradient(u, axis=0) + np.gradient(v, axis=1) + np.gradient(w, axis=2)
-    im8 = ax8.contourf(div_u[:, :, mid_idx], levels=20, cmap='RdBu_r', extend='both')
+    im8 = ax8.contourf(div_u[:, :, mid_idx].T, levels=20, cmap='RdBu_r', extend='both')
     ax8.set_title('Velocity Divergence\n速度散度', fontsize=12, fontweight='bold')
     ax8.set_xlabel('x direction')
     ax8.set_ylabel('y direction')
@@ -153,7 +168,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     u_fluc = u - np.mean(u)
     v_fluc = v - np.mean(v)
     reynolds_stress = u_fluc * v_fluc
-    im11 = ax11.contourf(reynolds_stress[:, :, mid_idx], levels=20, cmap='coolwarm', extend='both')
+    im11 = ax11.contourf(reynolds_stress[:, :, mid_idx].T, levels=20, cmap='coolwarm', extend='both')
     ax11.set_title("Reynolds Stress (u'v')\n雷諾應力", fontsize=12, fontweight='bold')
     ax11.set_xlabel('x direction')
     ax11.set_ylabel('y direction')
@@ -162,7 +177,7 @@ def create_comprehensive_field_plots(u, v, w, p):
     # 湍流動能
     ax12 = plt.subplot(3, 4, 12)
     tke = 0.5 * (u_fluc**2 + v_fluc**2 + (w - np.mean(w))**2)
-    im12 = ax12.contourf(tke[:, :, mid_idx], levels=20, cmap='viridis', extend='both')
+    im12 = ax12.contourf(tke[:, :, mid_idx].T, levels=20, cmap='viridis', extend='both')
     ax12.set_title('Turbulent Kinetic Energy\n湍流動能', fontsize=12, fontweight='bold')
     ax12.set_xlabel('x direction')
     ax12.set_ylabel('y direction')

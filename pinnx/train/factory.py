@@ -403,15 +403,15 @@ def create_model(
         logging.info(f"✅ Created Fourier-VS MLP (use_fourier={use_fourier})")
 
     elif model_type == 'resnet':
-        # ResNet 架構：改為統一 PINNNet block_type=resnet2 以消除重複
+        # ResNet 架構：使用 PINNNet block_type=resnet (adaptive alpha)
         res_cfg = dict(model_cfg)
         res_cfg['type'] = 'fourier_vs_mlp'
-        res_cfg.setdefault('block_type', 'resnet2')
-        res_cfg.setdefault('res_block_alpha_init', 0.1)
+        res_cfg.setdefault('block_type', 'resnet')
+        res_cfg.setdefault('res_block_alpha_init', 0.0)  # 對齊 PirateNet 論文
         res_cfg.setdefault('use_input_projection', True)  # 保持維度對齊一致
         base_model = create_pinn_model(res_cfg).to(device)
         logging.info(
-            f"✅ Created ResNet-style PINN via PINNNet (block=resnet2, depth={res_cfg.get('depth')})"
+            f"✅ Created ResNet-style PINN via PINNNet (block=resnet, depth={res_cfg.get('depth')})"
         )
 
     else:

@@ -169,6 +169,10 @@ class KolmogorovFlowDNS:
             self.forcing_x = A * np.sin(k_phys * Y)
             self.forcing_y = np.zeros_like(self.forcing_x)
 
+        # 預先計算頻譜空間強迫項 (避免在 compute_rhs 重複計算)
+        self.forcing_U_hat = self.fft2(self.forcing_x)
+        self.forcing_V_hat = self.fft2(self.forcing_y)
+
         # 初始化場（使用弱化層流 Kolmogorov 解，避免數值不穩定）
         # ✅ 物理正確：Kolmogorov 強迫 f_x = A·sin(k_f·y) → 層流解 U(y) = A/(ν·k_f²)·sin(k_f·y), V=0
         # 完整層流解: U(y) = (A / (nu * k_f^2)) * sin(k_f * y) 可能過大
@@ -187,10 +191,11 @@ class KolmogorovFlowDNS:
             self.U_hat = np.fft.fft2(U_init)
             self.V_hat = np.zeros((N, N), dtype=complex)
         
+        
         logging.info(f"✅ 初始化弱化層流解：U_max = {U_amp:.6f} (alpha = {alpha:.6f})")
         
         # ✅ 關鍵修正：初始化後立即投影，確保 ∇·u = 0
-        self.project_incompressible()
+        self.U_hat, self.V_hat = self._project_hat(self.U_hat, self.V_hat)
 
     def to_numpy(self, tensor):
         """將 Torch tensor 轉為 NumPy（用於保存）"""
@@ -209,26 +214,64 @@ class KolmogorovFlowDNS:
         if self.use_torch:
             return torch.fft.ifft2(field_hat).real
         return np.fft.ifft2(field_hat).real
+    
+    def _project_hat(self, U_hat, V_hat):
+        """
+        對頻譜空間的速度場進行投影，強制滿足不可壓縮條件 ∇·u = 0
+        此方法不修改 self.U_hat, self.V_hat，而是返回新的投影場。
+        """
+        # 計算散度 k·û = k_x * U_hat + k_y * V_hat
+        if self.use_torch:
+            k_dot_u = self.kx * U_hat + self.ky * V_hat
+            
+            k2_safe = self.k2.clone()
+            k2_safe[0, 0] = 1.0  # 避免除零，(0,0) 模態稍後單獨處理
+            
+            correction = k_dot_u / k2_safe
+            U_hat_proj = U_hat - self.kx * correction
+            V_hat_proj = V_hat - self.ky * correction
+            
+            # (0,0) 模態（平均流）單獨處理：只保留 V 方向（與 Kolmogorov 強迫一致）
+            U_hat_proj[0, 0] = 0.0 + 0.0j
+            V_hat_proj[0, 0] = 0.0 + 0.0j  # 強制 V 平均流為 0 (防止漂移)
+            
+        else:
+            k_dot_u = self.kx * U_hat + self.ky * V_hat
+            
+            k2_safe = self.k2.copy()
+            k2_safe[0, 0] = 1.0
+            
+            correction = k_dot_u / k2_safe
+            U_hat_proj = U_hat - self.kx * correction
+            V_hat_proj = V_hat - self.ky * correction
+            
+            U_hat_proj[0, 0] = 0.0 + 0.0j
+            V_hat_proj[0, 0] = 0.0 + 0.0j  # 強制 V 平均流為 0
+        
+        return U_hat_proj, V_hat_proj
+        
+        return U_hat_proj, V_hat_proj
+
+    def project_incompressible(self):
+        """
+        對速度場進行譜空間投影，強制滿足不可壓縮條件 ∇·u = 0
+        此方法修改 self.U_hat, self.V_hat。
+        """
+        self.U_hat, self.V_hat = self._project_hat(self.U_hat, self.V_hat)
 
     def compute_rhs(self, U_hat, V_hat):
-        """計算 RHS（頻譜空間）"""
-        # 轉回實空間
+        """計算 RHS（頻譜空間），使用 Leray 投影法"""
+        # 轉回實空間計算非線性項
         U = self.ifft2(U_hat)
         V = self.ifft2(V_hat)
 
-        # 對流項（實空間）
-        if self.use_torch:
-            dUdx = self.ifft2(1j * self.kx * U_hat)
-            dUdy = self.ifft2(1j * self.ky * U_hat)
-            dVdx = self.ifft2(1j * self.kx * V_hat)
-            dVdy = self.ifft2(1j * self.ky * V_hat)
-        else:
-            dUdx = self.ifft2(1j * self.kx * U_hat)
-            dUdy = self.ifft2(1j * self.ky * U_hat)
-            dVdx = self.ifft2(1j * self.kx * V_hat)
-            dVdy = self.ifft2(1j * self.ky * V_hat)
+        # 計算導數 (Spectral derivative) - 統一 Torch/NumPy 邏輯
+        dUdx = self.ifft2(1j * self.kx * U_hat)
+        dUdy = self.ifft2(1j * self.ky * U_hat)
+        dVdx = self.ifft2(1j * self.kx * V_hat)
+        dVdy = self.ifft2(1j * self.ky * V_hat)
 
-        # 對流項
+        # 對流項 (Convection)
         conv_U = -(U * dUdx + V * dUdy)
         conv_V = -(U * dVdx + V * dVdy)
 
@@ -236,42 +279,18 @@ class KolmogorovFlowDNS:
         conv_U_hat = self.fft2(conv_U) * self.dealias_mask
         conv_V_hat = self.fft2(conv_V) * self.dealias_mask
 
-        # 強迫項（Kolmogorov forcing 作用於 x-momentum）
-        forcing_U_hat = self.fft2(self.forcing_x)
-        forcing_V_hat = self.fft2(self.forcing_y)
+        # 擴散項 (Diffusion) - 顯式處理
+        diff_U_hat = -self.nu * self.k2 * U_hat
+        diff_V_hat = -self.nu * self.k2 * V_hat
 
-        # 黏滯項 + 強迫 + 非線性（再做壓力投影確保無散度）
-        tentative_U = conv_U_hat - self.nu * self.k2 * U_hat + forcing_U_hat
-        tentative_V = conv_V_hat - self.nu * self.k2 * V_hat + forcing_V_hat
+        # 組裝未投影的 RHS
+        # RHS* = Convection + Diffusion + Forcing (使用預計算的 forcing_hat)
+        rhs_U_star = conv_U_hat + diff_U_hat + self.forcing_U_hat
+        rhs_V_star = conv_V_hat + diff_V_hat + self.forcing_V_hat
 
-        k2_safe = self.k2.clone() if self.use_torch else self.k2.copy()
-        if self.use_torch:
-            k2_safe[0, 0] = 1.0
-        else:
-            k2_safe[0, 0] = 1.0
-
-        # ===== 壓力投影步驟（確保無散度）=====
-        # 目標：û^(n+1) = û* - ∇φ (頻譜空間：û = û* - ik φ̂)
-        # Poisson 方程：∇²φ = ∇·û* (頻譜空間：-k² φ̂ = div_hat)
-        #
-        # 步驟 1：計算暫時速度的散度
-        div_hat = 1j * self.kx * tentative_U + 1j * self.ky * tentative_V
-        #
-        # 步驟 2：求解壓力（φ̂ = -div_hat / k²）
-        # 注意：k²=0 時不投影（平均流不受壓力影響）
-        P_hat = -div_hat / k2_safe  # 負號確保投影正確
-        if self.use_torch:
-            P_hat[0, 0] = 0.0  # 壓力常數任意（不影響梯度）
-        else:
-            P_hat[0, 0] = 0.0
-        #
-        # 步驟 3：投影校正（û = û* - ik φ̂）
-        # 將 φ̂ = -div_hat/k² 代入：
-        # û = û* - ik × (-div_hat/k²) = û* + ik×div_hat/k²
-        # 但由於我們定義 P_hat = -div_hat/k²，所以：
-        # û = û* - ik × P_hat
-        rhs_U = tentative_U - 1j * self.kx * P_hat
-        rhs_V = tentative_V - 1j * self.ky * P_hat
+        # 投影 RHS (Leray Projection)
+        # P[RHS*] = RHS* - ∇p  => 自動消去壓力梯度部分
+        rhs_U, rhs_V = self._project_hat(rhs_U_star, rhs_V_star)
 
         return rhs_U, rhs_V
 
@@ -304,91 +323,34 @@ class KolmogorovFlowDNS:
         self.U_hat = U0 + (self.dt / 6) * (k1_U + 2*k2_U + 2*k3_U + k4_U)
         self.V_hat = V0 + (self.dt / 6) * (k1_V + 2*k2_V + 2*k3_V + k4_V)
 
-    def compute_pressure(self):
-        """計算壓力場"""
-        U = self.ifft2(self.U_hat)
-        V = self.ifft2(self.V_hat)
+        # 額外保險：確保時間步進後的狀態也是嚴格無散度的
+        self.project_incompressible()
 
-        if self.use_torch:
-            dUdx = self.ifft2(1j * self.kx * self.U_hat)
-            dUdy = self.ifft2(1j * self.ky * self.U_hat)
-            dVdx = self.ifft2(1j * self.kx * self.V_hat)
-            dVdy = self.ifft2(1j * self.ky * self.V_hat)
-        else:
-            dUdx = self.ifft2(1j * self.kx * self.U_hat)
-            dUdy = self.ifft2(1j * self.ky * self.U_hat)
-            dVdx = self.ifft2(1j * self.kx * self.V_hat)
-            dVdy = self.ifft2(1j * self.ky * self.V_hat)
+    def compute_pressure(self):
+        """計算壓力場 (用於輸出)"""
+        # 計算導數 (Spectral derivative) - 統一 Torch/NumPy 邏輯
+        dUdx = self.ifft2(1j * self.kx * self.U_hat)
+        dUdy = self.ifft2(1j * self.ky * self.U_hat)
+        dVdx = self.ifft2(1j * self.kx * self.V_hat)
+        dVdy = self.ifft2(1j * self.ky * self.V_hat)
 
         # Poisson 方程右側
         rhs = -(dUdx**2 + 2*dUdy*dVdx + dVdy**2)
         rhs_hat = self.fft2(rhs)
 
         # 求解
-        k2_safe = self.k2.clone() if self.use_torch else self.k2.copy()
         if self.use_torch:
+            k2_safe = self.k2.clone()
             k2_safe[0, 0] = 1.0
-        else:
-            k2_safe[0, 0] = 1.0
-
-        P_hat = -rhs_hat / k2_safe
-        if self.use_torch:
+            P_hat = -rhs_hat / k2_safe
             P_hat[0, 0] = 0.0
         else:
+            k2_safe = self.k2.copy()
+            k2_safe[0, 0] = 1.0
+            P_hat = -rhs_hat / k2_safe
             P_hat[0, 0] = 0.0
 
         return self.ifft2(P_hat)
-
-    def project_incompressible(self):
-        """
-        對速度場進行譜空間投影，強制滿足不可壓縮條件 ∇·u = 0
-        
-        物理原理：
-        - 不可壓縮條件：∂u/∂x + ∂v/∂y = 0
-        - Fourier 空間：i·k_x·U_hat + i·k_y·V_hat = 0  →  k·û = 0
-        - 投影公式：û_⊥ = û - (k·û)k / |k|²
-        
-        這確保速度場總是位於散度為零的子空間中，消除數值誤差導致的散度累積
-        """
-        # 計算散度 k·û = k_x * U_hat + k_y * V_hat
-        if self.use_torch:
-            k_dot_u = self.kx * self.U_hat + self.ky * self.V_hat
-            
-            # 投影：從速度中減去平行於 k 的分量
-            # U_hat -= k_x * (k·û) / |k|²
-            # V_hat -= k_y * (k·û) / |k|²
-            k2_safe = self.k2.clone()
-            k2_safe[0, 0] = 1.0  # 避免除零，(0,0) 模態稍後單獨處理
-            
-            correction = k_dot_u / k2_safe
-            self.U_hat -= self.kx * correction
-            self.V_hat -= self.ky * correction
-            
-            # (0,0) 模態（平均流）單獨處理：只保留 V 方向（與 Kolmogorov 強迫一致）
-            self.U_hat[0, 0] = 0.0 + 0.0j
-            # V_hat[0,0] 保持不變（平均流可以非零）
-            
-        else:
-            k_dot_u = self.kx * self.U_hat + self.ky * self.V_hat
-            
-            k2_safe = self.k2.copy()
-            k2_safe[0, 0] = 1.0
-            
-            correction = k_dot_u / k2_safe
-            self.U_hat -= self.kx * correction
-            self.V_hat -= self.ky * correction
-            
-            self.U_hat[0, 0] = 0.0 + 0.0j
-        
-        # 驗證投影效果
-        U_real = self.to_numpy(self.ifft2(self.U_hat))
-        V_real = self.to_numpy(self.ifft2(self.V_hat))
-        dx = dy = self.L / self.N
-        dUdx = np.gradient(U_real, dx, axis=0)
-        dVdy = np.gradient(V_real, dy, axis=1)
-        div_max = np.abs(dUdx + dVdy).max()
-        
-        logging.info(f"   ✓ 譜空間投影完成，最大散度誤差: {div_max:.2e}")
 
     def add_perturbation(self, method: str = 'random', amplitude: float = 0.1):
         """添加擾動"""
@@ -426,7 +388,7 @@ class KolmogorovFlowDNS:
         self.V_hat += pert_V_hat
 
         # ✅ 關鍵修正：擾動後立即投影，確保不可壓縮性
-        self.project_incompressible()
+        self.U_hat, self.V_hat = self._project_hat(self.U_hat, self.V_hat)
 
         logging.info(f"✅ 添加擾動：method={method}, amplitude={amplitude}")
 
@@ -509,15 +471,33 @@ class KolmogorovFlowDNS:
                 dset_p[idx] = P
                 dset_time[idx] = t
 
+                # 計算診斷指標 (使用譜導數以獲得高精度)
+                if self.use_torch:
+                    dUdx_hat = 1j * self.kx * self.U_hat
+                    dUdy_hat = 1j * self.ky * self.U_hat
+                    dVdx_hat = 1j * self.kx * self.V_hat
+                    dVdy_hat = 1j * self.ky * self.V_hat
+                    
+                    omega_hat = dVdx_hat - dUdy_hat
+                    div_hat = dUdx_hat + dVdy_hat
+                    
+                    omega = self.to_numpy(self.ifft2(omega_hat))
+                    div_field = self.to_numpy(self.ifft2(div_hat))
+                else:
+                    dUdx_hat = 1j * self.kx * self.U_hat
+                    dUdy_hat = 1j * self.ky * self.U_hat
+                    dVdx_hat = 1j * self.kx * self.V_hat
+                    dVdy_hat = 1j * self.ky * self.V_hat
+                    
+                    omega_hat = dVdx_hat - dUdy_hat
+                    div_hat = dUdx_hat + dVdy_hat
+                    
+                    omega = self.ifft2(omega_hat)
+                    div_field = self.ifft2(div_hat)
+
                 KE = 0.5 * np.mean(U**2 + V**2)
-                dx = dy = self.L / self.N
-                dVdx = np.gradient(V, dx, axis=0)
-                dUdy = np.gradient(U, dy, axis=1)
-                dUdx = np.gradient(U, dx, axis=0)
-                dVdy = np.gradient(V, dy, axis=1)
-                omega = dVdx - dUdy
                 enstrophy = 0.5 * np.mean(omega**2)
-                div_err = np.abs(dUdx + dVdy).max()
+                div_err = np.abs(div_field).max()
 
                 dset_ke[idx] = KE
                 dset_ens[idx] = enstrophy

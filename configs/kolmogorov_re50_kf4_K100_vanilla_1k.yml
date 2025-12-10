@@ -1,0 +1,340 @@
+# ====================================================================
+# Kolmogorov Flow Re=50 kf=4 K=100 Vanilla PINNs 配置
+# ====================================================================
+# 實驗目標：使用最基本的 PINNs 架構重建 Re=50 Kolmogorov flow
+# 特徵：純 MLP + Tanh + Adam + 固定權重（無任何額外功能）
+# DNS 數據：re50_kf4 (k_f=4, Re=50 弱湍流)
+# 感測器：QR-pivot K=100
+# 優化器：Adam (無課程學習、無自適應權重)
+# 創建日期：2025-12-05
+# ====================================================================
+
+experiment:
+  name: kolmogorov_re50_kf4_K100_vanilla
+  version: v1.0_vanilla_baseline
+  seed: 42
+  device: auto  # 讓系統選擇最佳設備（現在應該可以用 MPS 了）
+  precision: float32
+  description: "Re=50 with vanilla PINNs (pure MLP, no advanced features)"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# 數據配置
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: "Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)"
+
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]  # 2π
+
+    resolution:
+      x: 256
+      y: 256
+
+    time_range: [20.0, 40.0]  # 使用穩態區域
+    dt: 0.001
+
+    variables: [u, v, p]
+
+    physics_params:
+      Re: 50.0
+      Re_definition: "Musacchio_Boffetta_2014"
+      nu: 0.039374  # 動力黏度
+      k_f: 4
+      forcing_amplitude: 1.0
+
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# 數據標準化
+# ====================================================================
+normalization:
+  type: training_data_norm
+  params: {}
+
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+
+  steady_state:
+    enabled: true
+    time_window: [40.0, 60.0]
+
+# ====================================================================
+# 感測點配置
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100/sensor_data.json
+
+  quality_metrics:
+    condition_number: TBD
+    energy_ratio: TBD
+    min_distance: TBD
+
+# ====================================================================
+# 模型架構 - Vanilla 版本
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3       # (t, x, y)
+  out_dim: 3      # (u, v, p)
+  width: 256      # 保持相同寬度以公平比較
+  depth: 8        # 保持相同深度
+  activation: tanh  # ❌ 使用經典 Tanh（非 Swish）
+  block_type: dense
+  use_fourier: false  # ⭐ 關鍵：必須設置頂層開關
+
+  # ❌ Fourier Features (關閉)
+  fourier_features:
+    enabled: false
+    type: disabled  # ⭐ 必須設置為 "disabled" 而非 "standard"
+    fourier_m: 0
+    fourier_sigma: 1.0
+    include_input: true
+
+  # ❌ SIREN 初始化 (關閉，使用 Xavier)
+  initialization:
+    type: xavier_normal
+    gain: 1.0
+
+# ====================================================================
+# 物理設定
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# 損失函數權重 - Vanilla 版本（固定權重）
+# ====================================================================
+losses:
+  # 基礎損失
+  data_weight: 10.0
+
+  # PDE 殘差
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+
+  # 物理約束
+  periodicity_weight: 10.0
+
+  # 正則化
+  l2_regularization: 1.0e-6
+  gradient_penalty: 1.0e-5
+  prior_weight: 0.0
+
+  # ❌ 損失標準化 (關閉)
+  normalize_losses: false
+  normalization_method: none
+
+  # ❌ 自適應權重 (關閉)
+  adaptive_weighting: false
+  adaptation_method: none
+  adaptation_frequency: 0
+  adaptation_alpha: 0.0
+
+  # ❌ 因果訓練 (關閉)
+  causal_weighting: false
+  causal_eps: 0.0
+  causal_n_bins: 0
+
+# ====================================================================
+# 訓練配置 - Adam 優化器（無調度）
+# ====================================================================
+training:
+  # Adam 優化器
+  optimizer:
+    type: adam
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+
+  # ❌ 學習率調度 (關閉，保持固定學習率)
+  lr_scheduler:
+    type: constant
+    step_size: 100000  # 設定極大值以避免觸發
+    gamma: 1.0         # 不衰減
+    eta_min: 1.0e-3    # 保持原學習率
+
+  # 訓練循環
+  epochs: 1000
+  max_epochs: 1000
+  batch_size: 15000
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+
+  # 早停
+  early_stopping:
+    enabled: true
+    patience: 1000
+    min_delta: 1.0e-6
+
+  # 採樣策略
+  sampling:
+    N_pde: 10000
+    adaptive_sampling: false  # ❌ 關閉自適應採樣
+    boundary_points: 1000
+
+  # 穩定性
+  gradient_clip: 1.0
+
+  amp:
+    enabled: false
+
+# ====================================================================
+# ❌ 課程學習 (關閉)
+# ====================================================================
+curriculum:
+  enable: false
+
+# ====================================================================
+# ❌ 優化器切換 (關閉)
+# ====================================================================
+optimizer_switching:
+  enabled: false
+
+# ====================================================================
+# ❌ Ensemble (關閉)
+# ====================================================================
+ensemble:
+  enable: false
+
+# ====================================================================
+# 評估配置
+# ====================================================================
+evaluation:
+  grid_resolution: [512, 512]
+
+  metrics:
+    - relative_l2
+    - mass_conservation
+    - kinetic_energy
+    - enstrophy
+    - energy_spectrum
+
+  thresholds:
+    u_l2_error: 0.20  # Vanilla 版本放寬門檻
+    v_l2_error: 0.20
+    p_l2_error: 0.25
+    mass_conservation_error: 0.005
+    kinetic_energy_rmse: 0.10
+
+  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_time_window: [20.0, 40.0]
+
+# ====================================================================
+# 物理驗證
+# ====================================================================
+physics_validation:
+  enabled: true
+  save_metrics: true
+
+  thresholds:
+    mass_conservation: 0.005
+    momentum_conservation: 0.05
+    periodicity_error: 0.001
+
+# ====================================================================
+# 日誌與輸出
+# ====================================================================
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+
+output:
+  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_vanilla
+  results_dir: ./results/kolmogorov_re50_kf4_K100_vanilla
+  visualization_dir: ./results/kolmogorov_re50_kf4_K100_vanilla/visualizations
+
+# ====================================================================
+# 驗收標準
+# ====================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+
+  physics:
+    - mass_conservation_satisfied: true
+    - momentum_residual_low: true
+    - periodicity_maintained: true
+
+  reconstruction:
+    - sensor_l2_error_target: 0.10  # Vanilla 版本放寬
+    - field_l2_error_target: 0.20
+    - kinetic_energy_preserved: true
+
+# ====================================================================
+# 使用說明
+# ====================================================================
+usage_notes: |
+  🔬 實驗設計：
+    - 目標：Re=50 K=100 Vanilla PINNs 基準實驗
+    - 特徵：純 MLP + Tanh + 固定權重（無額外功能）
+    - 優化器：Adam (lr=1e-3, 固定學習率)
+    - 無 Fourier、無 SIREN、無自適應、無因果訓練
+
+  🚀 執行指令：
+    python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla.yml --device cuda
+
+  📊 預期結果：
+    - 訓練時間：2-3 小時（10000 epochs, GPU）
+    - 感測點 L2：可能較高 (5-10%)
+    - 全場 L2：15-20%（預期較完整版差）
+
+  🔍 對比目的：
+    與 kolmogorov_re50_kf4_K100_full.yml 對比：
+    - 驗證 Fourier Features 的效果
+    - 驗證 SIREN 初始化的效果
+    - 驗證自適應權重的效果
+    - 驗證因果訓練的效果
+
+  ⚠️ 關鍵差異：
+    完整版 vs Vanilla：
+    - Activation: Swish vs Tanh
+    - Fourier: ✅ vs ❌
+    - SIREN Init: ✅ vs ❌ (Xavier)
+    - 自適應權重: ✅ vs ❌
+    - 因果訓練: ✅ vs ❌
+    - 學習率調度: Step decay vs Constant
+    - 損失標準化: ✅ vs ❌

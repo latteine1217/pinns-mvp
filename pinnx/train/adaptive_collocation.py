@@ -286,9 +286,9 @@ class AdaptiveCollocationSampler:
                 leverage_scores = np.sum(Q**2, axis=1)  # [N,]
                 
                 # 選擇高槓桿分數點
-                selected_indices = torch.from_numpy(
-                    np.argsort(leverage_scores)[-n_select:][::-1]
-                )
+                # 修復：先複製數組避免負步長問題
+                sorted_indices = np.argsort(leverage_scores)[-n_select:][::-1].copy()
+                selected_indices = torch.from_numpy(sorted_indices)
                 
                 logger.debug(f"槓桿分數範圍: [{leverage_scores.min():.4f}, {leverage_scores.max():.4f}]")
                 
@@ -519,7 +519,8 @@ class AdaptiveCollocationSampler:
         n_exist = existing_points.shape[0]
         
         # 計算距離矩陣（新點 vs 所有點）
-        all_points_np = all_points.numpy()
+        # 修復：detach tensor 以避免梯度追蹤錯誤
+        all_points_np = all_points.detach().cpu().numpy()
         dist_matrix = squareform(pdist(all_points_np))
         
         # 新點與已有點的距離

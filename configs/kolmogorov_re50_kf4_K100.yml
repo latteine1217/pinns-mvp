@@ -93,8 +93,8 @@ model:
   width: 256      # 隱藏層寬度
   depth: 8        # 隱藏層深度
   activation: sine  # 使用 sine 激活函數（對高階導數更敏感）
-  block_type: resnet2            # 可切換為 resnet2（兩層殘差+alpha）以用 ResNet 樣式
-  res_block_alpha_init: 0.1    # resnet2 時的 alpha 初值（skip-init）
+  block_type: resnet            # 使用 resnet（兩層殘差+adaptive alpha，PirateNet-style）
+  res_block_alpha_init: 0.0     # resnet 的 alpha 初值（對齊 PirateNet 論文：0.0=恆等映射）
 
   # Fourier Features 配置
   fourier_features:

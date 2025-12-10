@@ -1,0 +1,326 @@
+# ====================================================================
+# Kolmogorov Flow Re=50 kf=4 K=100 完整版訓練配置
+# ====================================================================
+# 實驗目標：使用所有先進特徵重建 Re=50 Kolmogorov flow
+# 特徵：Fourier Features + SIREN + 自適應權重 + 因果訓練
+# DNS 數據：re50_kf4 (k_f=4, Re=50 弱湍流)
+# 感測器：QR-pivot K=100
+# 優化器：Adam (無課程學習)
+# 創建日期：2025-12-05
+# ====================================================================
+
+experiment:
+  name: kolmogorov_re50_kf4_K100_full
+  version: v1.0_full_features
+  seed: 42
+  device: auto
+  precision: float32
+  description: "Re=50 with all advanced features (Fourier+SIREN+Adaptive+Causal)"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# 數據配置
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: "Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)"
+
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]  # 2π
+
+    resolution:
+      x: 256
+      y: 256
+
+    time_range: [20.0, 40.0]  # 使用穩態區域
+    dt: 0.001
+
+    variables: [u, v, p]
+
+    physics_params:
+      Re: 50.0
+      Re_definition: "Musacchio_Boffetta_2014"
+      nu: 0.039374  # 動力黏度
+      k_f: 4
+      forcing_amplitude: 1.0
+
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# 數據標準化
+# ====================================================================
+normalization:
+  type: training_data_norm
+  params: {}
+
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+
+  steady_state:
+    enabled: true
+    time_window: [40.0, 60.0]
+
+# ====================================================================
+# 感測點配置
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100/sensor_data.json
+
+  quality_metrics:
+    condition_number: TBD
+    energy_ratio: TBD
+    min_distance: TBD
+
+# ====================================================================
+# 模型架構 - 完整版特徵
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3       # (t, x, y)
+  out_dim: 3      # (u, v, p)
+  width: 256
+  depth: 8
+  activation: swish
+  block_type: resnet  # PirateNet-style adaptive residual
+
+  # ✅ Fourier Features (啟用)
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 12
+    fourier_sigma: 4.0
+    include_input: true
+
+  # ✅ SIREN 初始化 (啟用)
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+
+# ====================================================================
+# 物理設定
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# 損失函數權重 - 完整版特徵
+# ====================================================================
+losses:
+  # 基礎損失
+  data_weight: 10.0
+
+  # PDE 殘差
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+
+  # 物理約束
+  periodicity_weight: 10.0
+
+  # 正則化
+  l2_regularization: 1.0e-6
+  gradient_penalty: 1.0e-5
+  prior_weight: 0.0
+
+  # ✅ 損失標準化 (啟用)
+  normalize_losses: true
+  normalization_method: gradnorm
+
+  # ✅ 自適應權重 (啟用)
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 500
+  adaptation_alpha: 1.5
+
+  # ✅ 因果訓練 (啟用)
+  causal_weighting: true
+  causal_eps: 0.5
+  causal_n_bins: 10
+
+# ====================================================================
+# 訓練配置 - Adam 優化器
+# ====================================================================
+training:
+  # Adam 優化器
+  optimizer:
+    type: adam
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+
+  # 學習率調度
+  lr_scheduler:
+    type: step
+    step_size: 2000
+    gamma: 0.9
+    eta_min: 1.0e-6
+
+  # 訓練循環
+  epochs: 1000
+  max_epochs: 1000
+  batch_size: 15000
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+
+  # 早停
+  early_stopping:
+    enabled: false
+    patience: 1000
+    min_delta: 1.0e-6
+
+  # 採樣策略
+  sampling:
+    N_pde: 10000
+    adaptive_sampling: false
+    boundary_points: 1000
+
+  # 穩定性
+  gradient_clip: 1.0
+
+  amp:
+    enabled: false
+
+# ====================================================================
+# ❌ 課程學習 (關閉)
+# ====================================================================
+curriculum:
+  enable: false
+
+# ====================================================================
+# ❌ 優化器切換 (關閉)
+# ====================================================================
+optimizer_switching:
+  enabled: false
+
+# ====================================================================
+# ❌ Ensemble (關閉)
+# ====================================================================
+ensemble:
+  enable: false
+
+# ====================================================================
+# 評估配置
+# ====================================================================
+evaluation:
+  grid_resolution: [512, 512]
+
+  metrics:
+    - relative_l2
+    - mass_conservation
+    - kinetic_energy
+    - enstrophy
+    - energy_spectrum
+
+  thresholds:
+    u_l2_error: 0.15
+    v_l2_error: 0.15
+    p_l2_error: 0.20
+    mass_conservation_error: 0.001
+    kinetic_energy_rmse: 0.05
+
+  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_time_window: [20.0, 40.0]
+
+# ====================================================================
+# 物理驗證
+# ====================================================================
+physics_validation:
+  enabled: true
+  save_metrics: true
+
+  thresholds:
+    mass_conservation: 0.001
+    momentum_conservation: 0.01
+    periodicity_error: 0.0001
+
+# ====================================================================
+# 日誌與輸出
+# ====================================================================
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+
+output:
+  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_full
+  results_dir: ./results/kolmogorov_re50_kf4_K100_full
+  visualization_dir: ./results/kolmogorov_re50_kf4_K100_full/visualizations
+
+# ====================================================================
+# 驗收標準
+# ====================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+
+  physics:
+    - mass_conservation_satisfied: true
+    - momentum_residual_low: true
+    - periodicity_maintained: true
+
+  reconstruction:
+    - sensor_l2_error_target: 0.05
+    - field_l2_error_target: 0.15
+    - kinetic_energy_preserved: true
+
+# ====================================================================
+# 使用說明
+# ====================================================================
+usage_notes: |
+  🔬 實驗設計：
+    - 目標：Re=50 K=100 完整版特徵對比實驗
+    - 特徵：Fourier + SIREN + 自適應權重 + 因果訓練
+    - 優化器：Adam (lr=1e-3)
+    - 無課程學習、無優化器切換
+
+  🚀 執行指令：
+    python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100_full.yml --device cuda
+
+  📊 預期結果：
+    - 訓練時間：2-3 小時（10000 epochs, GPU）
+    - 感測點 L2：< 5%
+    - 全場 L2：10-15%
+
+  🔍 對比基準：
+    與 kolmogorov_re50_kf4_K100_vanilla.yml 對比，驗證先進特徵的效果

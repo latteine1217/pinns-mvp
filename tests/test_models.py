@@ -120,6 +120,27 @@ class TestPINNNet:
         
         assert gradients.shape == x.shape
         assert not torch.isnan(gradients).any()
+
+    def test_pinn_net_resnet_block(self):
+        """resnet block 應保持形狀且 alpha 可訓練（PirateNet-style adaptive residual）"""
+        net = PINNNet(
+            in_dim=3,
+            out_dim=2,
+            width=48,
+            depth=3,
+            block_type='resnet',
+            res_block_alpha_init=0.0,  # 對齊 PirateNet 論文
+        ).to(self.device)
+
+        x = torch.randn(8, 3, device=self.device, requires_grad=True)
+        out = net(x)
+        assert out.shape == (8, 2)
+        loss = out.pow(2).sum()
+        loss.backward()
+        alphas = [m.alpha for m in net.hidden_layers if hasattr(m, "alpha")]
+        assert alphas, "ResNet blocks should expose alpha parameters"
+        for alpha in alphas:
+            assert alpha.grad is not None
     
     def test_pinn_net_different_configs(self):
         """測試不同配置的 PINN 網路"""

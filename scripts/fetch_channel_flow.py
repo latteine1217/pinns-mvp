@@ -494,27 +494,326 @@ class ChannelFlowDataFetcher:
         return out_path
 
     # ---------------- 感測點與先驗 ----------------
-    def generate_sensor_points(self, 
+    def _compute_periodic_distance_squared(self, coords1, coords2, domain_lengths):
+        """計算週期性距離的平方 (支援多維)"""
+        dists_sq = np.zeros(len(coords2))
+        
+        for dim, length in domain_lengths.items():
+            dx = np.abs(coords1[dim] - coords2[:, dim])
+            dx = np.minimum(dx, length - dx)
+            dists_sq += dx**2
+            
+        # 對於非週期軸，使用標準歐式距離
+        for dim in range(len(coords1)):
+            if dim not in domain_lengths:
+                d = coords1[dim] - coords2[:, dim]
+                dists_sq += d**2
+                
+        return dists_sq
+
+    def generate_sensor_points_with_periodicity(self,
+                                               field_data: Dict[str, np.ndarray],
+                                               K: int = 500,
+                                               periodic_axes: Optional[List[int]] = None,
+                                               use_periodic: bool = True,
+                                               n_wrap_layers: int = 2,
+                                               seam_weight: float = 1.0,
+                                               noise_sigma: float = 0.02,
+                                               dropout_prob: float = 0.10,
+                                               min_dist_factor: float = 0.5) -> Dict[str, np.ndarray]:
+        """
+        生成考慮週期性邊界條件的感測點（使用底層 QR-Pivot API）
+        
+        改進：
+        1. 空間過濾：使用最小距離約束防止點聚集
+        2. 無偏邊界：支援 seam_weight=1.0
+        3. 過採樣：從更多候選點中篩選
+
+        Args:
+            field_data: 完整場資料（必須包含 'x', 'y' 座標與 'u', 'v', 'w', 'p' 場）
+            K: 感測點數量
+            periodic_axes: 週期性軸索引列表（0=x, 1=y, 2=z）
+                          預設 [0] 對應 2D 切片的 x 方向週期性
+            use_periodic: 是否啟用週期性處理
+            n_wrap_layers: 接縫處環繞層數（推薦 2-3）
+            seam_weight: 環繞層權重係數（1.0 為無偏）
+            noise_sigma: 高斯噪聲標準差
+            dropout_prob: 隨機遺失比例
+            min_dist_factor: 最小距離因子 (相對於平均間距)
+
+        Returns:
+            感測點資料字典
+        """
+        from pinnx.sensors.qr_pivot import QRPivotSelector
+
+        self.logger.info(f"生成 {K} 個感測點（週期性處理: {use_periodic}, 空間過濾: {min_dist_factor > 0}）")
+
+        # ============ 1. 提取座標與網格形狀 ============
+        if 'x' in field_data and 'y' in field_data:
+            x = np.asarray(field_data['x'])
+            y = np.asarray(field_data['y'])
+        else:
+            coordinates = field_data.get('coordinates')
+            if coordinates is None:
+                raise KeyError("field_data 缺少 x/y 座標資訊")
+            if isinstance(coordinates, dict):
+                coord_dict = coordinates
+            elif isinstance(coordinates, np.ndarray) and coordinates.ndim == 0:
+                coord_dict = coordinates.item()
+            else:
+                raise TypeError(f"不支援的 coordinates 型別: {type(coordinates)}")
+            x = np.asarray(coord_dict['x'])
+            y = np.asarray(coord_dict['y'])
+
+        nx, ny = len(x), len(y)
+        self.logger.info(f"網格形狀: {nx} × {ny} = {nx*ny} 點")
+
+        # ============ 2. 建立座標網格 ============
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        coords = np.stack([X.ravel(), Y.ravel()], axis=-1)  # [nx*ny, 2]
+
+        # ============ 3. 堆疊場數據為快照矩陣 ============
+        snapshots = []
+        available_vars = []
+        for var in ['u', 'v', 'w', 'p']:
+            if var in field_data:
+                field_arr = np.asarray(field_data[var])
+                # 確保形狀為 (nx, ny) 或可 reshape
+                if field_arr.shape != (nx, ny):
+                    try:
+                        field_arr = field_arr.reshape(nx, ny)
+                    except ValueError:
+                        self.logger.warning(f"跳過變量 {var}：形狀 {field_arr.shape} 無法 reshape 至 ({nx}, {ny})")
+                        continue
+                snapshots.append(field_arr.ravel()[:, np.newaxis])
+                available_vars.append(var)
+
+        if not snapshots:
+            raise ValueError("未找到有效的場變量（u, v, w, p）")
+
+        data_matrix = np.hstack(snapshots)  # [nx*ny, n_vars]
+        
+        # Z-score 標準化 (對特徵維度)
+        mean_val = data_matrix.mean(axis=0)
+        std_val = data_matrix.std(axis=0) + 1e-8
+        data_matrix_norm = (data_matrix - mean_val) / std_val
+        
+        self.logger.info(f"快照矩陣: {data_matrix.shape}，變量: {available_vars} (已標準化)")
+
+        # ============ 4. 創建 QR-Pivot 選擇器 ============
+        if periodic_axes is None:
+            # 預設 2D 切片僅 x 方向週期
+            periodic_axes = [0] if use_periodic else None
+        
+        indices = []
+        metrics = {}
+
+        if use_periodic and periodic_axes:
+            # 週期性模式 (含空間過濾)
+            
+            # 計算域長度
+            domain_lengths = {}
+            domain_area = 1.0
+            if 0 in periodic_axes: domain_lengths[0] = float(x[-1] - x[0])
+            if 1 in periodic_axes: domain_lengths[1] = float(y[-1] - y[0])
+            
+            # 計算總面積 (用於最小距離估算)
+            Lx = float(x[-1] - x[0])
+            Ly = float(y[-1] - y[0])
+            domain_area = Lx * Ly
+
+            # 過採樣設置
+            oversample_factor = 3.0
+            K_oversample = int(K * oversample_factor)
+            K_oversample = min(K_oversample, len(coords))
+            
+            self.logger.info(
+                f"週期性配置: axes={periodic_axes}, "
+                f"wrap_layers={n_wrap_layers}, "
+                f"oversample={K}->{K_oversample}"
+            )
+
+            selector = QRPivotSelector(
+                use_circular_indexing=True,
+                n_wrap_layers=n_wrap_layers,
+                seam_weight=seam_weight,
+                mode='column',
+                pivoting=True,
+                regularization=1e-12
+            )
+
+            # 執行 QR-Pivot (獲取候選點)
+            candidate_indices, metrics = selector.select_sensors(
+                data_matrix_norm,
+                n_sensors=K_oversample,
+                coords=coords,
+                grid_shape=(nx, ny),
+                periodic_axes=periodic_axes,
+                domain_lengths=domain_lengths
+            )
+            
+            # 執行空間過濾 (Minimum Distance Constraint)
+            characteristic_dist = np.sqrt(domain_area / K)
+            min_dist = min_dist_factor * characteristic_dist
+            min_dist_sq = min_dist ** 2
+            
+            self.logger.info(f"空間過濾: min_dist={min_dist:.4f} (avg_spacing={characteristic_dist:.4f})")
+            
+            final_indices = []
+            final_coords = []
+            skipped_count = 0
+            
+            for idx in candidate_indices:
+                if len(final_indices) >= K:
+                    break
+                
+                current_coord = coords[idx]
+                
+                if not final_indices:
+                    final_indices.append(idx)
+                    final_coords.append(current_coord)
+                    continue
+                
+                # 計算與已選點的距離
+                dists_sq = self._compute_periodic_distance_squared(
+                    current_coord, 
+                    np.array(final_coords), 
+                    domain_lengths
+                )
+                
+                if np.all(dists_sq >= min_dist_sq):
+                    final_indices.append(idx)
+                    final_coords.append(current_coord)
+                else:
+                    skipped_count += 1
+            
+            # 回補點數 (如果過濾太嚴格)
+            if len(final_indices) < K:
+                self.logger.warning(f"過濾後點數不足 ({len(final_indices)}/{K})，正在回補...")
+                existing_set = set(final_indices)
+                for idx in candidate_indices:
+                    if len(final_indices) >= K:
+                        break
+                    if idx not in existing_set:
+                        final_indices.append(idx)
+            
+            indices = np.array(final_indices)
+            metrics['skipped_count'] = skipped_count
+            metrics['min_dist_factor'] = min_dist_factor
+
+        else:
+            # 標準模式（不考慮週期性）
+            selector = QRPivotSelector(
+                use_circular_indexing=False,
+                mode='column',
+                pivoting=True,
+                regularization=1e-12
+            )
+
+            self.logger.info("標準 QR-Pivot（無週期性處理）")
+            indices, metrics = selector.select_sensors(data_matrix_norm, n_sensors=K)
+
+        # ============ 5. 提取感測點座標與數據 ============
+        sensor_points = coords[indices]  # [K, 2]
+        sensor_data = {}
+
+        for i, var in enumerate(available_vars):
+            field_values = data_matrix[indices, i]  # [K]
+
+            # 添加噪聲
+            if noise_sigma > 0:
+                noise_scale = np.std(field_values)
+                noise = np.random.normal(0, noise_sigma * noise_scale, len(field_values))
+                field_values = field_values + noise
+
+            # 隨機遺失
+            if dropout_prob > 0:
+                n_dropout = int(dropout_prob * len(field_values))
+                if n_dropout > 0:
+                    dropout_indices = np.random.choice(len(field_values), n_dropout, replace=False)
+                    field_values[dropout_indices] = np.nan
+
+            sensor_data[var] = field_values
+
+        # ============ 6. 組裝結果 ============
+        selection_info = {
+            'strategy': 'qr_pivot_periodic' if use_periodic else 'qr_pivot_standard',
+            'periodic_axes': periodic_axes if use_periodic else None,
+            'n_wrap_layers': n_wrap_layers if use_periodic else 0,
+            'use_periodic': use_periodic,
+            'K_requested': K,
+            'K_actual': len(indices),
+            'available_vars': available_vars,
+            **metrics
+        }
+
+        result = {
+            'sensor_points': sensor_points,
+            'sensor_data': sensor_data,
+            'sensor_indices': indices,
+            'selection_info': selection_info,
+            'noise_sigma': noise_sigma,
+            'dropout_prob': dropout_prob
+        }
+
+        # ============ 7. 快取結果 ============
+        method_suffix = 'periodic' if use_periodic else 'standard'
+        cache_file = self.cache_dir / f"sensors_K{K}_qr_pivot_{method_suffix}.npz"
+        np.savez_compressed(cache_file, **result)
+        self.logger.info(f"感測點已快取: {cache_file}")
+
+        # 打印週期性覆蓋率統計
+        if use_periodic and periodic_axes and 0 in periodic_axes:
+            x_sensors = sensor_points[:, 0]
+            x_min, x_max = x[0], x[-1]
+            seam_threshold = 0.05 * (x_max - x_min)  # 5% 邊界區域
+            near_x0 = np.sum(x_sensors < (x_min + seam_threshold))
+            near_xL = np.sum(x_sensors > (x_max - seam_threshold))
+            self.logger.info(
+                f"週期接縫覆蓋: x≈0 ({near_x0} 點), "
+                f"x≈L ({near_xL} 點), 總計 {near_x0+near_xL}/{K}"
+            )
+
+        return result
+
+    def generate_sensor_points(self,
                               field_data: Dict[str, np.ndarray],
                               K: int = 8,
                               method: str = "qr_pivot",
                               noise_sigma: float = 0.02,
-                              dropout_prob: float = 0.10) -> Dict[str, np.ndarray]:
+                              dropout_prob: float = 0.10,
+                              use_periodic: bool = False,
+                              min_dist_factor: float = 0.5) -> Dict[str, np.ndarray]:
         """
-        生成稀疏感測點資料
-        
+        生成稀疏感測點資料（向後相容包裝器）
+
         Args:
             field_data: 完整場資料
             K: 感測點數量
-            method: 感測點選擇方法
+            method: 感測點選擇方法 ('qr_pivot', 'random')
             noise_sigma: 高斯噪聲標準差
             dropout_prob: 隨機遺失比例
-            
+            use_periodic: 是否啟用週期性處理（預設 False 保持向後相容）
+
         Returns:
             感測點資料與位置
         """
-        self.logger.info(f"生成 {K} 個感測點，方法: {method}")
-        
+        if method == "qr_pivot" and use_periodic:
+            # 使用週期性處理的新函數
+            return self.generate_sensor_points_with_periodicity(
+                field_data=field_data,
+                K=K,
+                periodic_axes=[0],  # 2D 切片 x 方向週期
+                use_periodic=True,
+                n_wrap_layers=2,
+                noise_sigma=noise_sigma,
+                dropout_prob=dropout_prob,
+                min_dist_factor=min_dist_factor
+            )
+
+        # ============ 舊版邏輯（向後相容）============
+        self.logger.info(f"生成 {K} 個感測點，方法: {method}（標準模式）")
+
         # 兼容性處理：優先使用平鋪的 x/y，否則從 coordinates 還原
         if 'x' in field_data and 'y' in field_data:
             x = np.asarray(field_data['x'])
@@ -526,7 +825,6 @@ class ChannelFlowDataFetcher:
             if isinstance(coordinates, dict):
                 coord_dict = coordinates
             elif isinstance(coordinates, np.ndarray):
-                # np.load(..., allow_pickle=True) 讀回的 dict 可能被包成 0-d ndarray(object)
                 try:
                     coord_dict = coordinates.item()
                 except Exception as e:
@@ -535,11 +833,11 @@ class ChannelFlowDataFetcher:
                 raise TypeError(f"不支援的 coordinates 型別: {type(coordinates)}")
             x = np.asarray(coord_dict['x'])
             y = np.asarray(coord_dict['y'])
-        
+
         # 建立完整網格
         X, Y = np.meshgrid(x, y, indexing='ij')
         points_full = np.stack([X.ravel(), Y.ravel()], axis=-1)
-        
+
         # 感測點選擇
         if method == "qr_pivot":
             selector = FieldSensorSelector(
@@ -561,11 +859,10 @@ class ChannelFlowDataFetcher:
             sensor_points = points_full[sensor_indices]
         else:
             raise ValueError(f"未支援的感測點選擇方法: {method}")
-        
+
         # 提取感測點座標與數值
         sensor_data = {}
-        
-        # ⚠️ 修復：處理完整的 4 個變量 (u, v, w, p)
+
         for var in ['u', 'v', 'w', 'p']:
             if var in field_data:
                 if method == "qr_pivot":
@@ -576,10 +873,10 @@ class ChannelFlowDataFetcher:
                 else:
                     full_values = field_data[var].reshape(-1)
                     field_values = full_values[sensor_indices]
-                
+
                 if field_values.ndim == 2 and field_values.shape[1] == 1:
                     field_values = field_values[:, 0]
-                
+
                 # 添加噪聲
                 if noise_sigma > 0:
                     if field_values.ndim == 1:
@@ -590,7 +887,7 @@ class ChannelFlowDataFetcher:
                         noise_scale = np.std(field_values, axis=0, keepdims=True)
                         noise = np.random.normal(0, noise_sigma, size=field_values.shape) * noise_scale
                         field_values = field_values + noise
-                
+
                 # 隨機遺失
                 if dropout_prob > 0:
                     n_dropout = int(dropout_prob * len(field_values))
@@ -599,23 +896,23 @@ class ChannelFlowDataFetcher:
                         field_values[dropout_indices] = np.nan
                     else:
                         field_values[dropout_indices, :] = np.nan
-                
+
                 sensor_data[var] = field_values
-        
+
         result = {
-            'sensor_points': sensor_points,  # [K, 2] (x, y)
-            'sensor_data': sensor_data,      # {var: [K]} 
+            'sensor_points': sensor_points,
+            'sensor_data': sensor_data,
             'sensor_indices': sensor_indices,
             'selection_info': selection_info,
             'noise_sigma': noise_sigma,
             'dropout_prob': dropout_prob
         }
-        
+
         # 快取感測點資料
         cache_file = self.cache_dir / f"sensors_K{K}_{method}.npz"
         np.savez_compressed(cache_file, **result)
         self.logger.info(f"感測點資料已快取至: {cache_file}")
-        
+
         return result
     
     def generate_lowfi_prior(self, 
@@ -835,10 +1132,14 @@ def main():
     parser.add_argument('--sensor_method', type=str, default='qr_pivot',
                        choices=['qr_pivot', 'random'],
                        help='感測點選擇方法')
+    parser.add_argument('--use_periodic', action='store_true',
+                       help='啟用週期性邊界處理（僅對 qr_pivot 有效）')
     parser.add_argument('--noise_sigma', type=float, default=0.02,
                        help='感測點噪聲標準差')
     parser.add_argument('--dropout_prob', type=float, default=0.10,
                        help='感測點隨機遺失比例')
+    parser.add_argument('--min_dist_factor', type=float, default=0.5,
+                       help='最小距離因子 (用於空間過濾，0.5 為預設)')
     
     # 輸出選項
     parser.add_argument('--visualize', action='store_true',
@@ -891,10 +1192,12 @@ def main():
             if cache_file.exists():
                 hifi_data = dict(np.load(cache_file, allow_pickle=True))
                 sensor_data = fetcher.generate_sensor_points(
-                    hifi_data, args.K, args.sensor_method, 
-                    args.noise_sigma, args.dropout_prob
+                    hifi_data, args.K, args.sensor_method,
+                    args.noise_sigma, args.dropout_prob,
+                    use_periodic=args.use_periodic,  # ✅ 傳入週期性參數
+                    min_dist_factor=args.min_dist_factor # ✅ 新增最小距離因子
                 )
-                logger.info(f"完成 {args.K} 個感測點生成")
+                logger.info(f"完成 {args.K} 個感測點生成（週期性: {args.use_periodic}）")
             else:
                 logger.error(f"未找到高保真資料快取: {cache_file}")
                 return 1

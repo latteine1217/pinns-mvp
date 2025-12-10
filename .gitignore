@@ -29,6 +29,7 @@ context/
 tasks/
 archive/
 legacy/
+thesis/
 scripts/archive_*/
 scripts/archived_*/
 scripts/archive*/
@@ -86,3 +87,9 @@ log/
 
 # OpenCode
 .opencode/
+
+# Gemini clipboard artifacts
+.gemini-clipboard/
+
+# PDF references (可選擇性加入，若需版本控制可移除此行)
+*.pdf

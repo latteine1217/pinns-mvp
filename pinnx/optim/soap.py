@@ -48,11 +48,11 @@ class SOAP(optim.Optimizer):
         self,
         params,
         lr: float = 3e-3,
-        betas=(0.95, 0.95),
+        betas=(0.9, 0.999),  # 對齊 PirateNet 論文 (Wang et al. 2025)
         shampoo_beta: float= -1,
         eps: float = 1e-8,
         weight_decay: float = 0.01,
-        precondition_frequency: int=10,
+        precondition_frequency: int=2,  # 對齊 PirateNet 論文 (f=2)
         max_precond_dim: int=10000, # 
         merge_dims: bool = False, # Merge dimensions till the product of the dimensions is less than or equal to max_precond_dim.
         precondition_1d: bool = False,

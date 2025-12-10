@@ -139,12 +139,14 @@ model:
   use_residual: false                 # 殘差連接（深層網路 depth>10 推薦）
   use_layer_norm: false               # Layer Normalization（可能影響梯度計算）
   dropout: 0.0                        # Dropout 比例（正則化，0.0=禁用）
+  block_type: "dense"                 # block 型式：dense（預設）或 resnet（兩層+adaptive alpha）
+  res_block_alpha_init: 0.0           # resnet 用的 alpha 初值（對齊 PirateNet 論文：0.0=初始恆等映射）
 
-      # Random Weight Factorization (RWF) - 改善訓練穩定性
-      use_rwf: false                    # 是否啟用 RWF
-      rwf_scale_mean: 0.0               # s 的初始化均值 (exp(0)=1.0)
-      rwf_scale_std: 0.1                # s 的初始化標準差
-    sine_omega_0: 1.0                   # SIREN omega_0 參數：
+  # Random Weight Factorization (RWF) - 改善訓練穩定性（PirateNet 論文）
+  use_rwf: false                      # 是否啟用 RWF
+  rwf_scale_mean: 1.0                 # s 的初始化均值（對齊 PirateNet 論文：exp(1.0)≈2.7）
+  rwf_scale_std: 0.1                  # s 的初始化標準差
+  sine_omega_0: 1.0                   # SIREN omega_0 參數：
                                       #   - 與 Fourier 特徵結合：1.0-30.0
                                       #   - 無 Fourier 特徵：30.0-60.0
 
@@ -372,6 +374,55 @@ training:
     boundary_points: 5000             # 邊界條件採樣點數
     wall_clustering: 0.3              # 壁面聚類比例（0.0-1.0）
                                       # 說明：0.3 表示 30% 點集中在壁面附近
+
+    # ⭐ 自適應採樣（Adaptive Collocation，高級功能）
+    adaptive_sampling: false          # 是否啟用自適應採樣（預設關閉）
+                                      # 說明：根據殘差動態重新分配採樣點位置
+    
+    adaptive_collocation:             # 自適應配置（若 adaptive_sampling: true）
+      enabled: false                  # 與 adaptive_sampling 同步（雙重保險）
+      
+      # 觸發條件配置
+      trigger:
+        method: epoch_interval        # 觸發方法選項：
+                                      #   - epoch_interval：固定間隔觸發（⭐ 推薦）
+                                      #   - hybrid：混合策略（結合 epoch + residual）
+        epoch_interval: 1000          # 每 N epochs 執行一次重採樣
+                                      # 典型範圍：500-2000（過小增加計算開銷）
+        
+        # Hybrid 專用參數（若使用）
+        # residual_threshold: 0.1     # 殘差閾值（超過則觸發）
+        # min_interval: 500           # 最小間隔 epochs
+      
+      # 重採樣策略配置
+      resampling_strategy: incremental_replace  # 策略選項：
+                                      #   - incremental_replace：漸進式替換（⭐ 推薦）
+                                      #   - full_replacement：完全替換（較激進）
+      
+      incremental_replace:            # 漸進式替換配置
+        keep_ratio: 0.7               # 保留舊點比例（0.0-1.0）
+                                      # 典型範圍：0.6-0.8（平衡穩定性與探索）
+        replace_ratio: 0.3            # 替換新點比例（1.0 - keep_ratio）
+        removal_criterion: leverage_score  # 移除準則選項：
+                                      #   - leverage_score：基於槓桿分數（⭐ 推薦）
+                                      #   - residual：基於殘差大小
+                                      #   - uniform：均勻移除
+      
+      # Residual QR 配置（結合 QR-Pivot 選擇高殘差區域）
+      residual_qr:
+        enabled: true                 # 是否啟用 Residual QR（⭐ 推薦）
+        candidate_pool_size: 2000     # 候選點池大小（從中選擇新點）
+                                      # 典型範圍：1000-5000（越大越精確，但計算開銷增加）
+        
+        # 空間約束（避免點聚集）
+        spatial_constraints:
+          min_distance: 0.02          # 最小點間距（標準化座標系）
+                                      # 典型範圍：0.01-0.05
+                                      # 說明：0.02 ≈ 域長度的 1-2%
+      
+      # 歷史記錄（用於分析與可視化）
+      track_history: true             # 是否記錄重採樣歷史
+      save_snapshots: false           # 是否保存每次重採樣的快照（占用空間）
 
   # 梯度裁剪（穩定性）
   gradient_clip: 1.0                  # 梯度裁剪閾值（防止梯度爆炸）

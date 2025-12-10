@@ -264,7 +264,8 @@ def build_circular_snapshot_matrix(snapshots: np.ndarray,
                                     grid_shape: Tuple[int, ...],
                                     periodic_axes: List[int],
                                     n_wrap_layers: int = 1,
-                                    domain_lengths: Optional[Dict[int, float]] = None) -> Tuple[np.ndarray, np.ndarray]:
+                                    domain_lengths: Optional[Dict[int, float]] = None,
+                                    seam_weight: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
     """
     建構循環索引快照矩陣（用於週期邊界條件）
 
@@ -284,6 +285,7 @@ def build_circular_snapshot_matrix(snapshots: np.ndarray,
         periodic_axes: 週期軸索引列表（0=x, 1=y, 2=z）
         n_wrap_layers: 環繞層數（預設 1 層）
         domain_lengths: {軸索引: 域長度}（用於角度嵌入，可選）
+        seam_weight: 環繞層權重係數（預設 1.0），<1 時降低接縫被選中的概率
 
     Returns:
         (augmented_snapshots, augmented_coords):
@@ -334,8 +336,8 @@ def build_circular_snapshot_matrix(snapshots: np.ndarray,
 
         # 在軸 ax 的兩端堆疊鄰域
         # 例如：x 方向週期，堆疊 x[-n:] 到 x[0] 前，x[:n] 到 x[-1] 後
-        snap_grid = _wrap_grid_along_axis(snap_grid, ax, n_wrap_layers)
-        coord_grid = _wrap_grid_along_axis(coord_grid, ax, n_wrap_layers)
+        snap_grid = _wrap_grid_along_axis(snap_grid, ax, n_wrap_layers, seam_weight)
+        coord_grid = _wrap_grid_along_axis(coord_grid, ax, n_wrap_layers, seam_weight=1.0)  # 座標不降權
 
     # 展平回 [n_augmented, n_snapshots/n_dims]
     augmented_snapshots = snap_grid.reshape(-1, n_snapshots)
@@ -357,7 +359,7 @@ def build_circular_snapshot_matrix(snapshots: np.ndarray,
     return augmented_snapshots, augmented_coords
 
 
-def _wrap_grid_along_axis(grid: np.ndarray, axis: int, n_layers: int) -> np.ndarray:
+def _wrap_grid_along_axis(grid: np.ndarray, axis: int, n_layers: int, seam_weight: float = 1.0) -> np.ndarray:
     """
     沿指定軸進行週期環繞堆疊
 
@@ -365,9 +367,15 @@ def _wrap_grid_along_axis(grid: np.ndarray, axis: int, n_layers: int) -> np.ndar
         grid: [nx, ny, (nz), n_features]
         axis: 環繞軸索引
         n_layers: 環繞層數
+        seam_weight: 環繞層權重係數（<1 降低接縫被選中的概率，預設 1.0 不調整）
 
     Returns:
         wrapped_grid: 在軸 axis 上擴展後的網格
+
+    Note:
+        當 seam_weight < 1.0 時，環繞層的數值會被縮放，
+        這會降低 QR-Pivot 選擇這些重複區域的概率，
+        從而避免感測點過度集中在週期邊界附近。
     """
     # 提取軸兩端的切片
     # 前端：grid[:n_layers, ...] (在 axis 維度上)
@@ -379,6 +387,15 @@ def _wrap_grid_along_axis(grid: np.ndarray, axis: int, n_layers: int) -> np.ndar
 
     front_slice = np.take(grid, indices_front, axis=axis)
     back_slice = np.take(grid, indices_back, axis=axis)
+
+    # ✅ 對環繞層應用權重降低（避免被過度選擇）
+    if seam_weight < 1.0:
+        front_slice = front_slice * seam_weight
+        back_slice = back_slice * seam_weight
+        logger.debug(
+            f"環繞層降權：seam_weight={seam_weight:.2f}，"
+            f"軸 {axis} 的前後各 {n_layers} 層數值縮放至原始的 {100*seam_weight:.0f}%"
+        )
 
     # 堆疊：[front | original | back]
     wrapped_grid = np.concatenate([front_slice, grid, back_slice], axis=axis)
@@ -857,7 +874,8 @@ class QRPivotSelector(BaseSensorSelector):
                 grid_shape=grid_shape,
                 periodic_axes=periodic_axes,
                 n_wrap_layers=self.n_wrap_layers,
-                domain_lengths=domain_lengths
+                domain_lengths=domain_lengths,
+                seam_weight=self.seam_weight  # ✅ 傳遞接縫權重
             )
 
             # 建立增強索引 → 原始索引的映射

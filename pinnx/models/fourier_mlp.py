@@ -39,11 +39,11 @@ class RWFLinear(nn.Module):
     3. 隱式正則化 - 對數空間的平滑性約束
     """
     
-    def __init__(self, 
-                 in_features: int, 
-                 out_features: int, 
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
                  bias: bool = True,
-                 scale_mean: float = 0.0,
+                 scale_mean: float = 1.0,  # 對齊 PirateNet 論文 (Wang et al. 2025)
                  scale_std: float = 0.1):
         super().__init__()
         self.in_features = in_features
@@ -201,13 +201,13 @@ class DenseLayer(nn.Module):
     密集連接層，支援多種激活函數、殘差連接與層歸一化
     """
     
-    def __init__(self, in_features: int, out_features: int, 
-                 activation: str = 'tanh', 
+    def __init__(self, in_features: int, out_features: int,
+                 activation: str = 'tanh',
                  use_residual: bool = False,
                  use_layer_norm: bool = False,
                  dropout: float = 0.0,
                  use_rwf: bool = False,
-                 rwf_scale_mean: float = 0.0,
+                 rwf_scale_mean: float = 1.0,  # 對齊 PirateNet 論文
                  rwf_scale_std: float = 0.1,
                  sine_omega_0: float = 30.0):
         super().__init__()
@@ -286,12 +286,12 @@ class DenseLayer(nn.Module):
         return out
 
 
-class ResBlock2(nn.Module):
+class ResBlock(nn.Module):
     """
-    Two-layer residual block with learnable alpha scaling.
+    Two-layer residual block with learnable alpha scaling (PirateNet-style).
 
-    y = x + alpha * f(x), where f is two Linear/RWF layers with activation.
-    This mirrors the ResNetPINN block but lives inside PINNNet to avoid code duplication.
+    y = α·f(x) + (1-α)·x, where f is two Linear/RWF layers with activation.
+    當 α=0 時為恆等映射，α→1 時逐漸增加非線性深度。
     """
 
     def __init__(
@@ -299,12 +299,12 @@ class ResBlock2(nn.Module):
         width: int,
         activation: str = 'tanh',
         use_rwf: bool = False,
-        rwf_scale_mean: float = 0.0,
+        rwf_scale_mean: float = 1.0,  # 對齊 PirateNet 論文
         rwf_scale_std: float = 0.1,
         sine_omega_0: float = 1.0,
         use_layer_norm: bool = False,
         dropout: float = 0.0,
-        alpha_init: float = 1.0,
+        alpha_init: float = 0.0,  # 對齊 PirateNet 論文（從淺層開始，逐漸增深）
     ):
         super().__init__()
 
@@ -372,7 +372,9 @@ class ResBlock2(nn.Module):
         if self.dropout is not None:
             out = self.dropout(out)
 
-        return x + self.alpha * out
+        # 對齊 PirateNet 論文的插值形式：α·h + (1-α)·x
+        # 當 α=0 時為恆等映射，α=1 時為完全非線性
+        return self.alpha * out + (1 - self.alpha) * x
 
 
 class PINNNet(nn.Module):
@@ -403,13 +405,13 @@ class PINNNet(nn.Module):
                  use_input_projection: bool = False, # 是否使用輸入投影層
                  dropout: float = 0.0,      # Dropout 比率
                  use_rwf: bool = False,     # 是否使用 RWF
-                 rwf_scale_mean: float = 0.0, # RWF 尺度均值（PirateNet: 1.0）
+                 rwf_scale_mean: float = 1.0, # RWF 尺度均值（對齊 PirateNet 論文）
                  rwf_scale_std: float = 0.1, # RWF 尺度標準差
                  sine_omega_0: float = 1.0, # Sine 激活函數頻率參數 (較保守以配合 Fourier 特徵)
                  fourier_normalize_input: bool = False, # 🔧 是否在 Fourier 前標準化輸入（修復 VS-PINN 縮放問題）
                  input_scale_factors: Optional[torch.Tensor] = None, # 🔧 輸入縮放因子 [N_x, N_y, N_z]（用於 VS-PINN）
-                 block_type: str = 'dense', # 🔧 block 型式：dense（預設）或 resnet2（兩層殘差）
-                 res_block_alpha_init: float = 1.0): # 🔧 resnet2 block 的 alpha 初值
+                 block_type: str = 'dense', # 🔧 block 型式：dense（預設）或 resnet（兩層殘差+adaptive alpha）
+                 res_block_alpha_init: float = 0.0): # 🔧 resnet block 的 alpha 初值（對齊 PirateNet 論文）
         
         super().__init__()
         
@@ -455,7 +457,7 @@ class PINNNet(nn.Module):
         
         # 隱藏層
         layers = []
-        if block_type not in ('dense', 'resnet2'):
+        if block_type not in ('dense', 'resnet'):
             raise ValueError(f"Unsupported block_type: {block_type}")
 
         if block_type == 'dense':
@@ -475,7 +477,7 @@ class PINNNet(nn.Module):
                 ))
                 current_dim = width
         else:
-            # resnet2: enforce uniform width and residual skip
+            # resnet: enforce uniform width and residual skip with adaptive alpha
             if current_dim != width:
                 # align dimensions if input projection disabled
                 proj = nn.Linear(current_dim, width)
@@ -484,7 +486,7 @@ class PINNNet(nn.Module):
                 layers.append(proj)
                 current_dim = width
             for _ in range(depth):
-                layers.append(ResBlock2(
+                layers.append(ResBlock(
                     width=width,
                     activation=activation,
                     use_rwf=use_rwf,
@@ -500,9 +502,9 @@ class PINNNet(nn.Module):
         
         # 輸出層 (線性，無激活函數)
         self.output_layer = nn.Linear(width, out_dim)
-        
+
         # 輸出層特殊初始化：較小的權重，有助於訓練穩定
-        residual_enabled = use_residual or block_type == 'resnet2'
+        residual_enabled = use_residual or block_type == 'resnet'
         output_gain = 0.01 if residual_enabled else 0.1
         nn.init.xavier_normal_(self.output_layer.weight, gain=output_gain)
         nn.init.zeros_(self.output_layer.bias)
@@ -510,7 +512,7 @@ class PINNNet(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         前向傳播
-        
+
         Args:
             x: [batch_size, in_dim] 輸入座標（可能是物理座標或 VS-PINN 縮放座標）
         Returns:
@@ -544,7 +546,7 @@ class PINNNet(nn.Module):
         
         # 隱藏層前向傳播
         for layer in self.hidden_layers:
-            if isinstance(layer, ResBlock2):
+            if isinstance(layer, ResBlock):
                 h = layer(h)
             elif isinstance(layer, nn.Linear):
                 h = layer(h)
@@ -658,7 +660,7 @@ class PINNNet(nn.Module):
             if isinstance(layer, DenseLayer):
                 if isinstance(layer.linear, (nn.Linear, RWFLinear)):
                     width = layer.linear.out_features  # type: ignore
-            elif isinstance(layer, ResBlock2):
+            elif isinstance(layer, ResBlock):
                 width = getattr(layer.fc1, 'out_features', 0)
             elif isinstance(layer, nn.Linear):
                 width = layer.out_features
@@ -676,7 +678,7 @@ class PINNNet(nn.Module):
                 use_residual = first.use_residual
                 use_layer_norm = first.use_layer_norm
                 use_rwf = first.use_rwf
-            elif isinstance(first, ResBlock2):
+            elif isinstance(first, ResBlock):
                 use_residual = True
                 use_layer_norm = bool(first.use_layer_norm)
                 use_rwf = isinstance(first.fc1, RWFLinear)
@@ -783,13 +785,13 @@ def create_pinn_model(config: dict) -> nn.Module:
             use_input_projection=config.get('use_input_projection', False),
             dropout=config.get('dropout', 0.0),
             use_rwf=config.get('use_rwf', False),
-            rwf_scale_mean=config.get('rwf_scale_mean', 0.0),
+            rwf_scale_mean=config.get('rwf_scale_mean', 1.0),  # 對齊 PirateNet 論文
             rwf_scale_std=config.get('rwf_scale_std', 0.1),
             sine_omega_0=config.get('sine_omega_0', 1.0),
             fourier_normalize_input=config.get('fourier_normalize_input', False),
             input_scale_factors=input_scale_factors,
             block_type=config.get('block_type', 'dense'),
-            res_block_alpha_init=config.get('res_block_alpha_init', 1.0)
+            res_block_alpha_init=config.get('res_block_alpha_init', 0.0)  # 對齊 PirateNet 論文
         )
 
     else:

@@ -1,7 +1,7 @@
 # PINNs 湍流逆重建技術文檔
 
-**文檔版本**: v2.0  
-**更新日期**: 2025-10-16  
+**文檔版本**: v2.1  
+**更新日期**: 2025-12-07  
 **狀態**: 開發中
 
 ---
@@ -14,7 +14,9 @@
    - [2.2 VS-PINN 變數尺度化](#22-vs-pinn-變數尺度化)
    - [2.3 Random Weight Factorization](#23-random-weight-factorization)
    - [2.4 動態權重平衡](#24-動態權重平衡)
-   - [2.5 物理約束機制](#25-物理約束機制)
+   - [2.5 自適應採樣](#25-自適應採樣)
+   - [2.6 資料標準化模組](#26-資料標準化模組)
+   - [2.7 物理約束機制](#27-物理約束機制)
 3. [系統架構](#3-系統架構)
 4. [驗證結果](#4-驗證結果)
 5. [使用指南](#5-使用指南)
@@ -282,7 +284,208 @@ losses:
 
 ---
 
-### 2.5 資料標準化模組
+### 2.5 自適應採樣（Adaptive Collocation）
+
+#### 原理
+
+**目的**: 根據物理殘差動態調整 PDE 碰撞點（collocation points）位置，將計算資源集中在高誤差區域，提升訓練效率與準確性。
+
+**核心思想**:
+- **初期訓練**: 使用均勻/分層採樣初始化碰撞點
+- **中期優化**: 定期評估 PDE 殘差，識別高誤差區域
+- **漸進替換**: 保留部分舊點（穩定性），替換部分新點（探索性）
+- **QR 優化**: 結合 QR-Pivot 選擇資訊量最大的新點
+
+**觸發策略**:
+- **固定間隔** (Epoch Interval): 每 N epochs 執行一次 (N=500-2000)
+- **混合策略** (Hybrid): 結合 epoch 間隔與殘差閾值觸發
+
+#### 實現
+
+**檔案位置**: `pinnx/train/adaptive_collocation.py` (639 行)
+
+**核心方法**:
+
+```python
+from pinnx.train.adaptive_collocation import AdaptiveCollocationResampler
+
+# 初始化重採樣器
+resampler = AdaptiveCollocationResampler(config)
+
+# 在訓練循環中觸發重採樣
+if resampler.should_trigger(epoch, residual_history):
+    # 評估當前碰撞點殘差
+    residuals = compute_pde_residuals(collocation_points)
+    
+    # 執行重採樣
+    new_points = resampler.resample(
+        current_points=collocation_points,
+        residuals=residuals,
+        physics_model=physics,
+        domain_bounds=domain
+    )
+    
+    # 更新訓練資料
+    collocation_points = new_points
+```
+
+**重採樣流程**:
+
+1. **槓桿分數計算** (Leverage Score):
+   ```python
+   # 計算點的重要性分數（基於 Jacobian 矩陣）
+   leverage_scores = compute_leverage_scores(residuals, jacobian)
+   
+   # 選擇低重要性點移除（保留高重要性點）
+   n_remove = int(n_points * replace_ratio)  # 預設 30%
+   remove_indices = np.argsort(leverage_scores)[:n_remove]
+   ```
+
+2. **候選點生成** (Candidate Pool):
+   ```python
+   # 生成大量候選點（2000-5000 個）
+   candidates = generate_candidate_pool(
+       domain_bounds,
+       pool_size=2000,
+       sampling_strategy='stratified'  # 分層採樣
+   )
+   
+   # 評估候選點殘差
+   candidate_residuals = compute_residuals(candidates)
+   ```
+
+3. **QR-Pivot 選擇** (Residual QR):
+   ```python
+   # 從高殘差候選點中選擇資訊量最大的點
+   high_residual_candidates = candidates[residual > threshold]
+   
+   # 構建快照矩陣（包含速度/壓力場）
+   snapshot_matrix = build_snapshot_matrix(high_residual_candidates)
+   
+   # QR 分解選點
+   new_indices = qr_pivot_select(snapshot_matrix, n_select=n_remove)
+   new_points = high_residual_candidates[new_indices]
+   ```
+
+4. **空間約束** (Spatial Constraints):
+   ```python
+   # 避免新點過於聚集（最小間距約束）
+   filtered_points = apply_min_distance_constraint(
+       new_points,
+       existing_points=keep_points,
+       min_distance=0.02  # 標準化座標系
+   )
+   ```
+
+5. **點集合併** (Merge):
+   ```python
+   # 合併保留點與新點
+   updated_points = np.vstack([keep_points, filtered_points])
+   return updated_points
+   ```
+
+#### 配置示例
+
+**檔案**: `configs/config_template_example.yml`
+
+```yaml
+training:
+  sampling:
+    pde_points: 10000
+    adaptive_sampling: true  # 啟用自適應採樣
+    
+    adaptive_collocation:
+      enabled: true
+      
+      # 觸發條件
+      trigger:
+        method: epoch_interval  # 或 hybrid
+        epoch_interval: 1000    # 每 1000 epochs 重採樣
+      
+      # 重採樣策略
+      resampling_strategy: incremental_replace
+      incremental_replace:
+        keep_ratio: 0.7         # 保留 70% 舊點
+        replace_ratio: 0.3      # 替換 30% 新點
+        removal_criterion: leverage_score  # 基於槓桿分數移除
+      
+      # Residual QR 配置
+      residual_qr:
+        enabled: true
+        candidate_pool_size: 2000  # 候選點池大小
+        spatial_constraints:
+          min_distance: 0.02    # 最小點間距（避免聚集）
+      
+      # 歷史記錄
+      track_history: true       # 記錄重採樣歷史
+      save_snapshots: false     # 不保存快照（節省空間）
+```
+
+#### 修復歷史
+
+**日期**: 2025-12-07  
+**問題**: 發現兩個關鍵 bug 導致自適應採樣失敗  
+
+**Bug 1 - 負步幅數組** (Line 289-291):
+```python
+# ❌ 錯誤：負步幅數組無法轉為 PyTorch tensor
+top_indices = np.argsort(leverage_scores)[-n_select:][::-1]
+
+# ✅ 修復：添加 .copy() 創建連續內存數組
+top_indices = np.argsort(leverage_scores)[-n_select:][::-1].copy()
+```
+
+**Bug 2 - 梯度追蹤錯誤** (Line 522):
+```python
+# ❌ 錯誤：requires_grad=True 的 tensor 不能直接 .numpy()
+distances = torch.cdist(new_points, existing_points).numpy()
+
+# ✅ 修復：先 detach 再轉換
+distances = torch.cdist(new_points, existing_points).detach().cpu().numpy()
+```
+
+**測試覆蓋**:
+- 完整測試套件：`tests/test_adaptive_collocation_fixes.py`
+- 所有測試通過 ✅ (5/5)
+
+**相關文檔**:
+- 詳細修復指南：`docs/ADAPTIVE_SAMPLING_BUG_FIXES.md`
+
+#### 已知限制
+
+⚠️ **當前狀態**: 所有現有配置檔案（30+）均設定 `adaptive_sampling: false`
+
+**原因**:
+1. 需要額外計算開銷（候選點評估 + QR 分解）
+2. 超參數敏感（keep_ratio, min_distance 需調優）
+3. 缺乏性能對比實驗數據
+
+**建議使用場景**:
+- ✅ 長期訓練（≥5000 epochs）
+- ✅ 複雜幾何/邊界條件
+- ✅ 高梯度區域（激波、邊界層）
+- ❌ 快速測試（<1000 epochs）
+- ❌ 均勻流場（低複雜度）
+
+#### 未來工作
+
+1. **性能對比實驗** (優先級: 高)
+   - 對比 adaptive vs. fixed sampling 的收斂速度
+   - 測量計算開銷（時間/內存）
+   - 最佳觸發間隔研究（500 vs. 1000 vs. 2000 epochs）
+
+2. **可視化工具** (優先級: 中)
+   - 重採樣歷史視覺化（點的移動軌跡）
+   - 殘差熱圖隨時間演化
+   - 槓桿分數分佈圖
+
+3. **超參數自動調優** (優先級: 低)
+   - 基於驗證誤差動態調整 keep_ratio
+   - 自適應 min_distance（根據域大小）
+
+---
+
+### 2.6 資料標準化模組
 
 #### 原理
 
@@ -663,7 +866,7 @@ with torch.no_grad():
 
 ---
 
-### 2.6 物理約束機制
+### 2.7 物理約束機制
 
 #### 實現層級
 

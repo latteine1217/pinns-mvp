@@ -1,6 +1,6 @@
 # 🌊 PINNs-MVP: 基於物理資訊神經網路的湍流場重建
 
-**少量資料 × 物理先驗：基於 Kolmogorov Flow DNS 的 PINNs 逆重建**
+**少量資料 × 物理先驗：Kolmogorov Flow 與 JHTDB 通道流的 PINNs 逆重建**
 
 [![研究](https://img.shields.io/badge/研究-PINNs逆問題-blue)](https://github.com/latteine/pinns-mvp)
 [![資料來源](https://img.shields.io/badge/資料-Kolmogorov_Flow_DNS-green)](docs/KOLMOGOROV_DNS_GUIDE.md)
@@ -8,11 +8,11 @@
 [![硬體支援](https://img.shields.io/badge/硬體-CUDA%20%7C%20MPS%20%7C%20CPU-yellow)](A100_DEPLOYMENT_GUIDE.md)
 [![狀態](https://img.shields.io/badge/狀態-積極開發中-success)](README.md)
 
-> **使命**：從極度稀疏的感測器觀測中，重建高保真 2D/3D 湍流場；所有研究基於自建 **Kolmogorov Flow DNS** 並經過雷諾數校準與物理驗證。
+> **使命**：從極度稀疏的感測器觀測中，重建高保真 2D/3D 湍流場；第一階段以自建 **Kolmogorov Flow DNS** 作為設計與收斂驗證基準，第二階段擴展至 **JHTDB 通道流 ($Re_\tau \approx 1000$)**，並結合 RANS 低保真場作為物理軟先驗。
 
-## 🌊 Kolmogorov Flow DNS Datasets (Golden Standard)
+## 🌊 Phase 1: Kolmogorov Flow DNS Datasets (2D Benchmark)
 
-We have generated and validated a comprehensive suite of Direct Numerical Simulation (DNS) datasets for 2D Kolmogorov Flow, serving as the "Ground Truth" for PINNs reconstruction tasks.
+We have generated and validated a comprehensive suite of Direct Numerical Simulation (DNS) datasets for 2D Kolmogorov Flow, serving as the sandbox and "Ground Truth" for PINNs reconstruction and training-stability studies.
 
 ### Dataset Overview
 
@@ -36,7 +36,7 @@ Detailed visualization reports (animations, energy spectra) are available in `re
 ---
 
 ## 📌 項目速覽
-- 針對稀疏觀測的湍流逆問題，結合物理約束與神經網路實現穩健重建。
+- 針對稀疏觀測的湍流逆問題，結合物理約束與神經網路實現穩健重建：先在 2D Kolmogorov Flow 上驗證設計，再遷移到 3D JHTDB 通道流（含 RANS 低保真軟先驗）。
 - Fourier-SIREN MLP + VS-PINN + GradNorm/因果訓練，兼顧高頻細節與梯度穩定。
 - **Random Weight Factorization (RWF)**：提升深層網路訓練穩定性。
 - 配置驅動：所有實驗由 YAML 控制；自動裝置選擇支援 CUDA/MPS/CPU。
@@ -58,9 +58,13 @@ python scripts/generate_kolmogorov_dns.py \
   --N 512 --nu 0.0125 --k_f 8 --T_end 40.0 \
   --output data/kolmogorov_dns_re56_512x512_kf8_midway.h5
 
-# 3) 執行訓練（配置驅動）
-# 最新的 Re=50 基準實驗，啟用 RWF 與 Causal Training
+# 3a) 執行 2D Kolmogorov Flow 訓練（配置驅動）
+# 最新的 Re=50 基準實驗，啟用 RWF 與因果訓練
 python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
+
+# 3b) 執行 3D JHTDB 通道流訓練（需先準備 JHTDB cutout 與 RANS 先驗）
+# 具體資料準備流程請參考 docs/TECHNICAL_DOCUMENTATION.md 及 configs/README.md
+python scripts/train.py --cfg configs/main.yml
 ```
 
 更多硬體與部署建議：`A100_DEPLOYMENT_GUIDE.md`。配置模板：`configs/templates/`。
@@ -69,13 +73,13 @@ python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 
 ## 核心技術深度解析
 
-本專案結合多項技術，解決湍流重建的高頻、多尺度與梯度剛性挑戰。
+本專案結合多項技術，解決湍流重建的高頻、多尺度與梯度剛性挑戰，並在 2D Kolmogorov Flow 與 3D JHTDB 通道流上共用同一套架構設計。
 
 ### 1. 模型架構: Fourier-SIREN MLP + RWF
 - **傅立葉特徵**：先將 `(t, x, y, z)` 映射到高維頻域，消除 MLP 的頻譜偏差。
 - **正弦激活 (SIREN)**：`sin(ωx)` 使高階導數平滑，適合 PDE 殘差計算。
-- **Random Weight Factorization (RWF)**：分解權重為方向與長度 ($W=g \frac{v}{||v||}$)，改善深層網路的優化風景與收斂性。
-- **ResNet 機制 (New)**：透過 `block_type='resnet2'` 啟用 Learnable Skip Connection (`y = x + α·f(x)`)，改善深層網路的梯度流動與訓練穩定性。
+- **Random Weight Factorization (RWF)**：分解權重為方向與長度 ($W=\exp(s) \cdot V$)，改善深層網路的優化風景與收斂性（PirateNet 論文）。
+- **Adaptive Residual 機制**：透過 `block_type='resnet'` 啟用 PirateNet-style Adaptive Skip Connection (`y = α·f(x) + (1-α)·x`)，從淺層（α≈0）逐步增深網路。
 
 ### PINNs 內部運作流 (Internal Workflow)
 1. **輸入準備**：原始座標與監測點物理量 → `UnifiedNormalizer` 標準化；VS-PINN 依各向異性縮放座標。
@@ -136,6 +140,13 @@ graph TD
 - A100 部署：`A100_DEPLOYMENT_GUIDE.md`
 - 感測器與 QR-Pivot：`scripts/README.md`, `docs/QR_SENSOR_VISUALIZATION_GUIDE.md`
 - 配置模板：`configs/templates/`，更多設定見 `configs/README.md`
+
+## 📈 Roadmap / Future Work
+
+- **架構消融實驗**：系統性比較 Fourier-VS-PINN baseline、僅 RWF、僅 adaptive residual、與完整組合，在 2D Kolmogorov 與 3D JHTDB 通道流上量化各元件貢獻（收斂速度與最終誤差）。
+- **不確定性量化 (UQ)**：在現有 RWF + VS-PINN 架構上整合 B-PINNs、NN-aPC 或 ensemble PINNs，輸出帶置信區間的重建結果。
+- **進階架構**：探索 Kolmogorov–Arnold Networks（KAN）等更具表達力的 backbone，並與現有 Fourier-SIREN + RWF 組合比較。
+- **自適應採樣與感測**：將 QR-DEIM 型自適應 collocation 與 randomized QRCP 感測設計整合進訓練流程，提升在更高 $Re_\tau$ 與更嚴苛感測預算下的可擴展性。
 
 ## 貢獻與授權
 - 歡迎 Issue/PR，遵循一般 Fork & PR 流程。
