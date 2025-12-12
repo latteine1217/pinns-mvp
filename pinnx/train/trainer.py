@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.amp.grad_scaler import GradScaler  # 明確導入 GradScaler
+from torch.utils.tensorboard import SummaryWriter
 
 from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
 from pinnx.losses.priors import PriorLossManager
@@ -127,8 +128,23 @@ class Trainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_interval = self.train_cfg.get('checkpoint_interval', 100)
         
+        # TensorBoard 配置
+        self.use_tensorboard = self.log_cfg.get('tensorboard', False)
+        self.writer: Optional[SummaryWriter] = None
+        if self.use_tensorboard:
+            # TensorBoard 日誌目錄：runs/<experiment_name>
+            exp_name = config.get('experiment', {}).get('name', 'default_experiment')
+            tensorboard_dir = Path(config.get('output', {}).get('tensorboard_dir', f'runs/{exp_name}'))
+            tensorboard_dir.mkdir(parents=True, exist_ok=True)
+            self.writer = SummaryWriter(log_dir=str(tensorboard_dir))
+            logging.info(f"✅ TensorBoard 已啟用，日誌目錄: {tensorboard_dir}")
+        
         # 訓練資料（待外部設置）
         self.training_data: Dict[str, torch.Tensor] = {}
+        
+        # 🆕 初始化 Prior Loss Manager（若配置啟用）
+        self.prior_loss_manager: Optional[PriorLossManager] = None
+        self._setup_prior_loss_manager()
         
         # 初始化訓練組件
         self._setup_optimizer()
@@ -545,6 +561,38 @@ class Trainer:
     # - _setup_rans_warmup()
     # - _update_rans_weights()
     
+    def _setup_prior_loss_manager(self):
+        """初始化 Prior Loss Manager（若配置啟用 RANS/低保真先驗）"""
+        lowfi_cfg = self.config.get('lowfi_prior', {})
+        
+        if not lowfi_cfg.get('enabled', False):
+            self.prior_loss_manager = None
+            logging.info("ℹ️  低保真先驗未啟用")
+            return
+        
+        # 提取低保真先驗配置
+        consistency_weight = lowfi_cfg.get('consistency_weight', 0.3)
+        variable_weights = lowfi_cfg.get('variable_weights', {'u': 1.0, 'v': 1.0, 'p': 0.5})
+        distance_metric = lowfi_cfg.get('distance_metric', 'mse')
+        
+        # 創建 PriorLossManager
+        self.prior_loss_manager = PriorLossManager(
+            consistency_weight=consistency_weight,
+            statistical_weight=0.0,  # 暫不使用統計一致性
+            conservation_weight=0.0,  # 暫不使用守恆定律
+            symmetry_weight=0.0       # 暫不使用對稱性
+        )
+        
+        # 更新低保真一致性損失的配置
+        self.prior_loss_manager.low_fidelity_loss.consistency_weight = consistency_weight
+        self.prior_loss_manager.low_fidelity_loss.variable_weights = variable_weights
+        self.prior_loss_manager.low_fidelity_loss.distance_metric = distance_metric
+        
+        logging.info(f"✅ Prior Loss Manager 初始化完成")
+        logging.info(f"   - Consistency Weight: {consistency_weight}")
+        logging.info(f"   - Variable Weights: {variable_weights}")
+        logging.info(f"   - Distance Metric: {distance_metric}")
+    
     def step(
         self,
         data_batch: Dict[str, torch.Tensor],
@@ -948,7 +996,7 @@ class Trainer:
         # 統計原始 PDE 損失（未加權，便於日志與分析）
         pde_loss = momentum_x_loss + momentum_y_loss + momentum_z_loss + continuity_loss
         
-        # ==================== 4. 組合損失（含 GradNorm 動態權重）====================
+        # ==================== 4. 組合損失（含 課程學習 / GradNorm 動態權重）====================
         loss_cfg = self.loss_cfg
         
         # 收集可供權重調整的損失項
@@ -964,12 +1012,63 @@ class Trainer:
             # Kolmogorov Flow 使用週期性邊界
             loss_terms['periodic_x'] = periodic_x_loss
             loss_terms['periodic_y'] = periodic_y_loss
+            loss_terms['periodicity'] = periodic_x_loss + periodic_y_loss  # 課程學習使用統一項
         else:
             # 通道流使用壁面邊界
             loss_terms['wall_constraint'] = wall_loss
 
         if is_vs_pinn:
             loss_terms['momentum_z'] = momentum_z_loss
+        
+        # 🆕 ==================== 4A. 課程學習權重覆蓋 ====================
+        curriculum_weighter = self.weighters.get('curriculum') if hasattr(self, 'weighters') else None
+        curriculum_config = None
+        is_curriculum_transition = False
+        
+        if curriculum_weighter is not None:
+            # 獲取當前階段配置
+            curriculum_config = curriculum_weighter.get_stage_config(epoch)
+            is_curriculum_transition = curriculum_config.get('is_transition', False)
+            
+            # 應用課程學習權重（覆蓋配置文件的基礎權重）
+            curriculum_weights = curriculum_config.get('weights', {})
+            if curriculum_weights:
+                # 更新 loss_cfg（臨時覆蓋）
+                loss_cfg = self.loss_cfg.copy()
+                for key, value in curriculum_weights.items():
+                    # 映射課程學習的權重名稱到配置項
+                    if key == 'data':
+                        loss_cfg['data_weight'] = value
+                    elif key == 'boundary':
+                        loss_cfg['bc_weight'] = value
+                    elif key == 'periodicity':
+                        loss_cfg['periodicity_weight'] = value
+                    elif key == 'prior':
+                        loss_cfg['prior_weight'] = value
+                        # 🆕 同時更新 lowfi_prior.consistency_weight
+                        if 'lowfi_prior' in curriculum_config:
+                            prior_cfg = curriculum_config['lowfi_prior']
+                            if 'consistency_weight' in prior_cfg:
+                                # 更新 PriorLossManager 的權重
+                                if self.prior_loss_manager is not None:
+                                    self.prior_loss_manager.consistency_weight = prior_cfg['consistency_weight']
+                                    self.prior_loss_manager.low_fidelity_loss.consistency_weight = prior_cfg['consistency_weight']
+                    else:
+                        # 其他權重直接映射（如 momentum_x, momentum_y 等）
+                        weight_key = f'{key}_weight'
+                        if weight_key not in loss_cfg:
+                            # 嘗試通用映射（如 'continuity' -> 'continuity_weight'）
+                            loss_cfg[weight_key] = value
+                        else:
+                            loss_cfg[weight_key] = value
+                
+                # 階段切換日誌
+                if is_curriculum_transition:
+                    logging.info(f"🎯 課程階段切換：{curriculum_config['stage_name']}")
+                    logging.info(f"   損失權重更新: {curriculum_weights}")
+                    if 'lowfi_prior' in curriculum_config:
+                        prior_weight = curriculum_config['lowfi_prior'].get('consistency_weight', 'N/A')
+                        logging.info(f"   RANS 先驗權重: {prior_weight}")
         
         gradnorm_weighter = self.weighters.get('gradnorm') if hasattr(self, 'weighters') else None
         gradnorm_weights: Optional[Dict[str, float]] = None
@@ -1095,13 +1194,68 @@ class Trainer:
                             target_mean = target_means.get(field_name, 0.0)
                             logging.info(f"   {field_name}: pred={pred_mean:.4f}, target={target_mean:.4f}")
         
+        # 🆕 ==================== 4. 低保真先驗一致性損失 ====================
+        prior_consistency_loss = torch.tensor(0.0, device=data_loss.device)
+        prior_loss_u = torch.tensor(0.0, device=data_loss.device)
+        prior_loss_v = torch.tensor(0.0, device=data_loss.device)
+        prior_loss_p = torch.tensor(0.0, device=data_loss.device)
+        
+        if self.prior_loss_manager is not None and data_batch.get('has_prior', False):
+            # 提取低保真先驗資料
+            lowfi_prior = data_batch.get('lowfi_prior', {})
+            
+            # PDE 點的 RANS 先驗（已在 train.py 中插值到 PDE 點位置）
+            if 'u_pde' in lowfi_prior and 'v_pde' in lowfi_prior and 'p_pde' in lowfi_prior:
+                # 組合低保真資料 [N, 3] (u, v, p)
+                lowfi_data = torch.cat([
+                    lowfi_prior['u_pde'],
+                    lowfi_prior['v_pde'], 
+                    lowfi_prior['p_pde']
+                ], dim=1)
+                
+                # 提取 PINN 預測的對應變數（物理空間，已反標準化）
+                # u_pred_pde_physical 形狀: [N, n_vars]，通常 n_vars=3 (u,v,p) 或 4 (u,v,w,p)
+                if u_pred_pde_physical.shape[1] == 3:
+                    high_fi_pred = u_pred_pde_physical  # [u, v, p]
+                elif u_pred_pde_physical.shape[1] == 4:
+                    # 忽略 w 分量（2D 問題或 RANS 無 w）
+                    high_fi_pred = torch.cat([
+                        u_pred_pde_physical[:, 0:1],  # u
+                        u_pred_pde_physical[:, 1:2],  # v
+                        u_pred_pde_physical[:, 3:4]   # p
+                    ], dim=1)
+                else:
+                    raise ValueError(f"不支援的模型輸出維度: {u_pred_pde_physical.shape[1]}")
+                
+                # 計算先驗一致性損失
+                prior_losses = self.prior_loss_manager.low_fidelity_loss(
+                    high_fidelity_pred=high_fi_pred,
+                    low_fidelity_data=lowfi_data,
+                    coords=coords_pde_physical,
+                    variable_names=['u', 'v', 'p']
+                )
+                
+                # 提取各變數損失（用於日誌記錄）
+                prior_loss_u = prior_losses.get('prior_consistency_u', prior_loss_u)
+                prior_loss_v = prior_losses.get('prior_consistency_v', prior_loss_v)
+                prior_loss_p = prior_losses.get('prior_consistency_p', prior_loss_p)
+                prior_consistency_loss = prior_losses['prior_consistency_total']
+                
+                # 記錄（低頻率）
+                if epoch == 0 or (epoch > 0 and epoch % 100 == 0):
+                    logging.info(f"📊 先驗一致性損失 @ Epoch {epoch}: {prior_consistency_loss.item():.6f}")
+                    logging.info(f"   - u: {prior_loss_u.item():.6f}")
+                    logging.info(f"   - v: {prior_loss_v.item():.6f}")
+                    logging.info(f"   - p: {prior_loss_p.item():.6f}")
+        
         # 總損失
         total_loss = (
             weighted_data_loss +
             weighted_momentum_loss +  # 僅動量
             weighted_div_loss +       # 🆕 獨立的散度損失
             weighted_bc_loss +        # 統一邊界條件損失
-            mean_constraint_loss
+            mean_constraint_loss +
+            prior_consistency_loss    # 🆕 低保真先驗一致性損失
         )
         
         # ==================== 5. 反向傳播與優化 ====================
@@ -1164,7 +1318,12 @@ class Trainer:
         else:
             result['wall_loss'] = wall_loss.item()
 
-        # RANS 損失項已移除（2025-10-14）
+        # 🆕 添加先驗一致性損失細項（若啟用）
+        if self.prior_loss_manager is not None:
+            result['prior_consistency_loss'] = prior_consistency_loss.item()
+            result['prior_loss_u'] = prior_loss_u.item()
+            result['prior_loss_v'] = prior_loss_v.item()
+            result['prior_loss_p'] = prior_loss_p.item()
 
         if gradnorm_weights is not None:
             result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
@@ -1399,6 +1558,37 @@ class Trainer:
             if 'val_loss' in loss_dict:
                 history['val_loss'].append(loss_dict['val_loss'])
             
+            # 📊 TensorBoard 記錄
+            if self.writer is not None:
+                # 記錄訓練損失
+                self.writer.add_scalar('Loss/total', loss_dict['total_loss'], self.global_step)
+                
+                # 記錄各項損失分量
+                for key, value in loss_dict.items():
+                    if key not in ['total_loss', 'val_loss', 'val_mse', '_curriculum_transition', '_curriculum_lr', '_curriculum_stage']:
+                        if isinstance(value, (int, float)):
+                            self.writer.add_scalar(f'Loss/{key}', value, self.global_step)
+                
+                # 記錄驗證指標
+                if 'val_loss' in loss_dict:
+                    self.writer.add_scalar('Validation/relative_l2', loss_dict['val_loss'], self.global_step)
+                if 'val_mse' in loss_dict:
+                    self.writer.add_scalar('Validation/mse', loss_dict['val_mse'], self.global_step)
+                
+                # 記錄學習率
+                current_lr = self.get_current_lr()
+                self.writer.add_scalar('Training/learning_rate', current_lr, self.global_step)
+                
+                # 記錄梯度統計（每 N epochs）
+                if epoch % (log_freq * 2) == 0:
+                    for name, param in self.model.named_parameters():
+                        if param.grad is not None:
+                            self.writer.add_histogram(f'Gradients/{name}', param.grad, self.global_step)
+                            self.writer.add_histogram(f'Weights/{name}', param, self.global_step)
+            
+            # 更新全局步數
+            self.global_step += 1
+            
             # 🚀 課程訓練：處理階段切換
             if '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5:
                 new_lr = loss_dict.get('_curriculum_lr', self.train_cfg.get('lr', 1e-3))
@@ -1471,6 +1661,27 @@ class Trainer:
         # 保存最終檢查點
         final_checkpoint = self.save_checkpoint(final_epoch + 1, loss_dict, is_best=False)
         logging.info(f"💾 最終模型已保存")
+        
+        # 關閉 TensorBoard writer
+        if self.writer is not None:
+            # 記錄最終超參數與指標
+            hparams = {
+                'lr': self.train_cfg.get('lr', 1e-3),
+                'optimizer': self.optimizer.__class__.__name__,
+                'model_width': self.config.get('model', {}).get('width', 256),
+                'model_depth': self.config.get('model', {}).get('depth', 8),
+                'activation': self.config.get('model', {}).get('activation', 'sine'),
+                'K_sensors': self.config.get('sensors', {}).get('K', 0),
+            }
+            metrics = {
+                'hparam/final_loss': final_loss,
+                'hparam/best_loss': self.best_val_loss if self.early_stopping_enabled else final_loss,
+                'hparam/epochs': final_epoch + 1,
+            }
+            self.writer.add_hparams(hparams, metrics)
+            self.writer.flush()
+            self.writer.close()
+            logging.info("✅ TensorBoard 日誌已保存並關閉")
         
         # 返回訓練結果
         return {

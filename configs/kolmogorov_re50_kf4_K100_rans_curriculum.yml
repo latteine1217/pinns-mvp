@@ -1,0 +1,490 @@
+# ====================================================================
+# Kolmogorov Flow Re=50 kf=4 K=100 RANS先驗課程學習訓練配置
+# ====================================================================
+# 實驗目標：使用階段性損失權重調整 + RANS 先驗衰減策略改善壓力梯度重建
+# 策略：固定 Re=50，分 3 階段調整損失權重：
+#   - Stage 1 (0-300): 強 RANS 先驗引導（prior_weight=1.0）
+#   - Stage 2 (300-700): 中等先驗 + 增強 PDE（prior_weight=0.3）
+#   - Stage 3 (700-1000): 弱先驗 + 強 PDE 精煉（prior_weight=0.1）
+# DNS 數據：re50_kf4 (k_f=4, Re=50 弱湍流)
+# RANS 數據：128×128 k-ε 模型平均場
+# 感測器：QR-pivot K=100
+# 優化器：Adam（無優化器切換）
+# 創建日期：2025-12-12
+# ====================================================================
+
+experiment:
+  name: kolmogorov_re50_kf4_K100_rans_curriculum
+  version: v1.0_curriculum_prior_decay
+  seed: 42
+  device: auto
+  precision: float32
+  description: "Re=50 RANS prior curriculum learning with weight decay strategy"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# 數據配置
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: "Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)"
+
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]  # 2π
+
+    resolution:
+      x: 256
+      y: 256
+
+    time_range: [20.0, 40.0]  # 使用穩態區域
+    dt: 0.001
+
+    variables: [u, v, p]
+
+    physics_params:
+      Re: 50.0
+      Re_definition: "Musacchio_Boffetta_2014"
+      nu: 0.039374  # 動力黏度（固定）
+      k_f: 4
+      forcing_amplitude: 1.0
+
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# 低保真 RANS 先驗配置
+# ====================================================================
+lowfi_prior:
+  enabled: true
+  data_path: ./data/kolmogorov_rans/rans_re50_kf4.h5
+  data_type: rans
+  
+  # RANS 數據結構
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      k: k
+      nu_t: nu_t
+      epsilon: epsilon
+    coord_mapping:
+      X: X  # mesh grid X
+      Y: Y  # mesh grid Y
+  
+  # 插值設定
+  interpolation:
+    method: linear  # 'linear', 'cubic', 'rbf'
+    extrapolation_mode: nearest
+    quality_check: true
+  
+  # ⚠️ 先驗權重設定（將由課程學習動態覆蓋）
+  consistency_weight: 1.0  # 階段 1 初始值
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.5  # 壓力權重較低，避免過度約束
+  
+  # 空間權重策略
+  spatial_weighting:
+    enabled: false
+    boundary_penalty: 2.0
+    center_weight: 1.0
+
+# ====================================================================
+# 數據標準化
+# ====================================================================
+normalization:
+  type: training_data_norm
+  params: {}
+
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+
+  steady_state:
+    enabled: true
+    time_window: [40.0, 60.0]
+
+# ====================================================================
+# 感測點配置
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100/sensor_data.json
+
+  quality_metrics:
+    condition_number: TBD
+    energy_ratio: TBD
+    min_distance: TBD
+
+# ====================================================================
+# 模型架構
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3       # (t, x, y)
+  out_dim: 3      # (u, v, p)
+  width: 256
+  depth: 8
+  activation: swish
+  block_type: resnet  # PirateNet-style adaptive residual
+
+  # ✅ Fourier Features (啟用)
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 12
+    fourier_sigma: 4.0
+    include_input: true
+
+  # ✅ SIREN 初始化 (啟用)
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+
+# ====================================================================
+# 物理設定（固定 Re=50）
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374  # 固定黏度
+  rho: 1.0
+
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+
+  kolmogorov_flow:
+    Re: 50.0      # 固定雷諾數
+    k_f: 4
+    forcing_amplitude: 1.0
+
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# 損失函數權重 - 基礎配置（由課程學習動態覆蓋）
+# ====================================================================
+losses:
+  # 基礎損失（階段 3 的目標值）
+  data_weight: 20.0       # 最終增強資料擬合
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  periodicity_weight: 10.0
+  prior_weight: 0.1       # 最終弱化先驗（階段 3）
+
+  # 正則化
+  l2_regularization: 1.0e-6
+  gradient_penalty: 1.0e-5
+
+  # ✅ 損失標準化 (啟用)
+  normalize_losses: true
+  normalization_method: gradnorm
+
+  # ✅ 自適應權重 (啟用)
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 500
+  adaptation_alpha: 1.5
+
+  # ❌ 因果訓練 (關閉，簡化課程學習)
+  causal_weighting: false
+
+# ====================================================================
+# 訓練配置 - Adam 優化器
+# ====================================================================
+training:
+  # Adam 優化器
+  optimizer:
+    type: adam
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+
+  # 學習率調度（由課程學習動態覆蓋）
+  lr_scheduler:
+    type: step
+    step_size: 2000
+    gamma: 0.9
+    eta_min: 1.0e-6
+
+  # 訓練循環
+  epochs: 1000
+  max_epochs: 1000
+  batch_size: 15000
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+
+  # 早停
+  early_stopping:
+    enabled: false
+    patience: 1000
+    min_delta: 1.0e-6
+
+  # 採樣策略
+  sampling:
+    N_pde: 10000
+    adaptive_sampling: false
+    boundary_points: 1000
+
+  # 穩定性
+  gradient_clip: 1.0
+
+  amp:
+    enabled: false
+
+# ====================================================================
+# ⭐ 課程學習配置（3 階段損失權重調整）
+# ====================================================================
+curriculum:
+  enable: true
+  
+  stages:
+    # ================================
+    # 階段 1: 強 RANS 先驗引導 (Epochs 0-300)
+    # 目標：快速學習 RANS 場的大致結構，壓力場初步校正
+    # ================================
+    - name: "Stage1_Strong_Prior_Guidance"
+      epoch_range: [0, 300]
+      
+      # 物理參數（固定）
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 1.0e-3
+      
+      # ⭐ 損失權重：強先驗 + 弱 PDE + 中資料
+      weights:
+        data: 10.0            # 中等資料擬合
+        momentum_x: 0.5       # 弱 PDE 約束（避免衝突）
+        momentum_y: 0.5
+        continuity: 0.5
+        periodicity: 5.0      # 中等週期性
+        prior: 1.0            # ⭐ 強先驗引導
+      
+      # 先驗配置（覆蓋 lowfi_prior.consistency_weight）
+      lowfi_prior:
+        consistency_weight: 1.0  # 強先驗
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5  # 壓力仍保持較低權重
+      
+      sampling:
+        pde_points: 10000
+        boundary_points: 1000
+        wall_clustering: 0.0  # Kolmogorov flow 無壁面
+
+    # ================================
+    # 階段 2: 中等先驗 + 增強 PDE (Epochs 300-700)
+    # 目標：平衡 RANS 引導與物理守恆,精煉速度場
+    # ================================
+    - name: "Stage2_Balanced_Prior_PDE"
+      epoch_range: [300, 700]
+      
+      # 物理參數（固定）
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 9.0e-4  # 微降學習率
+      
+      # ⭐ 損失權重：中等先驗 + 中等 PDE + 增強資料
+      weights:
+        data: 15.0            # 增強資料擬合
+        momentum_x: 1.0       # 標準 PDE 約束
+        momentum_y: 1.0
+        continuity: 1.0
+        periodicity: 10.0     # 增強週期性
+        prior: 0.3            # ⭐ 中等先驗（開始衰減）
+      
+      lowfi_prior:
+        consistency_weight: 0.3  # 中等先驗
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5
+      
+      sampling:
+        pde_points: 10000
+        boundary_points: 1000
+        wall_clustering: 0.0
+
+    # ================================
+    # 階段 3: 弱先驗 + 強 PDE 精煉 (Epochs 700-1000)
+    # 目標：依賴物理方程精煉細節，RANS 僅作輕微引導
+    # ================================
+    - name: "Stage3_Weak_Prior_Strong_PDE"
+      epoch_range: [700, 1000]
+      
+      # 物理參數（固定）
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 8.1e-4  # 再降學習率 (0.9^2)
+      
+      # ⭐ 損失權重：弱先驗 + 強 PDE + 強資料
+      weights:
+        data: 20.0            # 強資料擬合
+        momentum_x: 1.0       # 標準 PDE 約束
+        momentum_y: 1.0
+        continuity: 1.0
+        periodicity: 10.0     # 保持週期性
+        prior: 0.1            # ⭐ 弱先驗（幾乎完全衰減）
+      
+      lowfi_prior:
+        consistency_weight: 0.1  # 弱先驗（保持輕微引導）
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.3  # 壓力先驗進一步降低
+      
+      sampling:
+        pde_points: 10000
+        boundary_points: 1000
+        wall_clustering: 0.0
+
+# ====================================================================
+# ❌ 優化器切換 (關閉)
+# ====================================================================
+optimizer_switching:
+  enabled: false
+
+# ====================================================================
+# ❌ Ensemble (關閉)
+# ====================================================================
+ensemble:
+  enable: false
+
+# ====================================================================
+# 評估配置
+# ====================================================================
+evaluation:
+  grid_resolution: [512, 512]
+
+  metrics:
+    - relative_l2
+    - mass_conservation
+    - kinetic_energy
+    - enstrophy
+    - energy_spectrum
+    - pressure_gradient  # ⭐ 新增壓力梯度指標
+
+  thresholds:
+    u_l2_error: 0.15
+    v_l2_error: 0.15
+    p_l2_error: 0.20
+    dpdx_l2_error: 0.30  # ⭐ 壓力梯度目標 < 30%
+    dpdy_l2_error: 0.30
+    mass_conservation_error: 0.001
+    kinetic_energy_rmse: 0.05
+
+  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_time_window: [20.0, 40.0]
+
+# ====================================================================
+# 物理驗證
+# ====================================================================
+physics_validation:
+  enabled: true
+  save_metrics: true
+
+  thresholds:
+    mass_conservation: 0.001
+    momentum_conservation: 0.01
+    periodicity_error: 0.0001
+
+# ====================================================================
+# 日誌與輸出
+# ====================================================================
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+
+output:
+  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_rans_curriculum
+  results_dir: ./results/kolmogorov_re50_kf4_K100_rans_curriculum
+  visualization_dir: ./results/kolmogorov_re50_kf4_K100_rans_curriculum/visualizations
+
+# ====================================================================
+# 驗收標準
+# ====================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+
+  physics:
+    - mass_conservation_satisfied: true
+    - momentum_residual_low: true
+    - periodicity_maintained: true
+
+  reconstruction:
+    - sensor_l2_error_target: 0.05
+    - field_l2_error_target: 0.15
+    - pressure_gradient_l2_target: 0.30  # ⭐ 壓力梯度目標
+    - kinetic_energy_preserved: true
+
+  rans_prior:
+    - rans_consistency_maintained: true
+    - improvement_over_rans: true  # 應優於 RANS 單獨結果
+
+# ====================================================================
+# 使用說明
+# ====================================================================
+usage_notes: |
+  🔬 實驗設計：
+    - 目標：使用階段性損失權重調整 + RANS 先驗衰減改善壓力梯度重建
+    - 策略：固定 Re=50，分 3 階段調整損失權重
+      * Stage 1 (0-300):   prior=1.0, data=10, PDE=0.5  (強先驗引導)
+      * Stage 2 (300-700): prior=0.3, data=15, PDE=1.0  (平衡)
+      * Stage 3 (700-1000): prior=0.1, data=20, PDE=1.0  (弱先驗精煉)
+    - 特徵：Fourier + SIREN + 自適應權重 + 課程學習
+    - 優化器：Adam (lr=1e-3)
+
+  🚀 執行指令：
+    python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100_rans_curriculum.yml --device cuda
+
+  📊 預期結果：
+    - 訓練時間：2-3 小時（1000 epochs, GPU）
+    - 感測點 L2：< 5%
+    - 全場 u/v L2：10-15%
+    - 壓力梯度 L2：< 30% (vs 目前 100%)
+    - 階段性改善：Stage 1 快速收斂 → Stage 2 精煉速度 → Stage 3 壓力校正
+
+  🔍 對比基準：
+    - kolmogorov_re50_kf4_K100_rans_prior_1k.yml (固定權重) - 參考基準
+    - 本配置（課程學習） - 預期更穩定收斂，更好壓力重建
+
+  📝 論文亮點：
+    - 證明「RANS 先驗衰減策略」有效性
+    - 量化階段性訓練的改善程度
+    - 展示損失權重動態調整對壓力重建的影響

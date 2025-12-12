@@ -209,6 +209,112 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     
     return training_data
 
+
+def load_rans_prior_data(
+    config: Dict[str, Any], 
+    training_data: Dict[str, torch.Tensor],
+    device: torch.device
+) -> Dict[str, torch.Tensor]:
+    """載入 RANS 低保真先驗資料並插值到訓練點
+    
+    Args:
+        config: 配置字典
+        training_data: 訓練資料字典（包含座標）
+        device: PyTorch 設備
+        
+    Returns:
+        包含 RANS 先驗場的字典 {'u': ..., 'v': ..., 'p': ...}
+    """
+    import h5py
+    from scipy.interpolate import RegularGridInterpolator
+    
+    lowfi_cfg = config.get('lowfi_prior', {})
+    if not lowfi_cfg.get('enabled', False):
+        logging.info("⏭️  RANS 先驗未啟用")
+        return {}
+    
+    rans_path = lowfi_cfg.get('data_path')
+    if not rans_path:
+        logging.warning("⚠️  lowfi_prior.enabled=True 但未指定 data_path")
+        return {}
+    
+    logging.info(f"📂 載入 RANS 先驗資料: {rans_path}")
+    
+    # 讀取 RANS 資料
+    with h5py.File(rans_path, 'r') as f:
+        rans_structure = lowfi_cfg.get('rans_structure', {})
+        group_path = rans_structure.get('group_path', '/mean_field')
+        
+        # 讀取座標網格
+        group = f[group_path]
+        X_rans = np.array(group['X'])  # [N_rans, N_rans]
+        Y_rans = np.array(group['Y'])
+        
+        # 提取 1D 座標（假設規則網格）
+        x_rans_1d = X_rans[:, 0]  # 第一列
+        y_rans_1d = Y_rans[0, :]  # 第一行
+        
+        # 讀取場數據
+        u_rans = np.array(group['u'])  # [N_rans, N_rans]
+        v_rans = np.array(group['v'])
+        
+        # RANS 通常沒有壓力，設為零或從 DNS 估計
+        if 'p' in group:
+            p_rans = np.array(group['p'])
+        else:
+            p_rans = np.zeros_like(u_rans)
+            logging.info("   RANS 資料無壓力場，設為零")
+    
+    logging.info(f"   RANS 解析度: {u_rans.shape}")
+    logging.info(f"   RANS 座標範圍: x=[{x_rans_1d.min():.3f}, {x_rans_1d.max():.3f}], "
+                 f"y=[{y_rans_1d.min():.3f}, {y_rans_1d.max():.3f}]")
+    
+    # 建立插值器
+    interp_method = lowfi_cfg.get('interpolation', {}).get('method', 'linear')
+    u_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), u_rans, method=interp_method, bounds_error=False, fill_value=None)
+    v_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), v_rans, method=interp_method, bounds_error=False, fill_value=None)
+    p_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), p_rans, method=interp_method, bounds_error=False, fill_value=None)
+    
+    # 提取訓練點座標（只需空間座標，忽略時間）
+    # 假設使用 PDE 配點作為插值目標
+    x_pde_np = training_data['x_pde'].cpu().numpy().flatten()
+    y_pde_np = training_data['y_pde'].cpu().numpy().flatten()
+    
+    coords_pde = np.column_stack([x_pde_np, y_pde_np])
+    
+    # 插值到 PDE 配點
+    u_prior_pde = u_interp(coords_pde)
+    v_prior_pde = v_interp(coords_pde)
+    p_prior_pde = p_interp(coords_pde)
+    
+    # 同樣插值到感測點（用於驗證）
+    x_sensors_np = training_data['x_sensors'].cpu().numpy().flatten()
+    y_sensors_np = training_data['y_sensors'].cpu().numpy().flatten()
+    coords_sensors = np.column_stack([x_sensors_np, y_sensors_np])
+    
+    u_prior_sensors = u_interp(coords_sensors)
+    v_prior_sensors = v_interp(coords_sensors)
+    p_prior_sensors = p_interp(coords_sensors)
+    
+    # 轉換為 Tensor
+    rans_prior = {
+        'u_pde': torch.tensor(u_prior_pde, dtype=torch.float32, device=device).unsqueeze(1),
+        'v_pde': torch.tensor(v_prior_pde, dtype=torch.float32, device=device).unsqueeze(1),
+        'p_pde': torch.tensor(p_prior_pde, dtype=torch.float32, device=device).unsqueeze(1),
+        'u_sensors': torch.tensor(u_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
+        'v_sensors': torch.tensor(v_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
+        'p_sensors': torch.tensor(p_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
+    }
+    
+    logging.info(f"✅ RANS 先驗插值完成:")
+    logging.info(f"   PDE 配點: {len(u_prior_pde)} 個")
+    logging.info(f"   感測點: {len(u_prior_sensors)} 個")
+    logging.info(f"   u 統計: min={u_prior_pde.min():.4f}, max={u_prior_pde.max():.4f}, mean={u_prior_pde.mean():.4f}")
+    logging.info(f"   v 統計: min={v_prior_pde.min():.4f}, max={v_prior_pde.max():.4f}, mean={v_prior_pde.mean():.4f}")
+    
+    return rans_prior
+
+
 # ============================================================================
 # 全局變數（保留訓練專用快取）
 # ============================================================================
@@ -430,9 +536,12 @@ class CurriculumScheduler:
             logging.info(f"  Epochs: {s['epoch_range'][0]}-{s['epoch_range'][1]}")
             
             # 根據場景類型顯示不同的物理參數
-            if 'Re_tau' in s:  # Channel Flow
-                logging.info(f"  Re_tau: {s['Re_tau']:.1f}, nu: {s['nu']:.6f}, dP/dx: {s['pressure_gradient']:.3f}")
-            elif 'Re' in s:  # Kolmogorov Flow
+            if 'Re_tau' in s and s['Re_tau'] is not None:  # Channel Flow
+                if s.get('pressure_gradient') is not None:
+                    logging.info(f"  Re_tau: {s['Re_tau']:.1f}, nu: {s['nu']:.6f}, dP/dx: {s['pressure_gradient']:.3f}")
+                else:
+                    logging.info(f"  Re_tau: {s['Re_tau']:.1f}, nu: {s['nu']:.6f}")
+            elif 'Re' in s and s['Re'] is not None:  # Kolmogorov Flow
                 logging.info(f"  Re: {s['Re']:.1f}, nu: {s['nu']:.6f}")
             else:
                 logging.info(f"  nu: {s['nu']:.6f}")
@@ -723,7 +832,15 @@ def prepare_training_data(config: Dict[str, Any], device: torch.device, config_p
     kolmogorov_enabled = config.get('data', {}).get('kolmogorov_config', {}).get('enabled', False)
     
     if kolmogorov_enabled:
-        return prepare_kolmogorov_training_data(config, device)
+        training_data = prepare_kolmogorov_training_data(config, device)
+        # 載入 RANS 先驗（如果啟用）
+        rans_prior = load_rans_prior_data(config, training_data, device)
+        if rans_prior:
+            training_data['lowfi_prior'] = rans_prior
+            training_data['has_prior'] = True
+        else:
+            training_data['has_prior'] = False
+        return training_data
     
     if jhtdb_enabled or channel_flow_enabled:
         return prepare_channel_flow_training_data(config, device, config_path)

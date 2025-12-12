@@ -1,0 +1,379 @@
+# ====================================================================
+# Kolmogorov Flow Re=50 RANS先驗快速測試配置
+# ====================================================================
+# 實驗目標：快速驗證 RANS 先驗載入與訓練流程
+# 特徵：RANS Prior + Fourier + 短訓練（100 epochs）
+# 用途：調試與驗證，非論文結果
+# 創建日期：2025-12-12
+# ====================================================================
+
+experiment:
+  name: quick_test_rans_prior
+  version: v1.0_quick_test
+  seed: 42
+  device: auto
+  precision: float32
+  description: "Quick test of RANS prior loading and training (100 epochs)"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# 數據配置
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: "Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)"
+
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]  # 2π
+
+    resolution:
+      x: 256
+      y: 256
+
+    time_range: [20.0, 30.0]  # ⭐ 縮短時間範圍以加速
+    dt: 0.001
+
+    variables: [u, v, p]
+
+    physics_params:
+      Re: 50.0
+      Re_definition: "Musacchio_Boffetta_2014"
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# ⭐ 低保真 RANS 先驗配置
+# ====================================================================
+lowfi_prior:
+  enabled: true  # ⭐ 啟用 RANS 先驗
+  data_path: ./data/kolmogorov_rans/rans_re50_kf4.h5
+  data_type: rans
+  
+  # RANS 數據結構
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      k: k
+      nu_t: nu_t
+      epsilon: epsilon
+    coord_mapping:
+      X: X
+      Y: Y
+  
+  # 插值設定
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+    quality_check: true
+  
+  # 先驗權重設定
+  consistency_weight: 0.3
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.5
+
+# ====================================================================
+# 數據標準化
+# ====================================================================
+normalization:
+  type: training_data_norm
+  params: {}
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  steady_state:
+    enabled: true
+    time_window: [40.0, 60.0]
+
+# ====================================================================
+# 感測點配置
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100/sensor_data.json
+
+# ====================================================================
+# 模型架構 - 簡化版
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 128  # ⭐ 縮小網路以加速
+  depth: 4    # ⭐ 減少層數
+  activation: swish
+  block_type: resnet
+
+  # Fourier Features
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 8   # ⭐ 減少 Fourier 維度
+    fourier_sigma: 4.0
+    include_input: true
+
+  # SIREN 初始化
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+
+# ====================================================================
+# 物理設定
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# 損失函數權重
+# ====================================================================
+losses:
+  # 基礎損失
+  data_weight: 10.0
+
+  # PDE 殘差
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+
+  # 物理約束
+  periodicity_weight: 10.0
+
+  # ⭐ RANS 先驗一致性損失
+  prior_weight: 0.3
+
+  # 正則化
+  l2_regularization: 1.0e-6
+  gradient_penalty: 1.0e-5
+
+  # 損失標準化
+  normalize_losses: true
+  normalization_method: gradnorm
+
+  # 自適應權重
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 500
+  adaptation_alpha: 1.5
+
+  # 因果訓練
+  causal_weighting: false  # ⭐ 關閉以加速
+
+# ====================================================================
+# 訓練配置 - 快速測試
+# ====================================================================
+training:
+  # Adam 優化器
+  optimizer:
+    type: adam
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+
+  # 學習率調度
+  lr_scheduler:
+    type: step
+    step_size: 50  # ⭐ 更頻繁衰減
+    gamma: 0.8
+    eta_min: 1.0e-6
+
+  # ⭐ 快速訓練循環
+  epochs: 100         # ⭐ 僅 100 epochs
+  max_epochs: 100
+  batch_size: 15000
+  validation_freq: 10  # ⭐ 更頻繁驗證
+  checkpoint_freq: 50
+  log_interval: 5      # ⭐ 更頻繁日誌
+
+  # 早停
+  early_stopping:
+    enabled: false
+    patience: 50
+    min_delta: 1.0e-6
+
+  # 採樣策略
+  sampling:
+    N_pde: 5000  # ⭐ 減少 PDE 配點以加速
+    adaptive_sampling: false
+    boundary_points: 500
+
+  # 穩定性
+  gradient_clip: 1.0
+
+  amp:
+    enabled: false
+
+# ====================================================================
+# 課程學習 (關閉)
+# ====================================================================
+curriculum:
+  enable: false
+
+# ====================================================================
+# 優化器切換 (關閉)
+# ====================================================================
+optimizer_switching:
+  enabled: false
+
+# ====================================================================
+# Ensemble (關閉)
+# ====================================================================
+ensemble:
+  enable: false
+
+# ====================================================================
+# 評估配置
+# ====================================================================
+evaluation:
+  grid_resolution: [256, 256]  # ⭐ 減少評估解析度
+
+  metrics:
+    - relative_l2
+    - mass_conservation
+    - kinetic_energy
+    - pressure_gradient
+
+  thresholds:
+    u_l2_error: 0.30  # ⭐ 放寬閾值（快速測試）
+    v_l2_error: 0.30
+    p_l2_error: 0.50
+    dpdx_l2_error: 0.50
+    dpdy_l2_error: 0.50
+    mass_conservation_error: 0.01
+    kinetic_energy_rmse: 0.10
+
+  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_time_window: [20.0, 30.0]
+
+# ====================================================================
+# 物理驗證
+# ====================================================================
+physics_validation:
+  enabled: true
+  save_metrics: true
+
+  thresholds:
+    mass_conservation: 0.01
+    momentum_conservation: 0.05
+    periodicity_error: 0.001
+
+# ====================================================================
+# 日誌與輸出
+# ====================================================================
+logging:
+  level: info
+  log_freq: 5
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+
+output:
+  checkpoint_dir: ./checkpoints/quick_test_rans_prior
+  results_dir: ./results/quick_test_rans_prior
+  visualization_dir: ./results/quick_test_rans_prior/visualizations
+
+# ====================================================================
+# 驗收標準（快速測試）
+# ====================================================================
+test_acceptance:
+  stability:
+    - no_nan_inf: true
+    - loss_finite: true
+    - gradient_stable: true
+
+  rans_prior:
+    - rans_loaded_successfully: true
+    - prior_loss_converging: true
+
+  basic_functionality:
+    - training_completes: true
+    - checkpoint_saved: true
+
+# ====================================================================
+# 使用說明
+# ====================================================================
+usage_notes: |
+  🔬 實驗設計：
+    - 目標：快速驗證 RANS 先驗載入與訓練流程
+    - 特徵：RANS Prior + Fourier + 簡化網路
+    - 優化器：Adam (lr=1e-3)
+    - 訓練：100 epochs（約 5-10 分鐘）
+
+  🚀 執行指令：
+    # 前台執行（推薦，可以看到即時輸出）
+    python scripts/train.py --cfg configs/quick_test_rans_prior.yml --device cuda
+
+    # 或 CPU（較慢）
+    python scripts/train.py --cfg configs/quick_test_rans_prior.yml --device cpu
+
+  ✅ 驗證要點：
+    1. RANS 資料成功載入
+       - 檢查日誌："📂 載入 RANS 先驗資料"
+       - 檢查日誌："✅ RANS 先驗插值完成"
+    
+    2. 損失項包含先驗
+       - prior_consistency_u
+       - prior_consistency_v
+       - prior_consistency_p
+       - prior_consistency_total
+    
+    3. 訓練穩定收斂
+       - 無 NaN/Inf
+       - 損失逐步下降
+       - 100 epochs 完成
+
+  📊 預期結果（100 epochs）：
+    - 訓練時間：5-10 分鐘（GPU）
+    - 速度 L2：30-50%（未充分訓練）
+    - 壓力梯度 L2：50-80%（未充分訓練）
+    - ⚠️ 注意：僅用於驗證流程，非最終結果
+
+  🔍 檢查點：
+    - 如果 RANS 載入失敗 → 檢查檔案路徑
+    - 如果 prior_loss 為 NaN → 檢查 RANS 數據品質
+    - 如果訓練過慢 → 減少 N_pde 或網路大小
+
+  📝 成功後的下一步：
+    使用完整配置訓練 1000 epochs:
+    python scripts/train.py \
+      --cfg configs/kolmogorov_re50_kf4_K100_rans_prior_1k.yml \
+      --device cuda
