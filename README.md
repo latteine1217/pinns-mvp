@@ -25,13 +25,14 @@ We have generated and validated a comprehensive suite of Direct Numerical Simula
 
 ### Physics Validation ✅
 
-All datasets have passed rigorous physics validation (`scripts/validate_dns_physics.py`):
+All datasets have passed rigorous physics validation (`scripts/validation/validate_dns_physics.py`):
 - **Incompressibility**: Divergence error $\nabla \cdot u \approx 10^{-14}$ (Spectral), $< 10^{-4}$ (Finite Difference).
 - **Resolution**: $\Delta x / \eta < 0.5$ for all cases (Standard requires $< 2.5$), ensuring high-fidelity capture of small scales.
 - **Stationarity**: Verified quasi-steady state statistics for t > 40s.
 
 ### Visualization
 Detailed visualization reports (animations, energy spectra) are available in `results/dns_re*_viz/`.
+Use `scripts/visualize/visualize_kolmogorov_dns.py` for custom visualizations.
 
 ---
 
@@ -55,21 +56,40 @@ cd pinns-mvp
 conda env create -f environment.yml
 conda activate pinns-mvp
 
-# 2) 生成或下載 Kolmogorov Flow DNS（參見 docs/KOLMOGOROV_DNS_GUIDE.md）
-python scripts/generate_kolmogorov_dns.py \
+# 2) 生成或下載 Kolmogorov Flow DNS
+python scripts/generate/dns/generate_kolmogorov_dns.py \
   --N 512 --nu 0.0125 --k_f 8 --T_end 40.0 \
   --output data/kolmogorov_dns_re56_512x512_kf8_midway.h5
 
-# 3a) 執行 2D Kolmogorov Flow 訓練（配置驅動）
-# 最新的 Re=50 基準實驗，啟用 RWF 與因果訓練
-python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
+# 3) 驗證 DNS 物理守恆
+python scripts/validation/validate_dns_physics.py \
+  --input data/kolmogorov_dns_re56_512x512_kf8_midway.h5
 
-# 3b) 執行 3D JHTDB 通道流訓練（需先準備 JHTDB cutout 與 RANS 先驗）
-# 具體資料準備流程請參考 docs/TECHNICAL_DOCUMENTATION.md 及 configs/README.md
-python scripts/train.py --cfg configs/main.yml
+# 4) 生成感測點（V7 QR-Pivot）
+python scripts/generate/sensors/generate_sensors_periodic_qr.py \
+  --dns-path data/kolmogorov_dns_re56_512x512_kf8_midway.h5 \
+  --K 100 --oversample-factor 3.0 \
+  --output data/sensors_K100_v7.npz
+
+# 5) 執行訓練（配置驅動）
+python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
+
+# 6) 評估與視覺化
+python scripts/evaluate/evaluate_checkpoint.py \
+  --checkpoint checkpoints/your_exp/best_model.pth \
+  --config configs/kolmogorov_re50_kf4_K100.yml
+
+python scripts/visualize/visualize_results.py \
+  --checkpoint checkpoints/your_exp/best_model.pth \
+  --output results/visualizations/
 ```
 
-更多硬體與部署建議：`A100_DEPLOYMENT_GUIDE.md`。配置模板：`configs/templates/`。
+**詳細文檔**：
+- 📖 [快速入門指南](docs/QUICK_START.md) - 完整工作流程
+- 📚 [技術文檔](docs/TECHNICAL_DOCUMENTATION.md) - 系統架構
+- 🛠️ [腳本使用指南](scripts/README.md) - 30 核心工具（已分類至 8 個子目錄）
+- ⚙️ [配置參考](docs/CONFIG_REFERENCE.md) - YAML 配置說明
+- 🐛 [疑難排解](docs/TROUBLESHOOTING.md) - 常見問題
 
 ---
 
@@ -138,32 +158,54 @@ graph TD
 
 ---
 
-## 相關文件與資源
-- DNS 生成與校準：`docs/KOLMOGOROV_DNS_GUIDE.md`, `scripts/README_REYNOLDS_CALCULATOR.md`
-- A100 部署：`A100_DEPLOYMENT_GUIDE.md`
-- 感測器與 QR-Pivot：`scripts/README.md`, `docs/QR_SENSOR_VISUALIZATION_GUIDE.md`
-- 配置模板：`configs/templates/`，更多設定見 `configs/README.md`
-- RANS 先驗使用：`docs/RANS_PRIOR_GUIDE.md`
-- 課程學習設定：`docs/KOLMOGOROV_CURRICULUM_GUIDE.md`
+## 📚 文檔導航
 
-## 📈 最近更新 (2025-12-12)
+### 核心文檔（5 個精簡指南）
+- 📖 [快速入門](docs/QUICK_START.md) - 完整工作流程與常用命令
+- 📚 [技術文檔](docs/TECHNICAL_DOCUMENTATION.md) - 系統架構與設計原理
+- ⚙️ [配置參考](docs/CONFIG_REFERENCE.md) - YAML 配置說明
+- 🔧 [API 參考](docs/API_REFERENCE.md) - 腳本使用說明
+- 🐛 [疑難排解](docs/TROUBLESHOOTING.md) - 常見問題與診斷流程
 
-### ✅ RANS Prior Loss Integration
+### 專題指南
+- 🔬 DNS 生成：`docs/archive/KOLMOGOROV_DNS_GUIDE.md`
+- 🎯 感測器優化：`docs/archive/QR_SENSOR_VISUALIZATION_GUIDE.md`
+- 🧮 雷諾數計算：`scripts/README_REYNOLDS_CALCULATOR.md`
+- 📈 課程學習：`docs/archive/KOLMOGOROV_CURRICULUM_GUIDE.md`
+- 🖥️ A100 部署：`A100_DEPLOYMENT_GUIDE.md`
+
+### 配置模板
+- 🏃 2D 快速基準：`configs/templates/2d_quick_baseline.yml` (5-10 min)
+- 🔍 2D 消融實驗：`configs/templates/2d_medium_ablation.yml` (15-30 min)
+- 📚 3D 課程學習：`configs/templates/3d_slab_curriculum.yml` (30-60 min)
+- 🎯 3D 論文級結果：`configs/templates/3d_full_production.yml` (2-8 hrs)
+
+詳見 `configs/templates/README.md` 獲取完整模板說明。
+
+## 📈 最近更新 (2025-12-13)
+
+### ✅ 專案整理與文檔重構
+- **文檔精簡**：33 個冗長文檔 → 5 個核心文檔（85% 減量）
+  - 📖 快速入門、📚 技術文檔、⚙️ 配置參考、🔧 API 參考、🐛 疑難排解
+  - 舊文檔移至 `docs/archive/` 供參考
+- **腳本分類**：30 核心腳本組織至 8 個功能子目錄
+  - `train/` (1), `evaluate/` (4), `visualize/` (6), `generate/dns/` (3), `generate/sensors/` (2)
+  - `calculate/` (2), `compare/` (3), `tools/` (3), `validation/` (7), `debug/` (5)
+  - 23 個歷史腳本歸檔至 `scripts/archive/`（實驗性/一次性/重複功能）
+- **路徑更新**：所有文檔與配置已更新為新目錄結構
+
+### ✅ RANS Prior Loss Integration (2025-12-12)
 - **實作完成**：`PriorLossManager` 完整整合至 `trainer.py`，支援動態一致性權重調整
 - **配置支援**：`lowfi_prior` 配置區塊，可設定 `consistency_weight` 與 `variable_weights`
 - **訓練驗證**：已驗證 prior loss 正確計算並記錄至訓練日誌與 TensorBoard
 
-### ✅ Curriculum Learning with Prior Decay
+### ✅ Curriculum Learning with Prior Decay (2025-12-12)
 - **策略設計**：3 階段損失權重調整（固定 Re=50）
   - Stage 1 (0-300): 強先驗引導 (prior_weight=1.0, PDE=0.5)
   - Stage 2 (300-700): 平衡先驗與物理 (prior_weight=0.3, PDE=1.0)
   - Stage 3 (700-1000): 弱先驗精煉 (prior_weight=0.1, PDE=1.0)
 - **配置檔案**：`configs/kolmogorov_re50_kf4_K100_rans_curriculum.yml`
 - **目標指標**：壓力梯度 L2 error < 30% (vs 目前 ~100%)
-
-### 🔧 CurriculumScheduler 修正
-- **問題修正**：修正 Kolmogorov Flow 配置中 `Re_tau` → `Re` 的錯誤映射
-- **兼容性**：支援 Channel Flow (`Re_tau`, `pressure_gradient`) 與 Kolmogorov Flow (`Re`, `forcing_amplitude`) 兩種場景
 
 ### ⚠️ 已知限制
 - **記憶體需求**：MPS (Apple Silicon) 在 10K PDE 點時可能 OOM（20GB 限制），建議降低至 5K 或使用 CUDA GPU

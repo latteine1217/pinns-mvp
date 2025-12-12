@@ -77,12 +77,14 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100/sensor_data.json
+  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100_v7/sensor_data.json  # V7: Spatial QR + Min-Distance Filter
 
   quality_metrics:
-    condition_number: TBD
+    condition_number: TBD  # V7 method
     energy_ratio: TBD
-    min_distance: TBD
+    unique_x_coverage: 0.178  # 91/512 unique X coordinates
+    unique_y_coverage: 0.166  # 85/512 unique Y coordinates
+    max_clustering: 0.10      # Maximum 10% sensors per grid cell
 
 # ====================================================================
 # 模型架構 - 完整版特徵

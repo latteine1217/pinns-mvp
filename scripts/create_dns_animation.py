@@ -45,7 +45,7 @@ def create_frame(u, v, time, X, Y, vmin_u, vmax_u, vmin_v, vmax_v, vmin_vort, vm
     
     # u 速度場
     ax1 = fig.add_subplot(gs[0, 0])
-    im1 = ax1.contourf(X, Y, u, levels=20, cmap='RdBu_r', vmin=vmin_u, vmax=vmax_u)
+    im1 = ax1.contourf(X, Y, u, levels=256, cmap='RdBu_r', vmin=vmin_u, vmax=vmax_u)
     ax1.set_title(f'u velocity', fontsize=13, fontweight='bold')
     ax1.set_xlabel('x', fontsize=11)
     ax1.set_ylabel('y', fontsize=11)
@@ -53,7 +53,7 @@ def create_frame(u, v, time, X, Y, vmin_u, vmax_u, vmin_v, vmax_v, vmin_vort, vm
     
     # v 速度場
     ax2 = fig.add_subplot(gs[0, 1])
-    im2 = ax2.contourf(X, Y, v, levels=20, cmap='RdBu_r', vmin=vmin_v, vmax=vmax_v)
+    im2 = ax2.contourf(X, Y, v, levels=256, cmap='RdBu_r', vmin=vmin_v, vmax=vmax_v)
     ax2.set_title(f'v velocity', fontsize=13, fontweight='bold')
     ax2.set_xlabel('x', fontsize=11)
     ax2.set_ylabel('y', fontsize=11)
@@ -61,7 +61,7 @@ def create_frame(u, v, time, X, Y, vmin_u, vmax_u, vmin_v, vmax_v, vmin_vort, vm
     
     # 渦度場
     ax3 = fig.add_subplot(gs[0, 2])
-    im3 = ax3.contourf(X, Y, vorticity, levels=20, cmap='RdBu_r', vmin=vmin_vort, vmax=vmax_vort)
+    im3 = ax3.contourf(X, Y, vorticity, levels=256, cmap='RdBu_r', vmin=vmin_vort, vmax=vmax_vort)
     ax3.set_title(f'Vorticity', fontsize=13, fontweight='bold')
     ax3.set_xlabel('x', fontsize=11)
     ax3.set_ylabel('y', fontsize=11)
@@ -69,7 +69,7 @@ def create_frame(u, v, time, X, Y, vmin_u, vmax_u, vmin_v, vmax_v, vmin_vort, vm
     
     # 速度大小
     ax4 = fig.add_subplot(gs[0, 3])
-    im4 = ax4.contourf(X, Y, speed, levels=20, cmap='viridis')
+    im4 = ax4.contourf(X, Y, speed, levels=256, cmap='viridis')
     ax4.set_title(f'Speed', fontsize=13, fontweight='bold')
     ax4.set_xlabel('x', fontsize=11)
     ax4.set_ylabel('y', fontsize=11)

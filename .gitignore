@@ -82,6 +82,10 @@ __pycache__/
 log/
 *.log
 
+# TensorBoard logs
+runs/
+tensorboard_logs/
+
 # Process IDs
 *.pid
 
