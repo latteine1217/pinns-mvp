@@ -366,98 +366,27 @@ class ChannelFlowLoader:
         
         logger.info(f"Loading sensor data from {cache_path}")
         
-        # 載入 NPZ 資料
-        data = np.load(cache_path, allow_pickle=True)
+        # 使用 SensorDataReader 讀取資料
+        z_default = self.config.get('normalization', {}).get('slice_config', {}).get('z_position', 4.71)
+        reader = SensorDataReader(z_default=z_default)
+        lowfi_data = reader.read(cache_path)
         
-        # 提取感測點資訊（支援多種鍵名）
-        if 'sensor_points' in data:
-            sensor_points = data['sensor_points']
-        elif 'coords' in data:
-            sensor_points = data['coords']  # ⭐ 新格式：使用 'coords' 鍵
-        elif 'coords_2d' in data:
-            # 2D 座標需要擴展到 3D (x, y) → (x, y, z_slice)
-            coords_2d = data['coords_2d']
-            z_slice = self.config.get('normalization', {}).get('slice_config', {}).get('z_position', 4.71)
-            sensor_points = np.column_stack([
-                coords_2d[:, 0],  # x
-                coords_2d[:, 1],  # y
-                np.full(len(coords_2d), z_slice)  # z (constant)
-            ])
-        else:
-            raise KeyError(f"Cannot find sensor coordinates in {cache_path}. Expected 'sensor_points', 'coords', or 'coords_2d'")
+        # 從 LowFiData 提取感測點和值
+        sensor_points = np.column_stack([
+            lowfi_data.coordinates['x'],
+            lowfi_data.coordinates['y'],
+            lowfi_data.coordinates['z']
+        ])
+        sensor_values = lowfi_data.fields
         
-        # 處理 sensor_data (可能是物件、分離的陣列、或直接的 2D ndarray)
-        if 'sensor_data' in data:
-            sensor_data_raw = data['sensor_data']
-            
-            # 情況 1: 0 維物件（包含字典）
-            if sensor_data_raw.ndim == 0:
-                sensor_data_raw = sensor_data_raw.item()
-            
-            # 情況 2: 2D ndarray (K, n_vars) - 直接儲存速度分量
-            elif sensor_data_raw.ndim == 2:
-                # 從 metadata 或預設變數名稱提取欄位
-                if 'metadata' in data:
-                    metadata = data['metadata'].item() if data['metadata'].ndim == 0 else data['metadata']
-                    variables = metadata.get('variables', ['u', 'v', 'w'])
-                else:
-                    # 根據欄位數判斷
-                    n_vars = sensor_data_raw.shape[1]
-                    if n_vars == 2:
-                        variables = ['u', 'v']
-                    elif n_vars == 3:
-                        variables = ['u', 'v', 'w']
-                    elif n_vars == 4:
-                        variables = ['u', 'v', 'w', 'p']
-                    else:
-                        raise ValueError(f"Cannot infer variable names for {n_vars} columns")
-                
-                # 將 ndarray 轉換為字典格式
-                sensor_data_raw = {
-                    var: sensor_data_raw[:, i]
-                    for i, var in enumerate(variables)
-                }
-        else:
-            # 情況 3: 分離的欄位（sensor_u, sensor_v 等 或直接 u, v, w, p）
-            sensor_data_raw = {}
-            
-            # 優先檢查 'sensor_*' 格式
-            for field in ['u', 'v', 'w', 'p']:
-                key_sensor = f'sensor_{field}'
-                if key_sensor in data:
-                    sensor_data_raw[field] = data[key_sensor]
-            
-            # ⭐ 若無 'sensor_*'，嘗試直接鍵名（新格式）
-            if not sensor_data_raw:
-                for field in ['u', 'v', 'w', 'p']:
-                    if field in data:
-                        sensor_data_raw[field] = data[field]
-            
-            if not sensor_data_raw:
-                raise KeyError(f"Cannot find velocity/pressure data in {cache_path}. Expected 'sensor_data', 'sensor_u/v/w/p', or 'u/v/w/p'")
-        
-        sensor_values = {
-            field: np.asarray(values).reshape(-1)
-            for field, values in sensor_data_raw.items()
-        }
-        
-        # 提取 sensor_indices (可能不存在，生成預設索引)
-        if 'sensor_indices' in data:
-            sensor_indices = np.asarray(data['sensor_indices'])
-        else:
-            # 如果沒有 indices，生成連續索引
-            sensor_indices = np.arange(len(sensor_points))
-        
-        # 提取選擇資訊
-        if 'selection_info' in data:
-            selection_info = data['selection_info'].item() if data['selection_info'].ndim == 0 else data['selection_info']
-        else:
-            selection_info = {
-                'strategy': str(data.get('strategy', strategy)),
-                'K_requested': int(data.get('K_requested', K)),
-                'K_actual': int(len(sensor_points)),
-                'selection_timestamp': str(data.get('timestamp', 'unknown'))
-            }
+        # 提取 sensor_indices 和 selection_info
+        sensor_indices = lowfi_data.metadata.get('sensor_indices', np.arange(len(sensor_points)))
+        selection_info = lowfi_data.metadata.get('selection_info', {
+            'strategy': strategy,
+            'K_requested': K,
+            'K_actual': len(sensor_points),
+            'selection_timestamp': 'unknown'
+        })
         
         # 添加噪聲 (如果指定)
         if noise_sigma is not None and noise_sigma > 0:
