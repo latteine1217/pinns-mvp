@@ -26,6 +26,7 @@ from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWei
 from pinnx.train.loop import TrainingLoopManager, apply_point_weights_to_loss
 from pinnx.utils.normalization import InputNormalizer, NormalizationConfig, DataNormalizer
 from pinnx.evals.metrics import relative_L2
+from pinnx.physics.turbulence_utils import preprocess_rans_prior, preprocess_rans_prior_from_config
 
 
 class Trainer:
@@ -784,7 +785,23 @@ class Trainer:
                     if 'lowfi_prior' in data_batch and data_batch['lowfi_prior'] is not None:
                         lowfi_prior = data_batch['lowfi_prior']
                         if 'nu_t_pde' in lowfi_prior:
-                            nu_t_pde = lowfi_prior['nu_t_pde']
+                            nu_t_raw = lowfi_prior['nu_t_pde']
+                            
+                            # 🆕 預處理 RANS 湍流黏度（damping + clipping + smoothing）
+                            if nu_t_raw is not None and hasattr(self, 'config'):
+                                preprocessing_cfg = self.config.get('lowfi_prior', {}).get('preprocessing', {})
+                                if preprocessing_cfg.get('enabled', True):
+                                    # 使用簡化介面（自動從配置推斷所有參數）
+                                    nu_t_pde, stats = preprocess_rans_prior_from_config(
+                                        nu_t_raw,
+                                        coords_pde_physical,
+                                        self.config,
+                                        epoch=epoch
+                                    )
+                                else:
+                                    nu_t_pde = nu_t_raw
+                            else:
+                                nu_t_pde = nu_t_raw
                     kwargs['nu_t'] = nu_t_pde
                 
                 residuals = residual_fn(
@@ -1687,28 +1704,27 @@ class Trainer:
             # 更新全局步數
             self.global_step += 1
             
-            # 🚀 課程訓練：處理階段切換
+            # 🚀 課程訓練：LR 控制與階段管理
+            # Patch 1: 強制每個 epoch 應用課程 LR（如果定義），確保控制權
+            if '_curriculum_lr' in loss_dict:
+                target_lr = loss_dict['_curriculum_lr']
+                # 強制寫入 optimizer
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = target_lr
+                
+                # 若有 scheduler，同步 base_lrs 防止漂移
+                if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'base_lrs'):
+                    self.lr_scheduler.base_lrs = [target_lr] * len(self.lr_scheduler.base_lrs)
+
+            # 處理階段切換（僅日誌與檢查點）
             if '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5:
-                # 只有當 stage 明確指定 lr 時才重設學習率
+                stage_name = loss_dict.get('_curriculum_stage', f'stage_{epoch}')
+                logging.info(f"📉 課程階段切換: {stage_name}")
                 if '_curriculum_lr' in loss_dict:
-                    new_lr = loss_dict['_curriculum_lr']
-                    for param_group in self.optimizer.param_groups:
-                        param_group['lr'] = new_lr
-                    
-                    # 🆕 同步更新 scheduler 的 base_lrs（避免下次 step() 覆蓋）
-                    if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'base_lrs'):
-                        self.lr_scheduler.base_lrs = [new_lr] * len(self.lr_scheduler.base_lrs)
-                        logging.info(f"📉 課程訓練：學習率重設為 {new_lr:.6f}，scheduler base_lrs 已同步")
-                    else:
-                        logging.info(f"📉 課程訓練：學習率重設為 {new_lr:.6f}")
-                else:
-                    # 繼續使用全域 scheduler（不重設 LR）
-                    current_lr = self.optimizer.param_groups[0]['lr']
-                    logging.info(f"📉 課程訓練：繼續使用全域 scheduler（當前 LR: {current_lr:.6f}）")
+                     logging.info(f"   學習率強制設置為: {loss_dict['_curriculum_lr']:.2e}")
                 
                 # 保存階段檢查點（如果啟用）
                 if self.log_cfg.get('save_stage_checkpoints', False):
-                    stage_name = loss_dict.get('_curriculum_stage', f'stage_{epoch}')
                     self.save_checkpoint(epoch, loss_dict, is_best=False)
                     logging.info(f"💾 階段檢查點已保存: {stage_name}")
             
@@ -2059,7 +2075,14 @@ class Trainer:
             epoch: 當前 epoch
             metrics: 訓練指標
         """
+        current_lr = self.get_current_lr()
         log_str = f"Epoch {epoch}/{self.train_cfg.get('epochs', '?')}"
+        
+        # Patch 2: Explicitly log effective LR first
+        log_str += f" | LR: {current_lr:.2e}"
+
+        if '_curriculum_stage' in metrics:
+             log_str += f" | Stage: {metrics['_curriculum_stage']}"
         
         for key, value in metrics.items():
             # 跳過字典類型的值（如 gradnorm_weights, applied_weights）
@@ -2068,11 +2091,19 @@ class Trainer:
             # 跳過非數值類型（如字串、列表等）
             if not isinstance(value, (int, float)):
                 continue
+            # Skip internal keys starting with _
+            if key.startswith('_'):
+                continue
+            
             log_str += f" | {key}: {value:.6f}"
         
-        log_str += f" | lr: {self.get_current_lr():.2e}"
-        
         logging.info(log_str)
+        
+        # Patch 2: Log effective weights if available (Separate line for clarity)
+        if 'applied_weights' in metrics:
+             # Format dictionary for nicer logging
+             weights_str = ", ".join([f"{k}={v:.2e}" for k,v in metrics['applied_weights'].items()])
+             logging.info(f"   Effective Weights: {{{weights_str}}}")
         
         # 記錄到歷史
         for key, value in metrics.items():

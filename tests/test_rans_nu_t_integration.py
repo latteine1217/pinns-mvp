@@ -192,7 +192,8 @@ class TestRANSNuTIntegration:
         pred = torch.cat([u, v, p, S], dim=1)
         
         nu = 1e-3
-        nu_t = torch.ones(coords.shape[0], 1, requires_grad=True) * 0.05
+        # 創建 leaf tensor（直接賦值，不經過運算）
+        nu_t = torch.full((coords.shape[0], 1), 0.05, requires_grad=True)
         
         # 計算殘差
         mom_x, mom_y, cont = ns_residual_2d(coords, pred, nu, nu_t=nu_t)
