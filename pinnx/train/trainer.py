@@ -941,7 +941,7 @@ class Trainer:
     
     def train(self) -> Dict[str, Any]:
         """
-        執行完整訓練循環
+        執行完整訓練循環（Phase 2 重構版）
         
         Returns:
             訓練歷史與最終結果字典
@@ -952,364 +952,86 @@ class Trainer:
             - 'best_metric': 最佳指標值（若啟用早停）
             - 'history': 訓練歷史（每 epoch 的損失）
         """
+        from pinnx.train.training_loop_manager import TrainingLoopManager
+        
+        # === 初始化訓練配置 ===
+        max_epochs, log_freq, checkpoint_freq, validation_freq = self._setup_training_config()
+        loop_helper = TrainingLoopManager(self.config, self.writer)
+        start_time = time.time()
+        start_epoch = self.epoch
+        
         logging.info("=" * 80)
         logging.info("🚀 開始訓練")
         logging.info(f"   模型: {self.model.__class__.__name__}")
         logging.info(f"   優化器: {self.optimizer.__class__.__name__}")
-        logging.info(f"   最大 Epochs: {self.train_cfg.get('epochs', 'N/A')}")
+        logging.info(f"   起始 Epoch: {start_epoch}")
+        logging.info(f"   最大 Epochs: {max_epochs}")
         logging.info(f"   早停: {'啟用' if self.early_stopping_enabled else '禁用'}")
         logging.info("=" * 80)
-        
-        # 訓練配置
-        max_epochs = self.train_cfg.get('epochs', self.train_cfg.get('max_epochs', 1000))
-        log_freq = self.train_cfg.get('log_interval', self.log_cfg.get('log_freq', 50))
-        checkpoint_freq = self.train_cfg.get('checkpoint_freq', 500)
-        validation_freq = self.train_cfg.get('validation_freq', self.train_cfg.get('checkpoint_interval', 100))
-        
-        # 訓練歷史記錄
-        history = {
-            'total_loss': [],
-            'val_loss': [],
-            'epoch': []
-        }
-        
-        # 時間記錄
-        start_time = time.time()
-        last_val_metrics: Optional[Dict[str, float]] = None
         
         # 初始化損失字典（防止 epoch=0 時未定義）
         loss_dict = {'total_loss': 0.0, 'residual_loss': 0.0, 'bc_loss': 0.0, 'data_loss': 0.0}
         
-        # 確定訓練起始 epoch（支援從 checkpoint 恢復）
-        start_epoch = self.epoch  # 若從 checkpoint 恢復，self.epoch 會被 load_checkpoint() 設定
         if start_epoch > 0:
             logging.info(f"🔄 從 epoch {start_epoch} 恢復訓練")
         
-        # 訓練循環
+        # === 訓練循環 ===
         for epoch in range(start_epoch, max_epochs):
             self.epoch = epoch
             
-            # 🔧 自適應採樣（如果啟用）
-            if self.loop_manager is not None:
-                # 更新訓練批次
-                self.training_data = self.loop_manager.update_training_batch(self.training_data, epoch)
-                
-                # 檢查是否需要重採樣（傳遞 loss_dict 而非殘差）
-                if epoch > 0 and self.loop_manager.should_resample_collocation_points(
-                    epoch, 
-                    history['total_loss'][-1] if history['total_loss'] else float('inf'),
-                    None  # residuals 參數設為 None
-                ):
-                    try:
-                        # 提取域邊界
-                        domain_bounds = {
-                            'x': (self.config['domain']['x_min'], self.config['domain']['x_max']),
-                            'y': (self.config['domain']['y_min'], self.config['domain']['y_max'])
-                        }
-                        if 'z_min' in self.config['domain']:
-                            domain_bounds['z'] = (self.config['domain']['z_min'], self.config['domain']['z_max'])
-                        if 't_min' in self.config['domain']:
-                            domain_bounds['t'] = (self.config['domain']['t_min'], self.config['domain']['t_max'])
-                        
-                        new_points, metrics = self.loop_manager.resample_collocation_points(
-                            self.model, self.physics, domain_bounds, epoch, str(self.device)
-                        )
-                        logging.info(f"🔄 重採樣 {len(new_points)} 個配點（epoch {epoch}）")
-                        logging.debug(f"   指標: {metrics}")
-                    except Exception as e:
-                        logging.warning(f"⚠️ 重採樣失敗（epoch {epoch}）: {e}")
+            # 1. 自適應更新（adaptive sampling + fourier annealing）
+            self.training_data = loop_helper.coordinate_adaptive_updates(
+                epoch, self.loop_manager, self.fourier_annealing,
+                self.model, self.physics, self.training_data, self.config,
+                self.device, loop_helper.get_history()
+            )
             
-            # 🎯 Fourier 退火更新（如果啟用）
-            if self.fourier_annealing is not None:
-                try:
-                    # 檢查模型是否有 Fourier features 模組
-                    fourier_module = None
-                    
-                    # 嘗試從模型中找到 Fourier features
-                    if hasattr(self.model, 'fourier_features'):
-                        fourier_module = self.model.fourier_features
-                    elif hasattr(self.model, 'encoder') and hasattr(self.model.encoder, 'fourier_features'):
-                        fourier_module = self.model.encoder.fourier_features
-                    
-                    if fourier_module is not None:
-                        # 獲取更新前的狀態（用於日誌）
-                        old_info = self.fourier_annealing.get_info()
-                        
-                        # 執行更新
-                        self.fourier_annealing.update_fourier_features(
-                            fourier_module, 
-                            current_epoch=epoch, 
-                            total_epochs=max_epochs
-                        )
-                        
-                        # 獲取更新後的狀態
-                        new_info = self.fourier_annealing.get_info()
-                        
-                        # 檢查是否發生階段切換（比較 stage_index）
-                        if old_info['stage_index'] != new_info['stage_index']:
-                            logging.info(f"🎯 Fourier 退火階段切換：{new_info['stage_description']}")
-                            logging.info(f"   當前頻率: {new_info['active_frequencies']}")
-                            logging.info(f"   輸出維度: {fourier_module.out_dim}")
-                    
-                except AttributeError as e:
-                    # 模型不支持 Fourier 退火，警告一次後禁用
-                    if epoch == 0:
-                        logging.warning(f"⚠️ 模型不支持 Fourier 退火：{e}，已自動禁用")
-                    self.fourier_annealing = None
-                except Exception as e:
-                    logging.error(f"❌ Fourier 退火更新失敗（epoch {epoch}）: {e}")
-            
-            # ✅ 執行訓練步驟（傳遞 training_data 和 epoch）
+            # 2. 執行訓練步驟
             loss_dict = self.step(self.training_data, epoch)
             
-            # ✅ 驗證指標計算
+            # 3. 驗證指標計算
             if validation_freq > 0 and epoch % validation_freq == 0:
                 val_metrics = self.validate()
                 if val_metrics is not None:
-                    last_val_metrics = val_metrics
                     loss_dict['val_loss'] = val_metrics['relative_l2']
                     loss_dict['val_mse'] = val_metrics['mse']
             
-            # 記錄歷史
-            history['total_loss'].append(loss_dict['total_loss'])
-            history['epoch'].append(epoch)
-            if 'val_loss' in loss_dict:
-                history['val_loss'].append(loss_dict['val_loss'])
-            
-            # 📊 TensorBoard 記錄（每 log_freq 記錄一次）
-            if self.writer is not None and epoch % log_freq == 0:
-                # ====================================================================
-                # 1. 總損失與主要分量
-                # ====================================================================
-                self.writer.add_scalar('Loss/total', loss_dict.get('total_loss', 0.0), epoch)
-                self.writer.add_scalar('Loss/data', loss_dict.get('data_loss', 0.0), epoch)
-                self.writer.add_scalar('Loss/pde', loss_dict.get('pde_loss', 0.0), epoch)
-                self.writer.add_scalar('Loss/boundary', loss_dict.get('bc_loss', 0.0), epoch)
-                
-                # ====================================================================
-                # 2. PDE 子項（動量方程與連續性方程）
-                # ====================================================================
-                if 'momentum_x_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/PDE/momentum_x', loss_dict['momentum_x_loss'], epoch)
-                if 'momentum_y_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/PDE/momentum_y', loss_dict['momentum_y_loss'], epoch)
-                if 'momentum_z_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/PDE/momentum_z', loss_dict['momentum_z_loss'], epoch)
-                if 'continuity_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/PDE/continuity', loss_dict['continuity_loss'], epoch)
-                if 'div_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/PDE/divergence', loss_dict['div_loss'], epoch)
-                
-                # ====================================================================
-                # 3. 數據擬合損失（各變量）
-                # ====================================================================
-                if 'u_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Data/u', loss_dict['u_loss'], epoch)
-                if 'v_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Data/v', loss_dict['v_loss'], epoch)
-                if 'w_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Data/w', loss_dict['w_loss'], epoch)
-                if 'pressure_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Data/pressure', loss_dict['pressure_loss'], epoch)
-                
-                # ====================================================================
-                # 4. Weighted Loss（分析權重平衡）
-                # ====================================================================
-                if 'weighted_data_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Weighted/data', loss_dict['weighted_data_loss'], epoch)
-                if 'weighted_pde_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Weighted/pde', loss_dict['weighted_pde_loss'], epoch)
-                if 'weighted_div_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Weighted/continuity', loss_dict['weighted_div_loss'], epoch)
-                if 'weighted_bc_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Weighted/boundary', loss_dict['weighted_bc_loss'], epoch)
-                
-                # ====================================================================
-                # 5. RANS Prior Loss（低保真先驗）
-                # ====================================================================
-                if 'prior_consistency_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Prior/total', loss_dict['prior_consistency_loss'], epoch)
-                if 'prior_loss_u' in loss_dict:
-                    self.writer.add_scalar('Loss/Prior/u', loss_dict['prior_loss_u'], epoch)
-                if 'prior_loss_v' in loss_dict:
-                    self.writer.add_scalar('Loss/Prior/v', loss_dict['prior_loss_v'], epoch)
-                if 'prior_loss_p' in loss_dict:
-                    self.writer.add_scalar('Loss/Prior/p', loss_dict['prior_loss_p'], epoch)
-                
-                # ====================================================================
-                # 6. 邊界條件損失
-                # ====================================================================
-                if 'periodic_x_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/BC/periodic_x', loss_dict['periodic_x_loss'], epoch)
-                if 'periodic_y_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/BC/periodic_y', loss_dict['periodic_y_loss'], epoch)
-                if 'inlet_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/BC/inlet', loss_dict['inlet_loss'], epoch)
-                if 'outlet_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/BC/outlet', loss_dict['outlet_loss'], epoch)
-                if 'wall_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/BC/wall', loss_dict['wall_loss'], epoch)
-                
-                # ====================================================================
-                # 7. 正則化項
-                # ====================================================================
-                if 'regularization_loss' in loss_dict:
-                    self.writer.add_scalar('Loss/Regularization/total', loss_dict['regularization_loss'], epoch)
-                if 'l2_reg' in loss_dict:
-                    self.writer.add_scalar('Loss/Regularization/l2', loss_dict['l2_reg'], epoch)
-                if 'gradient_penalty' in loss_dict:
-                    self.writer.add_scalar('Loss/Regularization/gradient', loss_dict['gradient_penalty'], epoch)
-                
-                # ====================================================================
-                # 8. 驗證指標
-                # ====================================================================
-                if 'val_loss' in loss_dict:
-                    self.writer.add_scalar('Validation/relative_l2', loss_dict['val_loss'], epoch)
-                if 'val_mse' in loss_dict:
-                    self.writer.add_scalar('Validation/mse', loss_dict['val_mse'], epoch)
-                
-                # ====================================================================
-                # 9. 訓練超參數
-                # ====================================================================
-                current_lr = self.get_current_lr()
-                self.writer.add_scalar('Training/learning_rate', current_lr, epoch)
-                
-                # ====================================================================
-                # 10. 梯度與權重統計（每 log_freq*2 記錄一次，避免過多）
-                # ====================================================================
-                if epoch % (log_freq * 2) == 0:
-                    for name, param in self.model.named_parameters():
-                        if param.grad is not None:
-                            grad_norm = param.grad.norm().item()
-                            self.writer.add_scalar(f'Gradients/norm/{name}', grad_norm, epoch)
-                            self.writer.add_histogram(f'Gradients/hist/{name}', param.grad, epoch)
-                            self.writer.add_histogram(f'Weights/{name}', param, epoch)
-            
-            # 更新全局步數
-            self.global_step += 1
-            
-            # 🚀 課程訓練：LR 控制與階段管理
-            # Patch 1: 強制每個 epoch 應用課程 LR（如果定義），確保控制權
-            if '_curriculum_lr' in loss_dict:
-                target_lr = loss_dict['_curriculum_lr']
-                # 強制寫入 optimizer
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = target_lr
-                
-                # 若有 scheduler，同步 base_lrs 防止漂移
-                if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'base_lrs'):
-                    self.lr_scheduler.base_lrs = [target_lr] * len(self.lr_scheduler.base_lrs)
-
-            # 處理階段切換（僅日誌與檢查點）
-            if '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5:
-                stage_name = loss_dict.get('_curriculum_stage', f'stage_{epoch}')
-                logging.info(f"📉 課程階段切換: {stage_name}")
-                if '_curriculum_lr' in loss_dict:
-                     logging.info(f"   學習率強制設置為: {loss_dict['_curriculum_lr']:.2e}")
-                
-                # 保存階段檢查點（如果啟用）
-                if self.log_cfg.get('save_stage_checkpoints', False):
-                    self.save_checkpoint(epoch, loss_dict, is_best=False)
-                    logging.info(f"💾 階段檢查點已保存: {stage_name}")
-            
-            # 📉 更新學習率調度器（課程訓練與全域 scheduler 並存）
-            if self.lr_scheduler is not None:
-                # 課程訓練時：只在非切換 epoch 更新 scheduler
-                if hasattr(self, 'curriculum_weighter'):
-                    is_transition = '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5
-                    if not is_transition:
-                        self.lr_scheduler.step()
-                else:
-                    # 非課程訓練：正常更新
-                    self.lr_scheduler.step()
-            
-            # 📊 日誌輸出
+            # 4. 記錄歷史與 TensorBoard 日誌
+            loop_helper.update_history(loss_dict, epoch)
             if epoch % log_freq == 0:
+                loop_helper.log_losses_to_tensorboard(loss_dict, epoch)
+                loop_helper.log_hyperparameters(self.get_current_lr(), epoch)
                 self.log_epoch(epoch, loss_dict)
             
-            # 💾 檢查點保存
+            # 5. 記錄梯度與權重統計（降低頻率）
+            if epoch % (log_freq * 2) == 0:
+                loop_helper.log_gradients_and_weights(self.model, epoch)
+            
+            # 6. 更新全局步數
+            self.global_step += 1
+            
+            # 7. 課程訓練 LR 控制
+            self._handle_curriculum_lr(loss_dict)
+            
+            # 8. 學習率調度
+            self._update_lr_scheduler(loss_dict)
+            
+            # 9. 檢查點保存
             if checkpoint_freq > 0 and epoch % checkpoint_freq == 0 and epoch > 0:
                 self.save_checkpoint(epoch, loss_dict)
                 logging.info(f"💾 檢查點已保存（epoch {epoch}）")
             
-            # 🛑 早停檢查
-            if self.early_stopping_enabled:
-                # 選擇監控指標
-                metric_name = self.early_stopping_cfg.get('monitor', 'total_loss')
-                if metric_name == 'val_loss' and 'val_loss' in loss_dict:
-                    current_metric = loss_dict['val_loss']
-                elif metric_name in loss_dict:
-                    current_metric = loss_dict[metric_name]
-                else:
-                    current_metric = loss_dict['total_loss']
-                
-                # 檢查是否應該停止
-                if self.check_early_stopping(current_metric):
-                    logging.info(f"🛑 早停觸發於 epoch {epoch}")
-                    logging.info(f"   最佳指標: {self.best_val_loss:.6f}（epoch {self.best_epoch}）")
-                    
-                    # 恢復最佳模型（如果啟用）
-                    if self.early_stopping_cfg.get('restore_best_weights', True) and self.best_model_state is not None:
-                        self.model.load_state_dict(self.best_model_state)
-                        logging.info(f"✅ 已恢復最佳模型（epoch {self.best_epoch}）")
-                    
-                    break
+            # 10. 早停檢查
+            if self._check_and_handle_early_stopping(loss_dict, epoch):
+                break
             
-            # 快速收斂檢查（可配置）
-            if self.convergence_threshold is not None and loss_dict['total_loss'] < self.convergence_threshold:
-                logging.info(f"✅ 快速收斂於 epoch {epoch}（loss < {self.convergence_threshold:.2e}）")
+            # 11. 快速收斂檢查
+            if self._check_convergence(loss_dict, epoch):
                 break
         
-        # 訓練結束（處理 epoch 變數作用域）
+        # === 訓練結束 ===
         final_epoch = epoch if 'epoch' in locals() else max_epochs - 1
-        final_loss = loss_dict['total_loss']
-        
-        total_time = time.time() - start_time
-        logging.info("=" * 80)
-        logging.info(f"✅ 訓練完成")
-        logging.info(f"   總時間: {total_time:.1f}s")
-        logging.info(f"   完成 Epochs: {final_epoch + 1}")
-        logging.info(f"   最終損失: {final_loss:.6f}")
-        if self.early_stopping_enabled and self.best_epoch >= 0:
-            logging.info(f"   最佳 Epoch: {self.best_epoch}")
-            logging.info(f"   最佳指標: {self.best_val_loss:.6f}")
-        logging.info("=" * 80)
-        
-        # 保存最終檢查點
-        final_checkpoint = self.save_checkpoint(final_epoch + 1, loss_dict, is_best=False)
-        logging.info(f"💾 最終模型已保存")
-        
-        # 關閉 TensorBoard writer
-        if self.writer is not None:
-            # 記錄最終超參數與指標
-            hparams = {
-                'lr': self.train_cfg.get('lr', 1e-3),
-                'optimizer': self.optimizer.__class__.__name__,
-                'model_width': self.config.get('model', {}).get('width', 256),
-                'model_depth': self.config.get('model', {}).get('depth', 8),
-                'activation': self.config.get('model', {}).get('activation', 'sine'),
-                'K_sensors': self.config.get('sensors', {}).get('K', 0),
-            }
-            metrics = {
-                'hparam/final_loss': final_loss,
-                'hparam/best_loss': self.best_val_loss if self.early_stopping_enabled else final_loss,
-                'hparam/epochs': final_epoch + 1,
-            }
-            self.writer.add_hparams(hparams, metrics)
-            self.writer.flush()
-            self.writer.close()
-            logging.info("✅ TensorBoard 日誌已保存並關閉")
-        
-        # 返回訓練結果
-        return {
-            'final_loss': final_loss,
-            'training_time': total_time,
-            'epochs_completed': final_epoch + 1,
-            'best_epoch': self.best_epoch if self.early_stopping_enabled else final_epoch,
-            'best_metric': self.best_val_loss if self.early_stopping_enabled else final_loss,
-            'history': history,
-            'checkpoint_path': final_checkpoint
-        }
+        return self._finalize_training(final_epoch, loss_dict, start_time, loop_helper)
     
     # ========================================================================
     # 訓練循環輔助方法（Phase 2 重構）
