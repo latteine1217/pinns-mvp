@@ -1311,6 +1311,198 @@ class Trainer:
             'checkpoint_path': final_checkpoint
         }
     
+    # ========================================================================
+    # 訓練循環輔助方法（Phase 2 重構）
+    # ========================================================================
+    
+    def _setup_training_config(self) -> tuple[int, int, int, int]:
+        """
+        提取訓練配置參數
+        
+        Returns:
+            (max_epochs, log_freq, checkpoint_freq, validation_freq)
+        """
+        max_epochs = self.train_cfg.get('epochs', self.train_cfg.get('max_epochs', 1000))
+        log_freq = self.train_cfg.get('log_interval', self.log_cfg.get('log_freq', 50))
+        checkpoint_freq = self.train_cfg.get('checkpoint_freq', 500)
+        validation_freq = self.train_cfg.get('validation_freq', self.train_cfg.get('checkpoint_interval', 100))
+        return max_epochs, log_freq, checkpoint_freq, validation_freq
+    
+    def _handle_curriculum_lr(self, loss_dict: Dict):
+        """
+        處理課程訓練學習率控制
+        
+        Args:
+            loss_dict: 損失字典（可能包含 _curriculum_lr 和 _curriculum_transition）
+        """
+        if '_curriculum_lr' in loss_dict:
+            target_lr = loss_dict['_curriculum_lr']
+            # 強制寫入 optimizer
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = target_lr
+            
+            # 若有 scheduler，同步 base_lrs 防止漂移
+            if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'base_lrs'):
+                self.lr_scheduler.base_lrs = [target_lr] * len(self.lr_scheduler.base_lrs)
+        
+        # 處理階段切換（僅日誌與檢查點）
+        if '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5:
+            stage_name = loss_dict.get('_curriculum_stage', f'stage_{self.epoch}')
+            logging.info(f"📉 課程階段切換: {stage_name}")
+            if '_curriculum_lr' in loss_dict:
+                logging.info(f"   學習率強制設置為: {loss_dict['_curriculum_lr']:.2e}")
+            
+            # 保存階段檢查點（如果啟用）
+            if self.log_cfg.get('save_stage_checkpoints', False):
+                self.save_checkpoint(self.epoch, loss_dict, is_best=False)
+                logging.info(f"💾 階段檢查點已保存: {stage_name}")
+    
+    def _update_lr_scheduler(self, loss_dict: Dict):
+        """
+        更新學習率調度器
+        
+        Args:
+            loss_dict: 損失字典
+        """
+        if self.lr_scheduler is None:
+            return
+        
+        # 課程訓練時：只在非切換 epoch 更新 scheduler
+        if hasattr(self, 'curriculum_weighter'):
+            is_transition = '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5
+            if not is_transition:
+                self.lr_scheduler.step()
+        else:
+            # 非課程訓練：正常更新
+            self.lr_scheduler.step()
+    
+    def _check_and_handle_early_stopping(self, loss_dict: Dict, epoch: int) -> bool:
+        """
+        檢查並處理早停邏輯
+        
+        Args:
+            loss_dict: 損失字典
+            epoch: 當前 epoch
+        
+        Returns:
+            True 表示應該停止訓練
+        """
+        if not self.early_stopping_enabled:
+            return False
+        
+        # 選擇監控指標
+        metric_name = self.early_stopping_cfg.get('monitor', 'total_loss')
+        if metric_name == 'val_loss' and 'val_loss' in loss_dict:
+            current_metric = loss_dict['val_loss']
+        elif metric_name in loss_dict:
+            current_metric = loss_dict[metric_name]
+        else:
+            current_metric = loss_dict['total_loss']
+        
+        # 檢查是否應該停止
+        if self.check_early_stopping(current_metric):
+            logging.info(f"🛑 早停觸發於 epoch {epoch}")
+            logging.info(f"   最佳指標: {self.best_val_loss:.6f}（epoch {self.best_epoch}）")
+            
+            # 恢復最佳模型（如果啟用）
+            if self.early_stopping_cfg.get('restore_best_weights', True) and self.best_model_state is not None:
+                self.model.load_state_dict(self.best_model_state)
+                logging.info(f"✅ 已恢復最佳模型（epoch {self.best_epoch}）")
+            
+            return True
+        return False
+    
+    def _check_convergence(self, loss_dict: Dict, epoch: int) -> bool:
+        """
+        檢查快速收斂條件
+        
+        Args:
+            loss_dict: 損失字典
+            epoch: 當前 epoch
+        
+        Returns:
+            True 表示已達收斂條件
+        """
+        if self.convergence_threshold is not None and loss_dict['total_loss'] < self.convergence_threshold:
+            logging.info(f"✅ 快速收斂於 epoch {epoch}（loss < {self.convergence_threshold:.2e}）")
+            return True
+        return False
+    
+    def _finalize_training(
+        self,
+        final_epoch: int,
+        loss_dict: Dict,
+        start_time: float,
+        loop_helper: 'TrainingLoopManager'
+    ) -> Dict[str, Any]:
+        """
+        訓練結束處理
+        
+        Args:
+            final_epoch: 最終 epoch
+            loss_dict: 最終損失字典
+            start_time: 訓練開始時間戳
+            loop_helper: 訓練循環管理器
+        
+        Returns:
+            訓練結果字典
+        """
+        total_time = time.time() - start_time
+        final_loss = loss_dict['total_loss']
+        
+        logging.info("=" * 80)
+        logging.info(f"✅ 訓練完成")
+        logging.info(f"   總時間: {total_time:.1f}s")
+        logging.info(f"   完成 Epochs: {final_epoch + 1}")
+        logging.info(f"   最終損失: {final_loss:.6f}")
+        if self.early_stopping_enabled and self.best_epoch >= 0:
+            logging.info(f"   最佳 Epoch: {self.best_epoch}")
+            logging.info(f"   最佳指標: {self.best_val_loss:.6f}")
+        logging.info("=" * 80)
+        
+        # 保存最終檢查點
+        final_checkpoint = self.save_checkpoint(final_epoch + 1, loss_dict, is_best=False)
+        logging.info(f"💾 最終模型已保存")
+        
+        # 關閉 TensorBoard
+        hparams = self._build_hparams_dict()
+        metrics = {
+            'hparam/final_loss': final_loss,
+            'hparam/best_loss': self.best_val_loss if self.early_stopping_enabled else final_loss,
+            'hparam/epochs': final_epoch + 1,
+        }
+        loop_helper.finalize_tensorboard(metrics, hparams)
+        
+        return {
+            'final_loss': final_loss,
+            'training_time': total_time,
+            'epochs_completed': final_epoch + 1,
+            'best_epoch': self.best_epoch if self.early_stopping_enabled else final_epoch,
+            'best_metric': self.best_val_loss if self.early_stopping_enabled else final_loss,
+            'history': loop_helper.get_history(),
+            'checkpoint_path': final_checkpoint
+        }
+    
+    def _build_hparams_dict(self) -> Dict:
+        """
+        構建超參數字典
+        
+        Returns:
+            超參數字典
+        """
+        return {
+            'lr': self.train_cfg.get('lr', 1e-3),
+            'optimizer': self.optimizer.__class__.__name__,
+            'model_width': self.config.get('model', {}).get('width', 256),
+            'model_depth': self.config.get('model', {}).get('depth', 8),
+            'activation': self.config.get('model', {}).get('activation', 'sine'),
+            'K_sensors': self.config.get('sensors', {}).get('K', 0),
+        }
+    
+    # ========================================================================
+    # 檢查點管理
+    # ========================================================================
+    
     def save_checkpoint(
         self,
         epoch: int,
