@@ -1,0 +1,263 @@
+# 快速測試配置 - 驗證課程學習階段切換
+experiment:
+  name: test_curriculum_quick
+  version: v1.0_test
+  seed: 42
+  device: auto
+  precision: float32
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    domain:
+      x: [0.0, 6.283185307179586]
+      y: [0.0, 6.283185307179586]
+    resolution:
+      x: 256
+      y: 256
+    time_range: [15.0, 35.0]
+    dt: 0.001
+    variables: [u, v, p]
+
+lowfi_prior:
+  enabled: true
+  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4.h5
+  variables: [u, v, p]
+  consistency_weight: 10.0
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.5
+  distance_metric: mse
+
+normalization:
+  type: training_data_norm
+  params: {}
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  steady_state:
+    enabled: true
+    time_window: [15.0, 35.0]
+
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
+
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 128  # Reduced for speed
+  depth: 4    # Reduced for speed
+  activation: swish
+  block_type: resnet
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 8   # Reduced for speed
+    fourier_sigma: 4.0
+    include_input: true
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  periodicity_weight: 10.0
+  prior_weight: 10.0
+  l2_regularization: 1.0e-6
+  gradient_penalty: 1.0e-5
+  normalize_losses: true
+  normalization_method: gradnorm
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 500
+  spatial_weighting:
+    enabled: false
+  causal_weighting: false
+
+training:
+  optimizer:
+    type: adam  # Use Adam for speed
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+    scheduler:
+      type: exponential
+      gamma: 0.999
+  
+  epochs: 30  # Test: 10 epochs per stage
+  max_epochs: 30
+  batch_size: 5000
+  validation_freq: 5
+  checkpoint_freq: 10
+  log_interval: 1
+  
+  early_stopping:
+    enabled: false
+  
+  sampling:
+    N_pde: 2000      # Minimal for testing
+    adaptive_sampling: false
+    boundary_points: 200  # Minimal for testing
+  
+  gradient_clip: 1.0
+  amp:
+    enabled: false
+
+# ====================================================================
+# 課程學習測試 - 3階段，每階段10個epochs
+# ====================================================================
+curriculum:
+  enable: true
+  
+  stages:
+    # Stage 1: Epoch 0-10
+    - name: "Test_Stage1"
+      epoch_range: [0, 10]
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 1.0e-3
+      
+      weights:
+        data: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        continuity: 1.0
+        periodicity: 10.0
+        prior: 10.0
+      
+      lowfi_prior:
+        consistency_weight: 10.0
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5
+      
+      sampling:
+        pde_points: 2000
+        boundary_points: 200
+    
+    # Stage 2: Epoch 10-20
+    - name: "Test_Stage2"
+      epoch_range: [10, 20]
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 5.0e-4
+      
+      weights:
+        data: 10.0
+        momentum_x: 3.0    # Increased
+        momentum_y: 3.0    # Increased
+        continuity: 5.0    # Increased
+        periodicity: 10.0
+        prior: 10.0
+      
+      lowfi_prior:
+        consistency_weight: 10.0
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5
+      
+      sampling:
+        pde_points: 3000   # Increased
+        boundary_points: 300
+    
+    # Stage 3: Epoch 20-30
+    - name: "Test_Stage3"
+      epoch_range: [20, 30]
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 2.0e-4
+      
+      weights:
+        data: 10.0
+        momentum_x: 5.0    # Further increased
+        momentum_y: 5.0    # Further increased
+        continuity: 10.0   # Further increased
+        periodicity: 10.0
+        prior: 8.0         # Slightly reduced
+      
+      lowfi_prior:
+        consistency_weight: 8.0
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5
+      
+      sampling:
+        pde_points: 4000   # Further increased
+        boundary_points: 400
+
+optimizer_switching:
+  enabled: false
+
+ensemble:
+  enabled: false
+
+evaluation:
+  metrics: [relative_l2, rmse, mae]
+  save_predictions: false
+
+physics_validation:
+  enabled: false
+
+logging:
+  level: INFO
+  log_dir: ./logs
+  tensorboard: true
+  save_loss_history: true
+
+output:
+  checkpoint_dir: ./checkpoints
+  result_dir: ./results
+  log_file: ./pinnx_test_curriculum.log
+
+test_acceptance:
+  thresholds:
+    relative_l2_u: 0.5
+    relative_l2_v: 0.5
+    relative_l2_p: 1.0
+
+usage_notes:
+  description: "Quick test for curriculum learning stage transitions"
+  expected_runtime: "~5 minutes"
+  gpu_memory: "~2GB"

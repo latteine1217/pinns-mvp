@@ -118,21 +118,25 @@ def ns_residual_2d(coords: torch.Tensor,
                   pressure: torch.Tensor,
                   source: Optional[torch.Tensor] = None,
                   nu: float = 1e-3,
+                  nu_t: Optional[torch.Tensor] = None,
                   time_coords: Optional[torch.Tensor] = None,
                   density: float = 1.0) -> Dict[str, torch.Tensor]:
     """
     2D 不可壓縮 Navier-Stokes 方程殘差計算
     
     方程形式：
-    ∂u/∂t + u·∇u = -∇p/ρ + ν∇²u + S
+    ∂u/∂t + u·∇u = -∇p/ρ + ν_eff∇²u + S
     ∇·u = 0
+    
+    其中 ν_eff = ν + ν_t (有效黏度 = 分子黏度 + 湍流黏度)
     
     Args:
         coords: 空間座標 [batch_size, 2] (x, y)
         velocity: 速度場 [batch_size, 2] (u, v)
         pressure: 壓力場 [batch_size]
         source: 源項 [batch_size, 2] (可選)
-        nu: 動力黏性係數
+        nu: 動力黏性係數 (分子黏度)
+        nu_t: 湍流黏性係數 [batch_size] (可選，來自 RANS prior)
         time_coords: 時間座標 [batch_size] (非定常問題)
         density: 密度 (預設 1.0)
     
@@ -173,9 +177,20 @@ def ns_residual_2d(coords: torch.Tensor,
         sx = torch.zeros_like(u)
         sy = torch.zeros_like(v)
     
+    # 計算有效黏度項 (ν_eff = ν + ν_t)
+    if nu_t is not None:
+        # RANS 湍流黏度存在，使用有效黏度
+        nu_eff = nu + nu_t  # [batch_size] 或標量
+        u_lap_term = nu_eff * u_lap
+        v_lap_term = nu_eff * v_lap
+    else:
+        # 純 DNS/LES，僅使用分子黏度
+        u_lap_term = nu * u_lap
+        v_lap_term = nu * v_lap
+    
     # 動量方程殘差
-    momentum_x = u_t + (u * ux + v * uy) + px / density - nu * u_lap - sx
-    momentum_y = v_t + (u * vx + v * vy) + py / density - nu * v_lap - sy
+    momentum_x = u_t + (u * ux + v * uy) + px / density - u_lap_term - sx
+    momentum_y = v_t + (u * vx + v * vy) + py / density - v_lap_term - sy
     
     # 連續性方程殘差 (不可壓縮)
     continuity = ux + vy
@@ -195,10 +210,30 @@ def ns_residual_3d(coords: torch.Tensor,
                   pressure: torch.Tensor,
                   source: Optional[torch.Tensor] = None,
                   nu: float = 1e-3,
+                  nu_t: Optional[torch.Tensor] = None,
                   time_coords: Optional[torch.Tensor] = None,
                   density: float = 1.0) -> Dict[str, torch.Tensor]:
     """
     3D 不可壓縮 Navier-Stokes 方程殘差計算
+    
+    方程形式：
+    ∂u/∂t + u·∇u = -∇p/ρ + ν_eff∇²u + S
+    ∇·u = 0
+    
+    其中 ν_eff = ν + ν_t (有效黏度 = 分子黏度 + 湍流黏度)
+    
+    Args:
+        coords: 空間座標 [batch_size, 3] (x, y, z)
+        velocity: 速度場 [batch_size, 3] (u, v, w)
+        pressure: 壓力場 [batch_size]
+        source: 源項 [batch_size, 3] (可選)
+        nu: 動力黏性係數 (分子黏度)
+        nu_t: 湍流黏性係數 [batch_size] (可選，來自 RANS prior)
+        time_coords: 時間座標 [batch_size] (非定常問題)
+        density: 密度 (預設 1.0)
+    
+    Returns:
+        residuals: 包含各方程殘差的字典
     """
     u, v, w = velocity[:, 0], velocity[:, 1], velocity[:, 2]
     p = pressure
@@ -238,10 +273,23 @@ def ns_residual_3d(coords: torch.Tensor,
         sy = torch.zeros_like(v)
         sz = torch.zeros_like(w)
     
+    # 計算有效黏度項 (ν_eff = ν + ν_t)
+    if nu_t is not None:
+        # RANS 湍流黏度存在，使用有效黏度
+        nu_eff = nu + nu_t  # [batch_size] 或標量
+        u_lap_term = nu_eff * u_lap
+        v_lap_term = nu_eff * v_lap
+        w_lap_term = nu_eff * w_lap
+    else:
+        # 純 DNS/LES，僅使用分子黏度
+        u_lap_term = nu * u_lap
+        v_lap_term = nu * v_lap
+        w_lap_term = nu * w_lap
+    
     # 動量方程殘差
-    momentum_x = u_t + (u * ux + v * uy + w * uz) + px / density - nu * u_lap - sx
-    momentum_y = v_t + (u * vx + v * vy + w * vz) + py / density - nu * v_lap - sy
-    momentum_z = w_t + (u * wx + v * wy + w * wz) + pz / density - nu * w_lap - sz
+    momentum_x = u_t + (u * ux + v * uy + w * uz) + px / density - u_lap_term - sx
+    momentum_y = v_t + (u * vx + v * vy + w * vz) + py / density - v_lap_term - sy
+    momentum_z = w_t + (u * wx + v * wy + w * wz) + pz / density - w_lap_term - sz
     
     # 連續性方程殘差
     continuity = ux + vy + wz
@@ -297,6 +345,7 @@ class NSResidualLoss(nn.Module):
                 coords: torch.Tensor,
                 predictions: torch.Tensor,
                 time_coords: Optional[torch.Tensor] = None,
+                nu_t: Optional[torch.Tensor] = None,
                 weights: Optional[Dict[str, float]] = None) -> Dict[str, torch.Tensor]:
         """
         計算 NS 方程殘差損失
@@ -307,6 +356,7 @@ class NSResidualLoss(nn.Module):
                         output_dim = spatial_dim + 1 + source_dim
                         例如 2D: [u, v, p, sx, sy]
             time_coords: 時間座標 [batch_size, 1]
+            nu_t: RANS 湍流黏度 [batch_size] (可選)
             weights: 各項損失權重
         
         Returns:
@@ -324,13 +374,14 @@ class NSResidualLoss(nn.Module):
         else:
             source = None
         
-        # 計算殘差
+        # 計算殘差 (傳遞 nu_t)
         residuals = self.residual_fn(
             coords=coords,
             velocity=velocity,
             pressure=pressure,
             source=source,
             nu=self.nu,
+            nu_t=nu_t,
             time_coords=time_coords,
             density=self.density
         )

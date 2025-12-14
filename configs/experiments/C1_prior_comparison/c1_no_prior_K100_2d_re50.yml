@@ -1,0 +1,250 @@
+experiment:
+  name: c1_no_prior_K100_2d_re50
+  version: v1.0_rans_guided
+  seed: 42
+  device: auto
+  precision: float32
+  description: 'C1: Full without RANS Prior'
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
+    domain:
+      x:
+      - 0.0
+      - 6.283185307179586
+      y:
+      - 0.0
+      - 6.283185307179586
+    resolution:
+      x: 256
+      y: 256
+    time_range:
+    - 15.0
+    - 35.0
+    dt: 0.001
+    variables:
+    - u
+    - v
+    - p
+    physics_params:
+      Re: 50.0
+      Re_definition: Musacchio_Boffetta_2014
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+lowfi_prior:
+  enabled: false
+  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4.h5
+  data_type: rans
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      k: k
+      nu_t: nu_t
+      epsilon: epsilon
+    coord_mapping:
+      X: X
+      Y: Y
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+    quality_check: true
+  consistency_weight: 10.0
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.5
+  spatial_weighting:
+    enabled: false
+    boundary_penalty: 2.0
+    center_weight: 1.0
+normalization:
+  type: training_data_norm
+  params: {}
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  steady_state:
+    enabled: true
+    time_window:
+    - 15.0
+    - 35.0
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
+  quality_metrics:
+    condition_number: 52900.0
+    source_resolution: 128x128
+    target_resolution: 256x256
+    mapping: RANS -> DNS (factor 2)
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 256
+  depth: 8
+  activation: swish
+  block_type: resnet
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 12
+    fourier_sigma: 4.0
+    include_input: true
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  domain:
+    x_range:
+    - 0.0
+    - 6.283185307179586
+    y_range:
+    - 0.0
+    - 6.283185307179586
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  periodicity_weight: 10.0
+  prior_weight: 0.0
+  l2_regularization: 1.0e-06
+  gradient_penalty: 1.0e-05
+  normalize_losses: true
+  normalization_method: gradnorm
+  adaptive_weighting: true
+  adaptation_method: gradnorm
+  adaptation_frequency: 500
+  adaptation_alpha: 1.5
+  causal_weighting: true
+  causal_eps: 0.5
+  causal_n_bins: 10
+training:
+  optimizer:
+    type: soap
+    lr: 0.001
+    betas:
+    - 0.9
+    - 0.999
+    weight_decay: 1.0e-05
+  lr: 0.001
+  weight_decay: 1.0e-05
+  lr_scheduler:
+    type: exponential
+    gamma: 0.9998
+  epochs: 10000
+  max_epochs: 10000
+  batch_size: 15000
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+  early_stopping:
+    enabled: false
+    patience: 1000
+    min_delta: 1.0e-06
+  sampling:
+    N_pde: 10000
+    adaptive_sampling: false
+    boundary_points: 1000
+  gradient_clip: 1.0
+  amp:
+    enabled: false
+curriculum:
+  enable: false
+optimizer_switching:
+  enabled: false
+ensemble:
+  enable: false
+evaluation:
+  grid_resolution:
+  - 512
+  - 512
+  metrics:
+  - relative_l2
+  - mass_conservation
+  - kinetic_energy
+  - enstrophy
+  - energy_spectrum
+  - pressure_gradient
+  thresholds:
+    u_l2_error: 0.15
+    v_l2_error: 0.15
+    p_l2_error: 0.2
+    dpdx_l2_error: 0.3
+    dpdy_l2_error: 0.3
+    mass_conservation_error: 0.001
+    kinetic_energy_rmse: 0.05
+  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_time_window:
+  - 20.0
+  - 40.0
+physics_validation:
+  enabled: true
+  save_metrics: true
+  thresholds:
+    mass_conservation: 0.001
+    momentum_conservation: 0.01
+    periodicity_error: 0.0001
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+output:
+  checkpoint_dir: ./checkpoints/experiments/C1_no_prior_K100
+  results_dir: ./results/experiments/C1_no_prior_K100
+  visualization_dir: ./results/experiments/C1_no_prior_K100/visualizations
+test_acceptance:
+  stability:
+  - no_nan_inf: true
+  - loss_finite: true
+  - gradient_stable: true
+  physics:
+  - mass_conservation_satisfied: true
+  - momentum_residual_low: true
+  - periodicity_maintained: true
+  reconstruction:
+  - sensor_l2_error_target: 0.05
+  - field_l2_error_target: 0.15
+  - pressure_gradient_l2_target: 0.3
+  - kinetic_energy_preserved: true
+  rans_prior:
+  - rans_consistency_maintained: true
+  - improvement_over_rans: true
+usage_notes: "\U0001F52C 實驗設計：\n  - 目標：使用 RANS 先驗改善 Re=50 K=100 壓力梯度重建\n  - 策略：RANS\
+  \ (128×128) → 插值到 DNS 網格 (256×256) → 軟先驗約束\n  - 特徵：Fourier + SIREN + 自適應權重 + 因果訓練\
+  \ + RANS Prior\n  - 優化器：Adam (lr=1e-3)\n  - 無課程學習、無優化器切換\n\n\U0001F680 執行指令：\n \
+  \ python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100_rans_prior_1k.yml\
+  \ --device cuda\n\n\U0001F4CA 預期結果：\n  - 訓練時間：2-3 小時（1000 epochs, GPU）\n  - 感測點\
+  \ L2：< 5%\n  - 全場 u/v L2：10-15%\n  - 壓力梯度 L2：< 30% (vs 目前 100%)\n\n\U0001F50D 對比基準：\n\
+  \  - kolmogorov_re50_kf4_K100_full.yml (無先驗) - 壓力梯度誤差 ~100%\n  - RANS 單獨結果 (data/kolmogorov_rans/rans_re50_kf4.h5)\
+  \ - 速度誤差 ~70%\n  - 目標：PINNs + RANS < RANS 單獨\n\n\U0001F4DD 論文亮點：\n  - 證明「速度感測器 +\
+  \ RANS 先驗」可重建壓力場\n  - 量化 RANS 引導的改善程度\n  - 討論先驗權重權衡（prior_weight: 0.1-0.5）\n"

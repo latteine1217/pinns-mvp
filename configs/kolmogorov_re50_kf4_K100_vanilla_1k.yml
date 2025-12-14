@@ -1,21 +1,22 @@
 # ====================================================================
-# Kolmogorov Flow Re=50 kf=4 K=100 Vanilla PINNs 配置
+# Kolmogorov Flow Re=50 kf=4 K=100 Vanilla 基線配置
 # ====================================================================
-# 實驗目標：使用最基本的 PINNs 架構重建 Re=50 Kolmogorov flow
-# 特徵：純 MLP + Tanh + Adam + 固定權重（無任何額外功能）
+# 實驗目標：純 PINNs 基線（無 RANS 先驗、無進階特徵）
+# 特徵：僅基礎 MLP + 數據匹配 + NS 殘差
 # DNS 數據：re50_kf4 (k_f=4, Re=50 弱湍流)
 # 感測器：QR-pivot K=100
-# 優化器：Adam (無課程學習、無自適應權重)
-# 創建日期：2025-12-05
+# 優化器：Adam (固定學習率)
+# 用途：作為對照組，評估進階特徵的貢獻
+# 創建日期：2025-12-13
 # ====================================================================
 
 experiment:
   name: kolmogorov_re50_kf4_K100_vanilla
-  version: v1.0_vanilla_baseline
+  version: v1.0_baseline
   seed: 42
-  device: auto  # 讓系統選擇最佳設備（現在應該可以用 MPS 了）
+  device: auto
   precision: float32
-  description: "Re=50 with vanilla PINNs (pure MLP, no advanced features)"
+  description: "Re=50 vanilla PINNs baseline without advanced features"
 
 reproducibility:
   deterministic: true
@@ -42,7 +43,7 @@ data:
       x: 256
       y: 256
 
-    time_range: [20.0, 40.0]  # 使用穩態區域
+    time_range: [15.0, 35.0]  # 使用穩態區域
     dt: 0.001
 
     variables: [u, v, p]
@@ -58,6 +59,12 @@ data:
   cache_dir: ./data/kolmogorov_dns_cache
 
 # ====================================================================
+# ❌ 低保真 RANS 先驗配置 (Vanilla: 關閉)
+# ====================================================================
+lowfi_prior:
+  enabled: false
+
+# ====================================================================
 # 數據標準化
 # ====================================================================
 normalization:
@@ -69,7 +76,7 @@ normalization:
 
   steady_state:
     enabled: true
-    time_window: [40.0, 60.0]
+    time_window: [15.0, 35.0]
 
 # ====================================================================
 # 感測點配置
@@ -77,41 +84,33 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100_v7/sensor_data.json  # V7: Spatial QR + Min-Distance Filter
+  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json  # QR-Pivot from RANS, mapped to DNS 256x256
 
   quality_metrics:
-    condition_number: TBD  # V7 method
-    energy_ratio: TBD
-    unique_x_coverage: 0.178  # 91/512 unique X coordinates
-    unique_y_coverage: 0.166  # 85/512 unique Y coordinates
-    max_clustering: 0.10      # Maximum 10% sensors per grid cell
-    min_distance: TBD
+    condition_number: 5.29e+04  # From RANS QR-Pivot
+    source_resolution: 128x128  # RANS resolution
+    target_resolution: 256x256  # DNS resolution
+    mapping: "RANS -> DNS (factor 2)"
 
 # ====================================================================
-# 模型架構 - Vanilla 版本
+# 模型架構 - Vanilla 基線版本
 # ====================================================================
 model:
-  type: fourier_vs_mlp
+  type: fourier_vs_mlp  # 使用統一架構但關閉所有進階功能
   in_dim: 3       # (t, x, y)
   out_dim: 3      # (u, v, p)
-  width: 256      # 保持相同寬度以公平比較
-  depth: 8        # 保持相同深度
-  activation: tanh  # ❌ 使用經典 Tanh（非 Swish）
-  block_type: dense
-  use_fourier: false  # ⭐ 關鍵：必須設置頂層開關
+  width: 256
+  depth: 6        # 較淺網路
+  activation: tanh  # 傳統激活函數
+  block_type: dense  # 標準全連接層
 
-  # ❌ Fourier Features (關閉)
+  # ❌ Fourier Features (Vanilla: 關閉)
   fourier_features:
     enabled: false
-    type: disabled  # ⭐ 必須設置為 "disabled" 而非 "standard"
-    fourier_m: 0
-    fourier_sigma: 1.0
-    include_input: true
 
-  # ❌ SIREN 初始化 (關閉，使用 Xavier)
+  # ❌ SIREN 初始化 (Vanilla: 關閉，使用 Xavier)
   initialization:
     type: xavier_normal
-    gain: 1.0
 
 # ====================================================================
 # 物理設定
@@ -139,83 +138,76 @@ physics:
     periodic_y: true
 
 # ====================================================================
-# 損失函數權重 - Vanilla 版本（固定權重）
+# 損失函數權重 - Vanilla 基線版本
 # ====================================================================
 losses:
-  # 基礎損失
+  # 基礎損失 (固定權重)
   data_weight: 10.0
 
-  # PDE 殘差
+  # PDE 殘差 (固定權重)
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0
   continuity_weight: 1.0
 
   # 物理約束
-  periodicity_weight: 10.0
+  periodicity_weight: 5.0
+
+  # ❌ RANS 先驗 (Vanilla: 無)
+  prior_weight: 0.0
 
   # 正則化
   l2_regularization: 1.0e-6
-  gradient_penalty: 1.0e-5
-  prior_weight: 0.0
+  gradient_penalty: 0.0  # Vanilla: 關閉梯度懲罰
 
-  # ❌ 損失標準化 (關閉)
+  # ❌ 損失標準化 (Vanilla: 關閉)
   normalize_losses: false
-  normalization_method: none
 
-  # ❌ 自適應權重 (關閉)
+  # ❌ 自適應權重 (Vanilla: 關閉)
   adaptive_weighting: false
-  adaptation_method: none
-  adaptation_frequency: 0
-  adaptation_alpha: 0.0
 
-  # ❌ 因果訓練 (關閉)
+  # ❌ 因果訓練 (Vanilla: 關閉)
   causal_weighting: false
-  causal_eps: 0.0
-  causal_n_bins: 0
 
 # ====================================================================
-# 訓練配置 - Adam 優化器（無調度）
+# 訓練配置 - Vanilla Adam 優化器
 # ====================================================================
 training:
-  # Adam 優化器
+  # Adam 優化器 (標準版本)
   optimizer:
-    type: adam
+    type: adam  # Vanilla: 使用標準 Adam
     lr: 1.0e-3
     betas: [0.9, 0.999]
-    weight_decay: 1.0e-5
+    weight_decay: 0.0  # Vanilla: 無權重衰減
 
   lr: 1.0e-3
-  weight_decay: 1.0e-5
+  weight_decay: 0.0
 
-  # ❌ 學習率調度 (關閉，保持固定學習率)
+  # 學習率調度 (固定學習率)
   lr_scheduler:
-    type: constant
-    step_size: 100000  # 設定極大值以避免觸發
-    gamma: 1.0         # 不衰減
-    eta_min: 1.0e-3    # 保持原學習率
+    type: constant  # Vanilla: 固定學習率
 
   # 訓練循環
-  epochs: 1000
-  max_epochs: 1000
-  batch_size: 15000
-  validation_freq: 50
-  checkpoint_freq: 100
-  log_interval: 10
+  epochs: 10000
+  max_epochs: 10000
+  batch_size: 10000  # 較小 batch size
+  validation_freq: 100
+  checkpoint_freq: 200
+  log_interval: 20
 
   # 早停
   early_stopping:
     enabled: true
-    patience: 1000
+    patience: 2000
     min_delta: 1.0e-6
 
   # 採樣策略
   sampling:
-    N_pde: 10000
-    adaptive_sampling: false  # ❌ 關閉自適應採樣
-    boundary_points: 1000
+    N_pde: 5000  # 較少 PDE 點
+    adaptive_sampling: false
+    boundary_points: 500
 
   # 穩定性
-  gradient_clip: 1.0
+  gradient_clip: 5.0  # 較寬鬆的梯度裁剪
 
   amp:
     enabled: false
@@ -250,13 +242,16 @@ evaluation:
     - kinetic_energy
     - enstrophy
     - energy_spectrum
+    - pressure_gradient  # ⭐ 新增壓力梯度指標
 
   thresholds:
-    u_l2_error: 0.20  # Vanilla 版本放寬門檻
-    v_l2_error: 0.20
-    p_l2_error: 0.25
-    mass_conservation_error: 0.005
-    kinetic_energy_rmse: 0.10
+    u_l2_error: 0.15
+    v_l2_error: 0.15
+    p_l2_error: 0.20
+    dpdx_l2_error: 0.30  # ⭐ 壓力梯度目標 < 30%
+    dpdy_l2_error: 0.30
+    mass_conservation_error: 0.001
+    kinetic_energy_rmse: 0.05
 
   reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
   reference_time_window: [20.0, 40.0]
@@ -269,9 +264,9 @@ physics_validation:
   save_metrics: true
 
   thresholds:
-    mass_conservation: 0.005
-    momentum_conservation: 0.05
-    periodicity_error: 0.001
+    mass_conservation: 0.001
+    momentum_conservation: 0.01
+    periodicity_error: 0.0001
 
 # ====================================================================
 # 日誌與輸出
@@ -303,41 +298,49 @@ test_acceptance:
     - periodicity_maintained: true
 
   reconstruction:
-    - sensor_l2_error_target: 0.10  # Vanilla 版本放寬
-    - field_l2_error_target: 0.20
+    - sensor_l2_error_target: 0.05
+    - field_l2_error_target: 0.15
+    - pressure_gradient_l2_target: 0.30  # ⭐ 壓力梯度目標
     - kinetic_energy_preserved: true
+
+  baseline:
+    - training_converged: true
+    - no_feature_engineering: true  # Vanilla 基線標準
 
 # ====================================================================
 # 使用說明
 # ====================================================================
 usage_notes: |
   🔬 實驗設計：
-    - 目標：Re=50 K=100 Vanilla PINNs 基準實驗
-    - 特徵：純 MLP + Tanh + 固定權重（無額外功能）
-    - 優化器：Adam (lr=1e-3, 固定學習率)
-    - 無 Fourier、無 SIREN、無自適應、無因果訓練
+    - 目標：建立 Vanilla PINNs 基線（無進階特徵）
+    - 策略：純數據驅動 + NS 方程約束
+    - 特徵：標準 MLP (tanh) + 固定權重 + 固定學習率
+    - 優化器：Adam (lr=1e-3, 無調度)
+    - 用途：作為對照組評估進階特徵的貢獻
 
   🚀 執行指令：
-    python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla.yml --device cuda
+    python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla_1k.yml --device cuda
 
-  📊 預期結果：
-    - 訓練時間：2-3 小時（10000 epochs, GPU）
-    - 感測點 L2：可能較高 (5-10%)
-    - 全場 L2：15-20%（預期較完整版差）
+  📊 預期結果（基線性能）：
+    - 訓練時間：3-5 小時（10000 epochs, GPU）
+    - 感測點 L2：5-10%
+    - 全場 u/v L2：20-30%（較進階版本差）
+    - 壓力場：可能較難重建
 
-  🔍 對比目的：
-    與 kolmogorov_re50_kf4_K100_full.yml 對比：
-    - 驗證 Fourier Features 的效果
-    - 驗證 SIREN 初始化的效果
-    - 驗證自適應權重的效果
-    - 驗證因果訓練的效果
+  🔍 對比用途：
+    - vs RANS Prior 版：量化 RANS 引導的改善
+    - vs Fourier 版：量化 Fourier Features 的貢獻
+    - vs SIREN 版：量化 SIREN 初始化的影響
+    - vs 自適應權重版：量化動態權重的效果
 
-  ⚠️ 關鍵差異：
-    完整版 vs Vanilla：
-    - Activation: Swish vs Tanh
-    - Fourier: ✅ vs ❌
-    - SIREN Init: ✅ vs ❌ (Xavier)
-    - 自適應權重: ✅ vs ❌
-    - 因果訓練: ✅ vs ❌
-    - 學習率調度: Step decay vs Constant
-    - 損失標準化: ✅ vs ❌
+  📝 論文消融實驗：
+    - 基線（本配置）：無任何進階特徵
+    - +Fourier：加入 Fourier Features
+    - +SIREN：加入 SIREN 初始化
+    - +自適應：加入 GradNorm 動態權重
+    - +RANS Prior：加入低保真引導（完整版）
+    
+  ⚠️ 注意：
+    - Vanilla 版本收斂較慢，可能需要更多 epochs
+    - 壓力場重建效果可能不佳（用於對比）
+    - 建議先訓練此基線，再訓練進階版本進行對比

@@ -48,6 +48,41 @@ data:
   normalize: true
   cache_dir: "./data/jhtdb/channel_flow_re1000"
 
+# =============================================================================
+# 低保真 RANS 先驗配置（可選）
+# =============================================================================
+lowfi_prior:
+  enabled: false
+  data_path: ./data/lowfi/channel_rans/rans_channel_re1000.h5
+  data_type: rans
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      w: w
+      k: k
+      nu_t: nu_t
+      epsilon: epsilon
+    coord_mapping:
+      X: X
+      Y: Y
+      Z: Z
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+    quality_check: true
+  consistency_weight: 0.3
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    w: 1.0
+    p: 0.5
+  spatial_weighting:
+    enabled: false
+    boundary_penalty: 2.0
+    center_weight: 1.0
+
 normalization:
   type: 'training_data_norm'
   params: {}

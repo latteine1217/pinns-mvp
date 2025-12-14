@@ -43,7 +43,7 @@ data:
       x: 256
       y: 256
 
-    time_range: [20.0, 40.0]  # 使用穩態區域
+    time_range: [15.0, 35.0]  # 使用穩態區域
     dt: 0.001
 
     variables: [u, v, p]
@@ -63,7 +63,7 @@ data:
 # ====================================================================
 lowfi_prior:
   enabled: true
-  data_path: ./data/kolmogorov_rans/rans_re50_kf4.h5
+  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4.h5
   data_type: rans
   
   # RANS 數據結構
@@ -86,7 +86,7 @@ lowfi_prior:
     quality_check: true
   
   # 先驗權重設定
-  consistency_weight: 0.3  # 總體先驗權重 (0.1-0.5 推薦)
+  consistency_weight: 10.0  # 總體先驗權重 (0.1-0.5 推薦)
   variable_weights:
     u: 1.0
     v: 1.0
@@ -110,7 +110,7 @@ normalization:
 
   steady_state:
     enabled: true
-    time_window: [40.0, 60.0]
+    time_window: [15.0, 35.0]
 
 # ====================================================================
 # 感測點配置
@@ -118,14 +118,13 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./results/kolmogorov_dns/sensor_viz_re50_K100_v7/sensor_data.json  # V7: Spatial QR + Min-Distance Filter
+  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json  # QR-Pivot from RANS, mapped to DNS 256x256
 
   quality_metrics:
-    condition_number: TBD  # V7 method
-    energy_ratio: TBD
-    unique_x_coverage: 0.178  # 91/512 unique X coordinates
-    unique_y_coverage: 0.166  # 85/512 unique Y coordinates
-    max_clustering: 0.10      # Maximum 10% sensors per grid cell
+    condition_number: 5.29e+04  # From RANS QR-Pivot
+    source_resolution: 128x128  # RANS resolution
+    target_resolution: 256x256  # DNS resolution
+    mapping: "RANS -> DNS (factor 2)"
 
 # ====================================================================
 # 模型架構 - 完整版特徵
@@ -135,7 +134,7 @@ model:
   in_dim: 3       # (t, x, y)
   out_dim: 3      # (u, v, p)
   width: 256
-  depth: 8
+  depth: 6        # ← 修改：8 → 6 (減少層數，提升訓練速度 33%)
   activation: swish
   block_type: resnet  # PirateNet-style adaptive residual
 
@@ -143,7 +142,7 @@ model:
   fourier_features:
     enabled: true
     type: standard
-    fourier_m: 12
+    fourier_m: 16   # ← 修改：12 → 16 (增強高頻捕捉能力)
     fourier_sigma: 4.0
     include_input: true
 
@@ -194,7 +193,7 @@ losses:
   periodicity_weight: 10.0
 
   # ✅ RANS 先驗一致性損失 (新增)
-  prior_weight: 0.3  # 對應 lowfi_prior.consistency_weight
+  prior_weight: 10.0  # 對應 lowfi_prior.consistency_weight
 
   # 正則化
   l2_regularization: 1.0e-6
@@ -221,25 +220,21 @@ losses:
 training:
   # Adam 優化器
   optimizer:
-    type: adam
+    type: soap
     lr: 1.0e-3
     betas: [0.9, 0.999]
     weight_decay: 1.0e-5
 
-  lr: 1.0e-3
-  weight_decay: 1.0e-5
-
-  # 學習率調度
-  lr_scheduler:
-    type: step
-    step_size: 2000
-    gamma: 0.9
-    eta_min: 1.0e-6
+    # 學習率調度（指數衰減，每個 epoch 都降低）
+    scheduler:
+      type: exponential
+      gamma: 0.9998  # 每個 epoch 乘以 0.9998，10000 epochs 後約降至 0.135 × lr_init
+      # 計算方式：想要 10000 epochs 後降至 0.1 倍，gamma = 0.1^(1/10000) ≈ 0.9998
 
   # 訓練循環
-  epochs: 1000
-  max_epochs: 1000
-  batch_size: 15000
+  epochs: 10000
+  max_epochs: 10000
+  batch_size: 20000
   validation_freq: 50
   checkpoint_freq: 100
   log_interval: 10
@@ -263,10 +258,120 @@ training:
     enabled: false
 
 # ====================================================================
-# ❌ 課程學習 (關閉)
+# ✅ 課程學習（啟用）
+# ====================================================================
+# 策略：動態調整 loss weight，不改變雷諾數
+# 3 階段漸進式物理約束強化：
+#   Stage 1 (0-2000):  維持數據擬合，輕微提升物理權重
+#   Stage 2 (2000-6000):  顯著提升連續性與動量權重
+#   Stage 3 (6000-10000): 最終平衡，確保物理約束滿足
 # ====================================================================
 curriculum:
-  enable: false
+  enable: true
+  
+  stages:
+    # ================================
+    # 階段 1: 平滑過渡 (Epoch 0-2000)
+    # 目標：在不破壞已學會的數據擬合前提下，開始增強物理約束
+    # ================================
+    - name: "Stage1_Smooth_Transition"
+      epoch_range: [0, 2000]
+      
+      # 物理參數（固定不動）
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 7.29e-4  # 維持當前學習率（epoch 6500 時的值）
+      
+      # ⭐ 損失權重：輕微提升物理權重
+      weights:
+        data: 10.0            # 維持當前
+        momentum_x: 2.0       # 1.0 → 2.0 (2×)
+        momentum_y: 2.0       # 1.0 → 2.0 (2×)
+        continuity: 3.0       # 1.0 → 3.0 (3×) 關鍵提升
+        periodicity: 10.0     # 維持
+        prior: 50.0           # 維持 RANS 先驗
+      
+      # 先驗配置（維持）
+      lowfi_prior:
+        consistency_weight: 50.0
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5
+      
+      sampling:
+        pde_points: 15000     # 10000 → 15000 (提升 50% PDE 覆蓋)
+        boundary_points: 1000
+
+    # ================================
+    # 階段 2: 物理強化 (Epoch 7500-9000)
+    # 目標：顯著提升連續性與動量權重，強制滿足物理約束
+    # ================================
+    - name: "Stage2_Physics_Enforcement"
+      epoch_range: [2000, 6000]
+      
+      # 物理參數（固定不動）
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 6.56e-4  # 繼續衰減 (0.9998^1000)
+      
+      # ⭐ 損失權重：大幅提升物理約束
+      weights:
+        data: 10.0            # 維持數據擬合能力
+        momentum_x: 5.0       # 2.0 → 5.0 (2.5×)
+        momentum_y: 5.0       # 2.0 → 5.0 (2.5×)
+        continuity: 10.0      # 3.0 → 10.0 (3.3×) 與 data 同級！
+        periodicity: 10.0     # 維持
+        prior: 10.0           # 維持 RANS 先驗引導
+      
+      lowfi_prior:
+        consistency_weight: 10.0
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5
+      
+      sampling:
+        pde_points: 16000   
+        boundary_points: 2000
+
+    # ================================
+    # 階段 3: 精煉平衡 (Epoch 9000-10000)
+    # 目標：微調權重，確保數據與物理完美平衡
+    # ================================
+    - name: "Stage3_Final_Balance"
+      epoch_range: [6000, 10000]
+      
+      # 物理參數（固定不動）
+      Re: 50.0
+      nu: 0.039374
+      forcing_amplitude: 1.0
+      k_f: 4
+      lr: 5.90e-4  # 繼續衰減 (0.9998^2500)
+      
+      # ⭐ 損失權重：最終平衡配置
+      weights:
+        data: 10.0            # 維持
+        momentum_x: 5.0       # 維持
+        momentum_y: 5.0       # 維持
+        continuity: 10.0      # 維持高權重（關鍵）
+        periodicity: 10.0     # 維持
+        prior: 8.0            # 微降先驗（10→8），讓物理主導
+      
+      lowfi_prior:
+        consistency_weight: 8.0  # 輕微降低
+        variable_weights:
+          u: 1.0
+          v: 1.0
+          p: 0.5
+      
+      sampling:
+        pde_points: 18000     # 維持高覆蓋
+        boundary_points: 2000
 
 # ====================================================================
 # ❌ 優化器切換 (關閉)

@@ -148,22 +148,28 @@ def ns_residual_2d(coords: torch.Tensor,
                    pred: torch.Tensor,
                    nu: float,
                    time: Optional[torch.Tensor] = None,
-                   source_term: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                   source_term: Optional[torch.Tensor] = None,
+                   nu_t: Optional[torch.Tensor] = None,
+                   use_grad_nut: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    計算2D不可壓縮Navier-Stokes方程殘差
+    計算2D不可壓縮Navier-Stokes方程殘差（支援 RANS 湍流黏度）
     
     控制方程：
-    ∂u/∂t + u∂u/∂x + v∂u/∂y = -∂p/∂x + ν∇²u + S_x  (x-動量)
-    ∂v/∂t + u∂v/∂x + v∂v/∂y = -∂p/∂y + ν∇²v + S_y  (y-動量) 
-    ∂u/∂x + ∂v/∂y = 0                                (連續方程)
+    ∂u/∂t + u∂u/∂x + v∂u/∂y = -∂p/∂x + ∇·[(ν+ν_t)∇u] + S_x  (x-動量)
+    ∂v/∂t + u∂v/∂x + v∂v/∂y = -∂p/∂y + ∇·[(ν+ν_t)∇v] + S_y  (y-動量) 
+    ∂u/∂x + ∂v/∂y = 0                                        (連續方程)
+    
+    其中 ∇·[(ν+ν_t)∇u] = (ν+ν_t)∇²u + ∇ν_t·∇u (若 use_grad_nut=True)
     
     Args:
         coords: 空間座標 [batch_size, 2] -> [x, y]
         pred: 預測結果 [batch_size, 4] -> [u, v, p, S] 
               其中 S 為源項或等效閉合量
-        nu: 動力黏性係數
+        nu: 分子動力黏性係數 (molecular viscosity)
         time: 時間座標 [batch_size, 1] (非定常流場)
         source_term: 外部源項 [batch_size, 2] (可選)
+        nu_t: RANS 湍流黏度 [batch_size, 1] (可選，用於整合 RANS Prior)
+        use_grad_nut: 是否計算 ∇ν_t·∇u 交叉項 (默認 False，可節省計算成本)
         
     Returns:
         Tuple of (x_momentum_residual, y_momentum_residual, continuity_residual)
@@ -217,12 +223,37 @@ def ns_residual_2d(coords: torch.Tensor,
         S_x = S
         S_y = torch.zeros_like(S)  # 假設源項主要在x方向
     
-    # NS方程殘差計算
-    # x-動量方程: ∂u/∂t + u∂u/∂x + v∂u/∂y + ∂p/∂x - ν∇²u - S_x = 0
-    momentum_x = u_t + u_convection + p_x - nu * u_laplacian - S_x
+    # ⭐ 計算有效黏度 (ν_eff = ν + ν_t)
+    if nu_t is not None:
+        # RANS 模式：使用有效黏度
+        nu_eff = nu + nu_t  # [batch_size, 1]
+        u_viscous = nu_eff * u_laplacian  # ν_eff∇²u
+        v_viscous = nu_eff * v_laplacian  # ν_eff∇²v
+        
+        # ⭐ 計算交叉項 ∇ν_t·∇u (若啟用)
+        if use_grad_nut:
+            # 計算 ∇ν_t
+            nu_t_derivs = compute_derivatives_safe(nu_t, coords, order=1, keep_graph=True)  # [∂ν_t/∂x, ∂ν_t/∂y]
+            nu_t_x, nu_t_y = nu_t_derivs[:, 0:1], nu_t_derivs[:, 1:2]
+            
+            # 交叉項：∇ν_t·∇u = (∂ν_t/∂x)(∂u/∂x) + (∂ν_t/∂y)(∂u/∂y)
+            u_cross_term = nu_t_x * u_x + nu_t_y * u_y
+            v_cross_term = nu_t_x * v_x + nu_t_y * v_y
+            
+            # 加入交叉項：完整形式 ∇·[(ν+ν_t)∇u] = (ν+ν_t)∇²u + ∇ν_t·∇u
+            u_viscous = u_viscous + u_cross_term
+            v_viscous = v_viscous + v_cross_term
+    else:
+        # DNS/LES 模式：只使用分子黏度
+        u_viscous = nu * u_laplacian
+        v_viscous = nu * v_laplacian
     
-    # y-動量方程: ∂v/∂t + u∂v/∂x + v∂v/∂y + ∂p/∂y - ν∇²v - S_y = 0  
-    momentum_y = v_t + v_convection + p_y - nu * v_laplacian - S_y
+    # NS方程殘差計算
+    # x-動量方程: ∂u/∂t + u∂u/∂x + v∂u/∂y + ∂p/∂x - ν_eff∇²u - S_x = 0
+    momentum_x = u_t + u_convection + p_x - u_viscous - S_x
+    
+    # y-動量方程: ∂v/∂t + u∂v/∂x + v∂v/∂y + ∂p/∂y - ν_eff∇²v - S_y = 0  
+    momentum_y = v_t + v_convection + p_y - v_viscous - S_y
     
     # 連續方程 (不可壓縮): ∂u/∂x + ∂v/∂y = 0
     continuity = u_x + v_y
@@ -458,8 +489,8 @@ def apply_boundary_conditions(coords: torch.Tensor,
         periodic_error = pred_left - pred_right
         return periodic_error
     
-    else:
-        raise ValueError(f"不支援的邊界條件類型: {bc_type}")  # type: ignore
+    # 預設情況：返回零誤差（避免類型檢查錯誤）
+    raise ValueError(f"不支援的邊界條件類型: {bc_type}")
 
 # 物理場計算工具函數
 def compute_pressure_poisson(coords: torch.Tensor,
@@ -599,14 +630,18 @@ class NSEquations2D:
         self.rho = kwargs.get('rho', density)  # 別名
     
     def residual_unified(self, coords: torch.Tensor, pred_full: torch.Tensor,
-                        time: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+                        time: Optional[torch.Tensor] = None,
+                        nu_t: Optional[torch.Tensor] = None,
+                        use_grad_nut: bool = False) -> Dict[str, torch.Tensor]:
         """
-        統一的殘差計算接口 - 修復梯度圖問題的核心方案
+        統一的殘差計算接口 - 修復梯度圖問題的核心方案（支援 RANS 湍流黏度）
         
         Args:
             coords: 空間座標 [batch_size, spatial_dim]
             pred_full: 完整預測張量 [batch_size, 4] -> [u, v, p, S]
             time: 時間座標 [batch_size, 1] (可選)
+            nu_t: RANS 湍流黏度 [batch_size, 1] (可選，用於整合 RANS Prior)
+            use_grad_nut: 是否計算 ∇ν_t·∇u 交叉項 (默認 False)
             
         Returns:
             殘差字典 {'momentum_x', 'momentum_y', 'continuity'}
@@ -617,7 +652,9 @@ class NSEquations2D:
         
         # 直接調用核心計算，避免多重路徑和圖管理問題
         try:
-            momentum_x, momentum_y, continuity = ns_residual_2d(coords, pred_full, self.viscosity, time)
+            momentum_x, momentum_y, continuity = ns_residual_2d(
+                coords, pred_full, self.viscosity, time, nu_t=nu_t, use_grad_nut=use_grad_nut
+            )
             
             return {
                 'momentum_x': momentum_x,

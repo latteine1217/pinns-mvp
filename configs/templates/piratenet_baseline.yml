@@ -56,6 +56,49 @@ data:
   num_initial: 256
 
 # ========================================
+# 低保真 RANS 先驗配置（可選）
+# ========================================
+lowfi_prior:
+  enabled: false  # PirateNet baseline 預設不使用 RANS prior
+  data_path: ./data/lowfi/channel_rans/rans_channel_re1000.h5
+  data_type: rans
+  
+  # RANS 數據結構
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      w: w
+      k: k
+      nu_t: nu_t
+      epsilon: epsilon
+    coord_mapping:
+      X: X
+      Y: Y
+      Z: Z
+  
+  # 插值設定
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+    quality_check: true
+  
+  # 先驗權重設定
+  consistency_weight: 0.3
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    w: 1.0
+    p: 0.5  # 壓力權重較低
+  
+  # 空間權重策略
+  spatial_weighting:
+    enabled: false
+    boundary_penalty: 2.0
+    center_weight: 1.0
+
+# ========================================
 # 模型配置（PirateNet 架構）
 # ========================================
 model:

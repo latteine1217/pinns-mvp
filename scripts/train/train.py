@@ -264,6 +264,27 @@ def load_rans_prior_data(
         else:
             p_rans = np.zeros_like(u_rans)
             logging.info("   RANS 資料無壓力場，設為零")
+        
+        # ⭐ 讀取 RANS 湍流黏度 (nu_t / eddy viscosity)
+        nu_t_rans = None
+        for nu_t_key in ['nu_t', 'nut', 'eddy_viscosity', 'turbulent_viscosity']:
+            if nu_t_key in group:
+                nu_t_rans = np.array(group[nu_t_key])
+                logging.info(f"   ✅ 讀取 RANS 湍流黏度: {nu_t_key}")
+                break
+        
+        # 如果找不到 nu_t，嘗試從 k-epsilon 模型計算
+        if nu_t_rans is None:
+            if 'k' in group and 'epsilon' in group:
+                k_rans = np.array(group['k'])
+                eps_rans = np.array(group['epsilon'])
+                C_mu = 0.09  # k-epsilon 模型常數
+                nu_t_rans = C_mu * k_rans**2 / (eps_rans + 1e-10)
+                logging.info(f"   ✅ 從 k-epsilon 計算 nu_t: C_μ={C_mu}")
+            else:
+                # Fallback: 設為零（僅使用分子黏度）
+                nu_t_rans = np.zeros_like(u_rans)
+                logging.warning("   ⚠️  RANS 資料無湍流黏度 (nu_t/k/epsilon)，設為零")
     
     logging.info(f"   RANS 解析度: {u_rans.shape}")
     logging.info(f"   RANS 座標範圍: x=[{x_rans_1d.min():.3f}, {x_rans_1d.max():.3f}], "
@@ -274,6 +295,15 @@ def load_rans_prior_data(
     u_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), u_rans, method=interp_method, bounds_error=False, fill_value=None)
     v_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), v_rans, method=interp_method, bounds_error=False, fill_value=None)
     p_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), p_rans, method=interp_method, bounds_error=False, fill_value=None)
+    
+    # ⭐ 建立 nu_t 插值器（如果存在）
+    if nu_t_rans is not None:
+        nu_t_interp = RegularGridInterpolator(
+            (x_rans_1d, y_rans_1d), nu_t_rans, 
+            method=interp_method, bounds_error=False, fill_value=None
+        )
+    else:
+        nu_t_interp = None
     
     # 提取訓練點座標（只需空間座標，忽略時間）
     # 假設使用 PDE 配點作為插值目標
@@ -287,6 +317,12 @@ def load_rans_prior_data(
     v_prior_pde = v_interp(coords_pde)
     p_prior_pde = p_interp(coords_pde)
     
+    # ⭐ 插值 nu_t 到 PDE 配點
+    if nu_t_interp is not None:
+        nu_t_prior_pde = nu_t_interp(coords_pde)
+    else:
+        nu_t_prior_pde = None
+    
     # 同樣插值到感測點（用於驗證）
     x_sensors_np = training_data['x_sensors'].cpu().numpy().flatten()
     y_sensors_np = training_data['y_sensors'].cpu().numpy().flatten()
@@ -295,6 +331,12 @@ def load_rans_prior_data(
     u_prior_sensors = u_interp(coords_sensors)
     v_prior_sensors = v_interp(coords_sensors)
     p_prior_sensors = p_interp(coords_sensors)
+    
+    # ⭐ 插值 nu_t 到感測點（目前不用於訓練，僅用於診斷）
+    if nu_t_interp is not None:
+        nu_t_prior_sensors = nu_t_interp(coords_sensors)
+    else:
+        nu_t_prior_sensors = None
     
     # 轉換為 Tensor
     rans_prior = {
@@ -305,6 +347,12 @@ def load_rans_prior_data(
         'v_sensors': torch.tensor(v_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
         'p_sensors': torch.tensor(p_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
     }
+    
+    # ⭐ 添加 nu_t 到返回字典（如果存在）
+    if nu_t_prior_pde is not None:
+        rans_prior['nu_t_pde'] = torch.tensor(nu_t_prior_pde, dtype=torch.float32, device=device).unsqueeze(1)
+    if nu_t_prior_sensors is not None:
+        rans_prior['nu_t_sensors'] = torch.tensor(nu_t_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1)
     
     logging.info(f"✅ RANS 先驗插值完成:")
     logging.info(f"   PDE 配點: {len(u_prior_pde)} 個")
@@ -547,7 +595,12 @@ class CurriculumScheduler:
                 logging.info(f"  nu: {s['nu']:.6f}")
             
             logging.info(f"  PDE points: {s['sampling']['pde_points']}, BC points: {s['sampling']['boundary_points']}")
-            logging.info(f"  Learning rate: {s['lr']:.6f}")
+            # 處理 lr（可選參數）
+            if 'lr' in s:
+                lr_value = float(s['lr']) if isinstance(s['lr'], (str, int)) else s['lr']
+                logging.info(f"  Learning rate: {lr_value:.6f} (explicit)")
+            else:
+                logging.info(f"  Learning rate: inherited + global scheduler")
         logging.info("="*80)
     
     def get_stage_config(self, epoch: int) -> Dict[str, Any]:
@@ -594,7 +647,13 @@ class CurriculumScheduler:
                     
                     logging.info(f"⚙️  PDE/BC points: {stage['sampling']['pde_points']}/{stage['sampling']['boundary_points']}")
                     logging.info(f"📊 Weights: {stage['weights']}")
-                    logging.info(f"📉 Learning rate: {stage['lr']:.6f}")
+                    
+                    # 顯示學習率（如果指定）
+                    if 'lr' in stage:
+                        lr_value = float(stage['lr']) if isinstance(stage['lr'], (str, int)) else stage['lr']
+                        logging.info(f"📉 Learning rate: {lr_value:.6f} (explicit reset)")
+                    else:
+                        logging.info(f"📉 Learning rate: inherited from previous stage + global scheduler")
                     logging.info("="*80)
                 
                 # 構建返回配置（只包含實際存在的參數）
@@ -604,8 +663,11 @@ class CurriculumScheduler:
                     'weights': stage['weights'],
                     'nu': stage['nu'],
                     'sampling': stage['sampling'],
-                    'lr': stage['lr']
                 }
+                
+                # lr 是可選參數（如果未指定，則繼續使用全域 scheduler）
+                if 'lr' in stage:
+                    config_dict['lr'] = stage['lr']
                 
                 # 根據場景添加特定參數
                 if 'Re_tau' in stage:
@@ -625,8 +687,11 @@ class CurriculumScheduler:
             'weights': last_stage['weights'],
             'nu': last_stage['nu'],
             'sampling': last_stage['sampling'],
-            'lr': last_stage['lr']
         }
+        
+        # lr 是可選參數
+        if 'lr' in last_stage:
+            config_dict['lr'] = last_stage['lr']
         
         # 根據場景添加特定參數
         if 'Re_tau' in last_stage:
@@ -639,19 +704,35 @@ class CurriculumScheduler:
         return config_dict
     
     def _update_physics_parameters(self, stage: Dict[str, Any]):
-        """更新物理方程模組的參數"""
+        """更新物理方程模組的參數（避免梯度計算問題）"""
+        import torch
+        
+        # nu 是 torch.nn.Buffer，使用 .data 來避免梯度追蹤
         if hasattr(self.physics, 'nu'):
-            self.physics.nu = stage['nu']
+            if isinstance(self.physics.nu, torch.Tensor):
+                # 使用 .data.fill_() 來避免影響計算圖
+                self.physics.nu.data = torch.tensor(stage['nu'], dtype=self.physics.nu.dtype, device=self.physics.nu.device)
+            else:
+                self.physics.nu = stage['nu']
         
         # Channel Flow 參數
         if hasattr(self.physics, 'Re_tau') and 'Re_tau' in stage:
-            self.physics.Re_tau = stage['Re_tau']
+            if isinstance(self.physics.Re_tau, torch.Tensor):
+                self.physics.Re_tau.data = torch.tensor(stage['Re_tau'], dtype=self.physics.Re_tau.dtype, device=self.physics.Re_tau.device)
+            else:
+                self.physics.Re_tau = stage['Re_tau']
         if hasattr(self.physics, 'pressure_gradient') and 'pressure_gradient' in stage:
-            self.physics.pressure_gradient = stage['pressure_gradient']
+            if isinstance(self.physics.pressure_gradient, torch.Tensor):
+                self.physics.pressure_gradient.data = torch.tensor(stage['pressure_gradient'], dtype=self.physics.pressure_gradient.dtype, device=self.physics.pressure_gradient.device)
+            else:
+                self.physics.pressure_gradient = stage['pressure_gradient']
         
         # Kolmogorov Flow 參數
         if hasattr(self.physics, 'Re') and 'Re' in stage:
-            self.physics.Re = stage['Re']
+            if isinstance(self.physics.Re, torch.Tensor):
+                self.physics.Re.data = torch.tensor(stage['Re'], dtype=self.physics.Re.dtype, device=self.physics.Re.device)
+            else:
+                self.physics.Re = stage['Re']
         
         # 日誌輸出
         if 'Re_tau' in stage:
@@ -720,13 +801,12 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         if stages and physics is not None:
             weighters['curriculum'] = CurriculumScheduler(stages, physics)
             logging.info(f"✅ Curriculum scheduler enabled with {len(stages)} stages")
-            # 課程訓練啟用時，禁用其他調度器
+            # 課程訓練啟用時，禁用其他「損失權重」調度器（但允許 LR scheduler）
             weighters['staged'] = None
             weighters['gradnorm'] = None
-            weighters['scheduler'] = None
             weighters['causal'] = None
-            logging.info("⚠️  Other schedulers disabled (curriculum mode active)")
-            return weighters
+            logging.info("ℹ️  Other loss weight schedulers disabled (curriculum mode active)")
+            logging.info("ℹ️  Global LR scheduler is allowed (can coexist with curriculum)")
         else:
             weighters['curriculum'] = None
             if not stages:

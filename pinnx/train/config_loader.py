@@ -161,7 +161,17 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
     # 處理 fourier_features.type 格式（新版格式）
     if 'fourier_features' in model_cfg and isinstance(model_cfg['fourier_features'], dict):
         ff_cfg = model_cfg['fourier_features']
-        ff_type = ff_cfg.get('type', 'standard')
+        # 🔁 向後相容：舊版配置常用 fourier_features.enabled 來開關 Fourier
+        # 優先規則：
+        #   1) 若 enabled 明確為 False → 視為 disabled（即使 type=standard）
+        #   2) 其餘情況沿用 type（缺省 standard）
+        enabled = ff_cfg.get('enabled', None)
+        if enabled is False:
+            ff_type = 'disabled'
+            # 同步寫回，避免後續流程出現 enabled=False 但 type=standard 的矛盾狀態
+            ff_cfg['type'] = 'disabled'
+        else:
+            ff_type = ff_cfg.get('type', 'standard')
         
         # 處理 type="disabled"
         if ff_type == 'disabled':

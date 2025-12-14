@@ -542,8 +542,7 @@ def main():
     # === 載入模型和配置 ===
     logger.info(f"載入檢查點: {args.checkpoint}")
     
-    from scripts.train import create_model, get_device
-    from pinnx.dataio.channel_flow_loader import ChannelFlowLoader
+    from pinnx.train.factory import create_model, get_device
     
     device = get_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
@@ -566,17 +565,65 @@ def main():
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
-    # === 載入參考數據（完整場） ===
-    logger.info("載入 JHTDB Channel Flow 完整場數據...")
-    loader = ChannelFlowLoader(config_path=args.config)
-    field_dataset = loader.load_full_field_data()
-    
-    # 取得完整場座標和數據
-    coords_np, ref_fields = field_dataset.to_points(order=('x', 'y', 'z'))
-    coords_full = torch.from_numpy(coords_np).float().to(device)
-    ref_u = torch.from_numpy(ref_fields['u']).float().to(device)
-    ref_v = torch.from_numpy(ref_fields['v']).float().to(device)
-    ref_p = torch.from_numpy(ref_fields['p']).float().to(device)
+    # === 載入參考數據 ===
+    physics_type = config.get('physics', {}).get('type', '')
+    if physics_type == 'kolmogorov_flow_2d':
+        logger.info("檢測到 Kolmogorov Flow 2D 配置")
+        import h5py
+        
+        # 讀取數據路徑
+        data_path = config.get('data', {}).get('kolmogorov_config', {}).get('data_path')
+        if not data_path:
+            raise ValueError("配置中未找到 kolmogorov_config.data_path")
+            
+        logger.info(f"載入 Kolmogorov DNS 數據: {data_path}")
+        with h5py.File(data_path, 'r') as f:
+            u_all = f['u'][:]
+            v_all = f['v'][:]
+            p_all = f['p'][:]
+            t_all = f['time'][:]
+            
+        # 選擇時間點 (t=35.0 或最接近)
+        target_t = 35.0
+        t_idx = np.abs(t_all - target_t).argmin()
+        actual_t = t_all[t_idx]
+        logger.info(f"選擇時間點: {actual_t} (Index: {t_idx})")
+        
+        u_ref = u_all[t_idx]
+        v_ref = v_all[t_idx]
+        p_ref = p_all[t_idx]
+        
+        # 生成網格
+        nx, ny = u_ref.shape
+        x = np.linspace(0, 2*np.pi, nx)
+        y = np.linspace(0, 2*np.pi, ny)
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        
+        # 展平
+        X_flat = X.flatten()
+        Y_flat = Y.flatten()
+        T_flat = np.full_like(X_flat, actual_t)
+        
+        # 建立 coords (t, x, y)
+        coords_np = np.stack([T_flat, X_flat, Y_flat], axis=1)
+        
+        coords_full = torch.from_numpy(coords_np).float().to(device)
+        ref_u = torch.from_numpy(u_ref.flatten()).float().to(device)
+        ref_v = torch.from_numpy(v_ref.flatten()).float().to(device)
+        ref_p = torch.from_numpy(p_ref.flatten()).float().to(device)
+        
+    else:
+        logger.info("載入 JHTDB Channel Flow 完整場數據...")
+        from pinnx.dataio.channel_flow_loader import ChannelFlowLoader
+        loader = ChannelFlowLoader(config_path=args.config)
+        field_dataset = loader.load_full_field_data()
+        
+        # 取得完整場座標和數據
+        coords_np, ref_fields = field_dataset.to_points(order=('x', 'y', 'z'))
+        coords_full = torch.from_numpy(coords_np).float().to(device)
+        ref_u = torch.from_numpy(ref_fields['u']).float().to(device)
+        ref_v = torch.from_numpy(ref_fields['v']).float().to(device)
+        ref_p = torch.from_numpy(ref_fields['p']).float().to(device)
     
     logger.info(f"完整場數據形狀: coords={coords_full.shape}, u={ref_u.shape}")
     

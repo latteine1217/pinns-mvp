@@ -1,0 +1,212 @@
+experiment:
+  name: s2_qr_K30_2d_re50
+  version: v1.0_baseline
+  seed: 42
+  device: auto
+  precision: float32
+  description: 'S2: K-scan with K=30 sensors (QR-pivot)'
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
+    domain:
+      x:
+      - 0.0
+      - 6.283185307179586
+      y:
+      - 0.0
+      - 6.283185307179586
+    resolution:
+      x: 256
+      y: 256
+    time_range:
+    - 15.0
+    - 35.0
+    dt: 0.001
+    variables:
+    - u
+    - v
+    - p
+    physics_params:
+      Re: 50.0
+      Re_definition: Musacchio_Boffetta_2014
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+lowfi_prior:
+  enabled: false
+normalization:
+  type: training_data_norm
+  params: {}
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  steady_state:
+    enabled: true
+    time_window:
+    - 15.0
+    - 35.0
+sensors:
+  K: 30
+  selection_method: precomputed
+  sensor_file: ./data/sensors/kolmogorov/sensors_K30_re50_256x256.json
+  quality_metrics:
+    condition_number: 52900.0
+    source_resolution: 128x128
+    target_resolution: 256x256
+    mapping: RANS -> DNS (factor 2)
+model:
+  type: standard_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 256
+  depth: 6
+  activation: tanh
+  block_type: standard
+  fourier_features:
+    enabled: false
+  initialization:
+    type: xavier_normal
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  domain:
+    x_range:
+    - 0.0
+    - 6.283185307179586
+    y_range:
+    - 0.0
+    - 6.283185307179586
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  periodicity_weight: 5.0
+  prior_weight: 0.0
+  l2_regularization: 1.0e-06
+  gradient_penalty: 0.0
+  normalize_losses: false
+  adaptive_weighting: false
+  causal_weighting: false
+training:
+  optimizer:
+    type: adam
+    lr: 0.001
+    betas:
+    - 0.9
+    - 0.999
+    weight_decay: 0.0
+  lr: 0.001
+  weight_decay: 0.0
+  lr_scheduler:
+    type: constant
+  epochs: 10000
+  max_epochs: 10000
+  batch_size: 10000
+  validation_freq: 100
+  checkpoint_freq: 200
+  log_interval: 20
+  early_stopping:
+    enabled: true
+    patience: 2000
+    min_delta: 1.0e-06
+  sampling:
+    N_pde: 5000
+    adaptive_sampling: false
+    boundary_points: 500
+  gradient_clip: 5.0
+  amp:
+    enabled: false
+curriculum:
+  enable: false
+optimizer_switching:
+  enabled: false
+ensemble:
+  enable: false
+evaluation:
+  grid_resolution:
+  - 512
+  - 512
+  metrics:
+  - relative_l2
+  - mass_conservation
+  - kinetic_energy
+  - enstrophy
+  - energy_spectrum
+  - pressure_gradient
+  thresholds:
+    u_l2_error: 0.15
+    v_l2_error: 0.15
+    p_l2_error: 0.2
+    dpdx_l2_error: 0.3
+    dpdy_l2_error: 0.3
+    mass_conservation_error: 0.001
+    kinetic_energy_rmse: 0.05
+  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_time_window:
+  - 20.0
+  - 40.0
+physics_validation:
+  enabled: true
+  save_metrics: true
+  thresholds:
+    mass_conservation: 0.001
+    momentum_conservation: 0.01
+    periodicity_error: 0.0001
+logging:
+  level: info
+  log_freq: 10
+  save_predictions: true
+  tensorboard: true
+  wandb: false
+output:
+  checkpoint_dir: ./checkpoints/experiments/S2_K30
+  results_dir: ./results/experiments/S2_K30
+  visualization_dir: ./results/experiments/S2_K30/visualizations
+test_acceptance:
+  stability:
+  - no_nan_inf: true
+  - loss_finite: true
+  - gradient_stable: true
+  physics:
+  - mass_conservation_satisfied: true
+  - momentum_residual_low: true
+  - periodicity_maintained: true
+  reconstruction:
+  - sensor_l2_error_target: 0.05
+  - field_l2_error_target: 0.15
+  - pressure_gradient_l2_target: 0.3
+  - kinetic_energy_preserved: true
+  baseline:
+  - training_converged: true
+  - no_feature_engineering: true
+usage_notes: "\U0001F52C 實驗設計：\n  - 目標：建立 Vanilla PINNs 基線（無進階特徵）\n  - 策略：純數據驅動 +\
+  \ NS 方程約束\n  - 特徵：標準 MLP (tanh) + 固定權重 + 固定學習率\n  - 優化器：Adam (lr=1e-3, 無調度)\n  -\
+  \ 用途：作為對照組評估進階特徵的貢獻\n\n\U0001F680 執行指令：\n  python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla_1k.yml\
+  \ --device cuda\n\n\U0001F4CA 預期結果（基線性能）：\n  - 訓練時間：3-5 小時（10000 epochs, GPU）\n\
+  \  - 感測點 L2：5-10%\n  - 全場 u/v L2：20-30%（較進階版本差）\n  - 壓力場：可能較難重建\n\n\U0001F50D 對比用途：\n\
+  \  - vs RANS Prior 版：量化 RANS 引導的改善\n  - vs Fourier 版：量化 Fourier Features 的貢獻\n \
+  \ - vs SIREN 版：量化 SIREN 初始化的影響\n  - vs 自適應權重版：量化動態權重的效果\n\n\U0001F4DD 論文消融實驗：\n\
+  \  - 基線（本配置）：無任何進階特徵\n  - +Fourier：加入 Fourier Features\n  - +SIREN：加入 SIREN 初始化\n\
+  \  - +自適應：加入 GradNorm 動態權重\n  - +RANS Prior：加入低保真引導（完整版）\n  \n⚠️ 注意：\n  - Vanilla\
+  \ 版本收斂較慢，可能需要更多 epochs\n  - 壓力場重建效果可能不佳（用於對比）\n  - 建議先訓練此基線，再訓練進階版本進行對比\n"

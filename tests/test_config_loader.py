@@ -144,6 +144,46 @@ class TestNormalizeConfigStructure:
         assert result['model']['fourier_m'] == 32
         assert result['model']['fourier_sigma'] == 1.0
         assert result['model']['fourier_trainable'] is False
+
+    def test_normalize_fourier_features_enabled_false_disables_fourier(self):
+        """舊版 fourier_features.enabled=false 應確實禁用 Fourier（向後相容）"""
+        config = {
+            'model': {
+                'fourier_features': {
+                    'enabled': False,
+                    'type': 'standard',
+                    'fourier_m': 128,
+                    'fourier_sigma': 3.0,
+                }
+            }
+        }
+
+        result = normalize_config_structure(config)
+
+        assert result['model']['use_fourier'] is False
+        assert result['model']['fourier_m'] == 0
+        assert result['model']['fourier_sigma'] == 0.0
+        # 同步修正矛盾狀態，避免 enabled=False 但 type=standard
+        assert result['model']['fourier_features']['type'] == 'disabled'
+
+    def test_normalize_fourier_features_enabled_true_uses_type(self):
+        """enabled=true 時沿用 type（預設 standard）"""
+        config = {
+            'model': {
+                'fourier_features': {
+                    'enabled': True,
+                    'type': 'standard',
+                    'fourier_m': 64,
+                    'fourier_sigma': 2.5,
+                }
+            }
+        }
+
+        result = normalize_config_structure(config)
+
+        assert result['model']['use_fourier'] is True
+        assert result['model']['fourier_m'] == 64
+        assert result['model']['fourier_sigma'] == 2.5
     
     def test_normalize_empty_config(self):
         """測試空配置（應建立預設結構）"""

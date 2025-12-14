@@ -769,7 +769,7 @@ class Trainer:
                 }
             else:
                 # 標準 NS 2D 或 Kolmogorov Flow
-                # 檢查物理模組是否接受 time 參數
+                # 檢查物理模組是否接受 time 和 nu_t 參數
                 import inspect
                 residual_fn = self.physics.residual_unified
                 sig = inspect.signature(residual_fn)
@@ -777,6 +777,15 @@ class Trainer:
                 kwargs = {}
                 if 'time' in sig.parameters and t_pde is not None:
                     kwargs['time'] = t_pde
+                
+                # ⭐ 添加 RANS 湍流黏度（如果存在）
+                if 'nu_t' in sig.parameters:
+                    nu_t_pde = None
+                    if 'lowfi_prior' in data_batch and data_batch['lowfi_prior'] is not None:
+                        lowfi_prior = data_batch['lowfi_prior']
+                        if 'nu_t_pde' in lowfi_prior:
+                            nu_t_pde = lowfi_prior['nu_t_pde']
+                    kwargs['nu_t'] = nu_t_pde
                 
                 residuals = residual_fn(
                     coords=coords_pde_physical,  # 傳入純空間物理坐標
@@ -1325,6 +1334,14 @@ class Trainer:
             result['prior_loss_v'] = prior_loss_v.item()
             result['prior_loss_p'] = prior_loss_p.item()
 
+        # 🆕 添加課程學習配置信息（用於學習率調整）
+        if curriculum_config is not None:
+            result['_curriculum_transition'] = 1.0 if is_curriculum_transition else 0.0
+            result['_curriculum_stage'] = curriculum_config.get('stage_name', 'unknown')
+            # 只有當階段明確指定 lr 時才添加到 result（觸發重設）
+            if 'lr' in curriculum_config:
+                result['_curriculum_lr'] = curriculum_config['lr']
+
         if gradnorm_weights is not None:
             result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
 
@@ -1558,43 +1575,136 @@ class Trainer:
             if 'val_loss' in loss_dict:
                 history['val_loss'].append(loss_dict['val_loss'])
             
-            # 📊 TensorBoard 記錄
-            if self.writer is not None:
-                # 記錄訓練損失
-                self.writer.add_scalar('Loss/total', loss_dict['total_loss'], self.global_step)
+            # 📊 TensorBoard 記錄（每 log_freq 記錄一次）
+            if self.writer is not None and epoch % log_freq == 0:
+                # ====================================================================
+                # 1. 總損失與主要分量
+                # ====================================================================
+                self.writer.add_scalar('Loss/total', loss_dict.get('total_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/data', loss_dict.get('data_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/pde', loss_dict.get('pde_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/boundary', loss_dict.get('bc_loss', 0.0), epoch)
                 
-                # 記錄各項損失分量
-                for key, value in loss_dict.items():
-                    if key not in ['total_loss', 'val_loss', 'val_mse', '_curriculum_transition', '_curriculum_lr', '_curriculum_stage']:
-                        if isinstance(value, (int, float)):
-                            self.writer.add_scalar(f'Loss/{key}', value, self.global_step)
+                # ====================================================================
+                # 2. PDE 子項（動量方程與連續性方程）
+                # ====================================================================
+                if 'momentum_x_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/PDE/momentum_x', loss_dict['momentum_x_loss'], epoch)
+                if 'momentum_y_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/PDE/momentum_y', loss_dict['momentum_y_loss'], epoch)
+                if 'momentum_z_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/PDE/momentum_z', loss_dict['momentum_z_loss'], epoch)
+                if 'continuity_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/PDE/continuity', loss_dict['continuity_loss'], epoch)
+                if 'div_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/PDE/divergence', loss_dict['div_loss'], epoch)
                 
-                # 記錄驗證指標
+                # ====================================================================
+                # 3. 數據擬合損失（各變量）
+                # ====================================================================
+                if 'u_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Data/u', loss_dict['u_loss'], epoch)
+                if 'v_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Data/v', loss_dict['v_loss'], epoch)
+                if 'w_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Data/w', loss_dict['w_loss'], epoch)
+                if 'pressure_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Data/pressure', loss_dict['pressure_loss'], epoch)
+                
+                # ====================================================================
+                # 4. Weighted Loss（分析權重平衡）
+                # ====================================================================
+                if 'weighted_data_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Weighted/data', loss_dict['weighted_data_loss'], epoch)
+                if 'weighted_pde_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Weighted/pde', loss_dict['weighted_pde_loss'], epoch)
+                if 'weighted_div_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Weighted/continuity', loss_dict['weighted_div_loss'], epoch)
+                if 'weighted_bc_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Weighted/boundary', loss_dict['weighted_bc_loss'], epoch)
+                
+                # ====================================================================
+                # 5. RANS Prior Loss（低保真先驗）
+                # ====================================================================
+                if 'prior_consistency_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Prior/total', loss_dict['prior_consistency_loss'], epoch)
+                if 'prior_loss_u' in loss_dict:
+                    self.writer.add_scalar('Loss/Prior/u', loss_dict['prior_loss_u'], epoch)
+                if 'prior_loss_v' in loss_dict:
+                    self.writer.add_scalar('Loss/Prior/v', loss_dict['prior_loss_v'], epoch)
+                if 'prior_loss_p' in loss_dict:
+                    self.writer.add_scalar('Loss/Prior/p', loss_dict['prior_loss_p'], epoch)
+                
+                # ====================================================================
+                # 6. 邊界條件損失
+                # ====================================================================
+                if 'periodic_x_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/BC/periodic_x', loss_dict['periodic_x_loss'], epoch)
+                if 'periodic_y_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/BC/periodic_y', loss_dict['periodic_y_loss'], epoch)
+                if 'inlet_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/BC/inlet', loss_dict['inlet_loss'], epoch)
+                if 'outlet_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/BC/outlet', loss_dict['outlet_loss'], epoch)
+                if 'wall_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/BC/wall', loss_dict['wall_loss'], epoch)
+                
+                # ====================================================================
+                # 7. 正則化項
+                # ====================================================================
+                if 'regularization_loss' in loss_dict:
+                    self.writer.add_scalar('Loss/Regularization/total', loss_dict['regularization_loss'], epoch)
+                if 'l2_reg' in loss_dict:
+                    self.writer.add_scalar('Loss/Regularization/l2', loss_dict['l2_reg'], epoch)
+                if 'gradient_penalty' in loss_dict:
+                    self.writer.add_scalar('Loss/Regularization/gradient', loss_dict['gradient_penalty'], epoch)
+                
+                # ====================================================================
+                # 8. 驗證指標
+                # ====================================================================
                 if 'val_loss' in loss_dict:
-                    self.writer.add_scalar('Validation/relative_l2', loss_dict['val_loss'], self.global_step)
+                    self.writer.add_scalar('Validation/relative_l2', loss_dict['val_loss'], epoch)
                 if 'val_mse' in loss_dict:
-                    self.writer.add_scalar('Validation/mse', loss_dict['val_mse'], self.global_step)
+                    self.writer.add_scalar('Validation/mse', loss_dict['val_mse'], epoch)
                 
-                # 記錄學習率
+                # ====================================================================
+                # 9. 訓練超參數
+                # ====================================================================
                 current_lr = self.get_current_lr()
-                self.writer.add_scalar('Training/learning_rate', current_lr, self.global_step)
+                self.writer.add_scalar('Training/learning_rate', current_lr, epoch)
                 
-                # 記錄梯度統計（每 N epochs）
+                # ====================================================================
+                # 10. 梯度與權重統計（每 log_freq*2 記錄一次，避免過多）
+                # ====================================================================
                 if epoch % (log_freq * 2) == 0:
                     for name, param in self.model.named_parameters():
                         if param.grad is not None:
-                            self.writer.add_histogram(f'Gradients/{name}', param.grad, self.global_step)
-                            self.writer.add_histogram(f'Weights/{name}', param, self.global_step)
+                            grad_norm = param.grad.norm().item()
+                            self.writer.add_scalar(f'Gradients/norm/{name}', grad_norm, epoch)
+                            self.writer.add_histogram(f'Gradients/hist/{name}', param.grad, epoch)
+                            self.writer.add_histogram(f'Weights/{name}', param, epoch)
             
             # 更新全局步數
             self.global_step += 1
             
             # 🚀 課程訓練：處理階段切換
             if '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5:
-                new_lr = loss_dict.get('_curriculum_lr', self.train_cfg.get('lr', 1e-3))
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = new_lr
-                logging.info(f"📉 課程訓練：學習率更新為 {new_lr:.6f}")
+                # 只有當 stage 明確指定 lr 時才重設學習率
+                if '_curriculum_lr' in loss_dict:
+                    new_lr = loss_dict['_curriculum_lr']
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = new_lr
+                    
+                    # 🆕 同步更新 scheduler 的 base_lrs（避免下次 step() 覆蓋）
+                    if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'base_lrs'):
+                        self.lr_scheduler.base_lrs = [new_lr] * len(self.lr_scheduler.base_lrs)
+                        logging.info(f"📉 課程訓練：學習率重設為 {new_lr:.6f}，scheduler base_lrs 已同步")
+                    else:
+                        logging.info(f"📉 課程訓練：學習率重設為 {new_lr:.6f}")
+                else:
+                    # 繼續使用全域 scheduler（不重設 LR）
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    logging.info(f"📉 課程訓練：繼續使用全域 scheduler（當前 LR: {current_lr:.6f}）")
                 
                 # 保存階段檢查點（如果啟用）
                 if self.log_cfg.get('save_stage_checkpoints', False):
@@ -1602,9 +1712,16 @@ class Trainer:
                     self.save_checkpoint(epoch, loss_dict, is_best=False)
                     logging.info(f"💾 階段檢查點已保存: {stage_name}")
             
-            # 📉 更新學習率調度器（非課程訓練模式）
-            if self.lr_scheduler is not None and not hasattr(self, 'curriculum_weighter'):
-                self.lr_scheduler.step()
+            # 📉 更新學習率調度器（課程訓練與全域 scheduler 並存）
+            if self.lr_scheduler is not None:
+                # 課程訓練時：只在非切換 epoch 更新 scheduler
+                if hasattr(self, 'curriculum_weighter'):
+                    is_transition = '_curriculum_transition' in loss_dict and loss_dict['_curriculum_transition'] > 0.5
+                    if not is_transition:
+                        self.lr_scheduler.step()
+                else:
+                    # 非課程訓練：正常更新
+                    self.lr_scheduler.step()
             
             # 📊 日誌輸出
             if epoch % log_freq == 0:

@@ -242,6 +242,67 @@ def load_sensor_data(input_path: str) -> Dict[str, Any]:
         
         return result
     
+    elif input_path_obj.suffix == '.json':
+        # JSON 格式（支援：
+        #  - coordinates 直接座標（通用）
+        #  - indices + target_resolution（Kolmogorov 2D 常用，從扁平索引還原座標））
+        with open(str(input_path_obj), 'r') as f:
+            data = json.load(f)
+
+        result: Dict[str, Any] = {}
+
+        if 'indices' in data:
+            result['indices'] = np.asarray(data['indices'], dtype=int)
+
+        if 'coordinates' in data:
+            result['coordinates'] = np.asarray(data['coordinates'], dtype=float)
+        elif 'indices' in result:
+            # 🔧 從扁平索引還原 2D 座標（預設 Kolmogorov 域 [0, 2π)×[0, 2π)）
+            target_resolution = data.get('target_resolution', None)
+            nx = ny = None
+
+            if isinstance(target_resolution, str) and 'x' in target_resolution:
+                parts = target_resolution.lower().split('x')
+                if len(parts) == 2:
+                    try:
+                        nx = int(parts[0])
+                        ny = int(parts[1])
+                    except ValueError:
+                        nx = ny = None
+
+            if nx is None or ny is None:
+                # 最後手段：嘗試從最大索引推回平方網格（僅在可被完美平方時）
+                import math
+                n_total = int(result['indices'].max()) + 1 if len(result['indices']) else 0
+                n_guess = int(round(math.sqrt(n_total)))
+                if n_guess > 0 and n_guess * n_guess == n_total:
+                    nx = ny = n_guess
+                else:
+                    raise ValueError(
+                        "JSON 僅提供 indices，但缺少可解析的 target_resolution；"
+                        "請在 JSON 補上例如 '256x256'，或直接提供 coordinates"
+                    )
+
+            domain = data.get('domain', {}) if isinstance(data.get('domain', {}), dict) else {}
+            x_range = domain.get('x', [0.0, float(2 * np.pi)])
+            y_range = domain.get('y', [0.0, float(2 * np.pi)])
+
+            x_1d = np.linspace(float(x_range[0]), float(x_range[1]), int(nx), endpoint=False)
+            y_1d = np.linspace(float(y_range[0]), float(y_range[1]), int(ny), endpoint=False)
+
+            indices = result['indices']
+            i = indices // int(ny)
+            j = indices % int(ny)
+            result['coordinates'] = np.stack([x_1d[i], y_1d[j]], axis=1)
+
+        # 透傳常用欄位（若存在）
+        for key in ('K', 'method', 'source_resolution', 'target_resolution', 'time_range', 'condition_number', 'seed'):
+            if key in data:
+                result[key] = data[key]
+
+        print("  ✅ JSON 感測點載入成功")
+        return result
+
     elif input_path_obj.suffix in ['.h5', '.hdf5']:
         # HDF5 格式
         with h5py.File(str(input_path_obj), 'r') as f:
@@ -1159,7 +1220,7 @@ def main():
     # 輸入選項（二選一）
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--input', type=str,
-                            help='感測點資料檔案路徑 (.npz, .h5)')
+                            help='感測點資料檔案路徑 (.npz, .json, .h5)')
     input_group.add_argument('--jhtdb-data', type=str,
                             help='JHTDB 資料檔案路徑（重新計算感測點）')
     

@@ -458,10 +458,11 @@ class KolmogorovFlow2D(nn.Module):
         self,
         coords: torch.Tensor,
         predictions: torch.Tensor,
-        time: Optional[torch.Tensor] = None
+        time: Optional[torch.Tensor] = None,
+        nu_t: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        統一殘差計算介面（與 trainer.py 兼容）
+        統一殘差計算介面（與 trainer.py 兼容，支援 RANS 湍流黏度）
 
         調用 compute_momentum_residuals() 和 compute_continuity_residual()
         並組合成統一的字典格式。
@@ -471,6 +472,8 @@ class KolmogorovFlow2D(nn.Module):
             predictions: [batch, 3] or [batch, 4] = [u, v, p, S?] 預測值
                          （第 4 個分量 S 如果存在會被忽略）
             time: [batch, 1] 時間坐標（可選）
+            nu_t: RANS 湍流黏度 [batch, 1]（可選，用於整合 RANS Prior）
+                  ⚠️ 注意：Kolmogorov flow 典型為 2D DNS，通常不使用 RANS 閉合
 
         Returns:
             殘差字典: {
