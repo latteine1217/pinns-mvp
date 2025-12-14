@@ -939,6 +939,112 @@ class Trainer:
             'relative_l2': rel_l2
         }
     
+    # ========================================================================
+    # 驗證輔助方法（Phase 3 重構）
+    # ========================================================================
+    
+    def _validate_data_available(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        檢查驗證資料是否可用
+        
+        Returns:
+            (coords, targets) 或 None（若驗證資料不可用）
+        """
+        if self.validation_data is None:
+            return None
+        if self.validation_data.get('size', 0) == 0:
+            return None
+        
+        coords = self.validation_data.get('coords')
+        targets = self.validation_data.get('targets')
+        
+        if coords is None or targets is None or coords.numel() == 0 or targets.numel() == 0:
+            return None
+        
+        # 移動至設備
+        coords = coords.to(self.device)
+        targets = targets.to(self.device)
+        
+        return coords, targets
+    
+    def _run_validation_inference(self, coords: torch.Tensor) -> torch.Tensor:
+        """
+        執行驗證推理（模型評估模式）
+        
+        Args:
+            coords: 驗證坐標 [N, d]
+        
+        Returns:
+            預測值（物理空間）[N, n_vars]
+        """
+        # 保存訓練狀態
+        training_mode = self.model.training
+        self.model.eval()
+        
+        try:
+            with torch.no_grad():
+                # 坐標預處理
+                _, _, coords_for_model = self._prepare_model_coords(
+                    coords, require_grad=False, is_vs_pinn=None
+                )
+                
+                # 模型預測（標準化空間）
+                preds_norm = self.model(coords_for_model)
+                
+                # 反標準化為物理量
+                var_order_val = self._infer_variable_order(preds_norm.shape[1], context='validation')
+                preds_phys_raw = self.data_normalizer.denormalize_batch(preds_norm, var_order=var_order_val)
+                preds_phys: torch.Tensor = preds_phys_raw if isinstance(preds_phys_raw, torch.Tensor) else torch.tensor(preds_phys_raw, device=self.device)  # type: ignore
+                
+                return preds_phys
+        finally:
+            # 恢復訓練狀態
+            if training_mode:
+                self.model.train()
+    
+    def _compute_validation_metrics(
+        self, 
+        preds: torch.Tensor, 
+        targets: torch.Tensor
+    ) -> Dict[str, float]:
+        """
+        計算驗證指標
+        
+        Args:
+            preds: 預測值 [N, n_pred]
+            targets: 目標值 [N, n_target]
+        
+        Returns:
+            驗證指標字典 {'mse': ..., 'relative_l2': ...}
+        """
+        # 處理維度不匹配
+        n_pred = preds.shape[1]
+        n_targets = targets.shape[1]
+        n_common = min(n_pred, n_targets)
+        
+        if n_pred != n_targets:
+            logging.debug(
+                f"[Validation] 輸出維度不匹配 (pred={n_pred}, target={n_targets})；"
+                f"比較前 {n_common} 個分量。"
+            )
+        
+        preds_final = preds[:, :n_common]
+        targets_final = targets[:, :n_common]
+        
+        # 計算誤差指標
+        diff = preds_final - targets_final
+        mse = torch.mean(diff**2).item()
+        rel_l2 = relative_L2(preds_final, targets_final).mean().item()
+        
+        return {
+            'mse': mse,
+            'relative_l2': rel_l2
+        }
+    
+    # ========================================================================
+    # 訓練循環
+    # ========================================================================
+    
     def train(self) -> Dict[str, Any]:
         """
         執行完整訓練循環（Phase 2 重構版）
