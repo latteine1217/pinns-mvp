@@ -279,38 +279,36 @@ class HDF5Reader(DataReader):
         with h5py.File(filepath, 'r') as f:
             group = f[self.group_path]
             
-            # 提取座標
+            # 提取座標 (使用基類的 find_by_names)
             coordinates = {}
             for std_name, possible_paths in self.coord_mapping.items():
-                coord_data = self._find_dataset(group, possible_paths)
+                coord_data = self.find_by_names(
+                    group,
+                    possible_paths,
+                    lambda g, path: np.array(g[path])
+                )
                 if coord_data is not None:
                     coordinates[std_name] = coord_data
             
-            # 提取物理場
+            # 提取物理場 (使用基類的 find_by_names)
             fields = {}
             for std_name, possible_paths in self.field_mapping.items():
-                field_data = self._find_dataset(group, possible_paths)
+                field_data = self.find_by_names(
+                    group,
+                    possible_paths,
+                    lambda g, path: np.array(g[path])
+                )
                 if field_data is not None:
                     fields[std_name] = field_data
             
-            # 提取元數據
-            metadata = {
-                'source_file': str(filepath),
-                'format': 'HDF5',
-                'group_path': self.group_path,
-                'datasets': self._list_datasets(group)
-            }
+            # 提取元數據 (使用基類的 build_metadata)
+            metadata = self.build_metadata(
+                filepath, 'HDF5',
+                group_path=self.group_path,
+                datasets=self._list_datasets(group)
+            )
             
         return LowFiData(coordinates=coordinates, fields=fields, metadata=metadata)
-    
-    def _find_dataset(self, group, possible_paths: List[str]) -> Optional[np.ndarray]:
-        """在 HDF5 群組中尋找資料集"""
-        for path in possible_paths:
-            try:
-                return np.array(group[path])
-            except KeyError:
-                continue
-        return None
     
     def _list_datasets(self, group) -> List[str]:
         """列出群組中的所有資料集"""
