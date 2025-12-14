@@ -26,11 +26,11 @@ class TestRANSCrossTerms:
             [1.0, 1.0]
         ], requires_grad=True)
         
-        # 簡單的線性速度場
-        u = coords[:, 0:1] * 0.5
-        v = coords[:, 1:2] * 0.3
-        p = torch.zeros_like(u)
-        S = torch.zeros_like(u)
+        # 簡單的非線性速度場（確保二階導數非零）
+        u = coords[:, 0:1] * 0.5 + 0.01 * torch.sin(coords[:, 0:1])
+        v = coords[:, 1:2] * 0.3 + 0.01 * torch.sin(coords[:, 1:2])
+        p = 0.01 * (coords[:, 0:1] ** 2 + coords[:, 1:2] ** 2)
+        S = 0.01 * torch.sin(coords[:, 0:1])
         pred = torch.cat([u, v, p, S], dim=1)
         
         nu = 1e-3
@@ -68,14 +68,15 @@ class TestRANSCrossTerms:
         torch.manual_seed(43)
         
         coords = torch.randn(10, 2, requires_grad=True)
-        u = torch.randn(10, 1)
-        v = torch.randn(10, 1)
-        p = torch.randn(10, 1)
-        S = torch.zeros(10, 1)
+        # 創建與 coords 有計算圖連接的速度場（使用非線性函數）
+        u = torch.sin(coords[:, 0:1]) + torch.cos(coords[:, 1:2])
+        v = torch.cos(coords[:, 0:1]) + torch.sin(coords[:, 1:2])
+        p = coords[:, 0:1] ** 2 + coords[:, 1:2] ** 2
+        S = 0.01 * torch.sin(coords[:, 0:1])
         pred = torch.cat([u, v, p, S], dim=1)
         
         nu = 1e-3
-        nu_t = torch.ones(10, 1) * 0.05  # 常數 ν_t
+        nu_t = 0.05 + 0.0 * coords[:, 0:1]  # 常數 ν_t（保持與 coords 的計算圖連接）
         
         # 計算殘差（有/無交叉項）
         mom_x_no_cross, _, _ = ns_residual_2d(
@@ -150,8 +151,13 @@ class TestRANSCrossTerms:
         ns_eq = NSEquations2D(viscosity=1e-3)
         
         coords = torch.randn(5, 2, requires_grad=True)
-        pred = torch.randn(5, 4)
-        nu_t = torch.randn(5, 1) * 0.1 + 0.05
+        # 創建與 coords 有計算圖連接的場
+        u = torch.sin(coords[:, 0:1]) + 0.5 * coords[:, 0:1]
+        v = torch.cos(coords[:, 1:2]) + 0.5 * coords[:, 1:2]
+        p = coords[:, 0:1] ** 2 + coords[:, 1:2] ** 2
+        S = 0.01 * torch.sin(coords[:, 0:1] + coords[:, 1:2])
+        pred = torch.cat([u, v, p, S], dim=1)
+        nu_t = 0.05 + 0.1 * torch.sin(coords[:, 0:1])
         
         # 測試 residual_unified 接受 use_grad_nut 參數
         try:
@@ -173,9 +179,14 @@ class TestRANSCrossTerms:
         
         # 較大的測試數據
         coords = torch.randn(1000, 2, requires_grad=True)
-        pred = torch.randn(1000, 4)
+        # 創建與 coords 有計算圖連接的場
+        u = torch.sin(coords[:, 0:1]) + 0.5 * coords[:, 0:1]
+        v = torch.cos(coords[:, 1:2]) + 0.5 * coords[:, 1:2]
+        p = coords[:, 0:1] ** 2 + coords[:, 1:2] ** 2
+        S = 0.01 * torch.sin(coords[:, 0:1] + coords[:, 1:2])
+        pred = torch.cat([u, v, p, S], dim=1)
         nu = 1e-3
-        nu_t = torch.randn(1000, 1) * 0.1 + 0.05
+        nu_t = 0.05 + 0.1 * torch.sin(coords[:, 0:1])
         
         # 測量不帶交叉項的時間
         start = time.time()

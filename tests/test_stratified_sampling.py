@@ -13,7 +13,8 @@ import pytest
 import numpy as np
 
 # 從 train.py 導入採樣函數
-from scripts.train import sample_boundary_points, sample_interior_points
+sys.path.insert(0, str(Path(__file__).parent.parent / 'scripts' / 'train'))
+from train import sample_boundary_points, sample_interior_points
 
 
 class TestStratifiedSampling:

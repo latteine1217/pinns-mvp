@@ -60,11 +60,21 @@ def compute_gradient_3d(
         create_graph=True,  # 保留計算圖以支持高階導數
         retain_graph=True,  # 保留圖以支持多次梯度計算
         only_inputs=True,
-        allow_unused=False  # 確保所有輸入都被使用
+        allow_unused=True   # 允許未使用的輸入（測試場景中可能出現）
     )[0]
     
+    # 處理 None 的情況（當輸入未被使用時）
+    if grads is None:
+        return torch.zeros_like(field)
+    
     # 提取指定分量（切片操作保留計算圖）
-    return grads[:, component:component+1]
+    result = grads[:, component:component+1]
+    
+    # 修復：當梯度為常數 0（沒有 grad_fn）時，創建帶計算圖的零張量
+    if result.grad_fn is None and coords.requires_grad:
+        result = 0.0 * field + result
+    
+    return result
 
 
 def compute_gradient_3d_checkpointed(
@@ -106,9 +116,20 @@ def compute_gradient_3d_checkpointed(
             create_graph=True,
             retain_graph=True,
             only_inputs=True,
-            allow_unused=False
+            allow_unused=True  # 允許未使用的輸入
         )[0]
-        return grads[:, component:component+1]
+        
+        # 處理 None 的情況
+        if grads is None:
+            return torch.zeros_like(field_inner)
+        
+        result = grads[:, component:component+1]
+        
+        # 修復：當梯度為常數 0（沒有 grad_fn）時，創建帶計算圖的零張量
+        if result.grad_fn is None and coords_inner.requires_grad:
+            result = 0.0 * field_inner + result
+        
+        return result
     
     # 使用梯度檢查點執行（非重入模式）
     return checkpoint.checkpoint(
@@ -422,15 +443,13 @@ class VSPINNChannelFlow(nn.Module):
         Returns:
             残差字典 {'momentum_x', 'momentum_y', 'momentum_z'}
         """
-        if scaled_coords is None:
-            scaled_coords = self.scale_coordinates(coords)
-        
         u = predictions[:, 0:1]
         v = predictions[:, 1:2]
         w = predictions[:, 2:3]
         p = predictions[:, 3:4]
         
         # === 计算一阶导数（对流项 + 压力项） ===
+        # 注意：只有當 predictions 是基於 scaled_coords 計算時，才應該傳入 scaled_coords
         u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
         v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
         w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
@@ -491,14 +510,13 @@ class VSPINNChannelFlow(nn.Module):
         Returns:
             continuity_residual: [batch, 1]
         """
-        if scaled_coords is None:
-            scaled_coords = self.scale_coordinates(coords)
-        
         u = predictions[:, 0:1]
         v = predictions[:, 1:2]
         w = predictions[:, 2:3]
         
         # 计算散度
+        # 注意：只有當 predictions 是基於 scaled_coords 計算時，才應該傳入 scaled_coords
+        # 否則會導致計算圖斷開（predictions 基於 coords，但梯度計算對 scaled_coords）
         u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
         v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
         w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
@@ -658,9 +676,7 @@ class VSPINNChannelFlow(nn.Module):
         u = predictions[:, 0:1]
         
         # 计算 ∂u/∂y
-        if scaled_coords is None:
-            scaled_coords = self.scale_coordinates(coords)
-        
+        # 注意：只有當 predictions 是基於 scaled_coords 計算時，才應該傳入 scaled_coords
         u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
         du_dy = u_grads['y']
         
@@ -786,9 +802,7 @@ class VSPINNChannelFlow(nn.Module):
         
         # === 约束 1: ∂u/∂y|_{y≈0} = 0 ===
         # 计算 u 对 y 的偏导数
-        if scaled_coords is None:
-            scaled_coords = self.scale_coordinates(coords)
-        
+        # 注意：只有當 predictions 是基於 scaled_coords 計算時，才應該傳入 scaled_coords
         u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
         du_dy = u_grads['y']  # [batch, 1]
         

@@ -116,7 +116,15 @@ def _compute_gradient_standard(
         return torch.zeros_like(field)
     
     # 提取指定分量
-    return grads[:, component:component+1]
+    result = grads[:, component:component+1]
+    
+    # 修復：當梯度為常數 0（沒有 grad_fn）時，創建帶計算圖的零張量
+    # 這對於二階導數計算至關重要
+    if result.grad_fn is None and coords.requires_grad:
+        # 創建一個與 coords 連接但值為 0 的張量
+        result = 0.0 * field + result
+    
+    return result
 
 
 def compute_all_gradients(
@@ -159,7 +167,15 @@ def compute_all_gradients(
         return torch.zeros(field.shape[0], spatial_dim, device=field.device)
     
     # 只返回前 spatial_dim 個分量 (coords 可能有額外維度如時間)
-    return grads[:, :spatial_dim]
+    result = grads[:, :spatial_dim]
+    
+    # 修復：當梯度為常數 0（沒有 grad_fn）時，創建帶計算圖的零張量
+    # 這對於二階導數計算至關重要
+    if result.grad_fn is None and coords.requires_grad:
+        # 創建一個與 field 連接但值為 0 的張量（廣播到正確形狀）
+        result = 0.0 * field + result
+    
+    return result
 
 
 def compute_gradient_safe(

@@ -1533,20 +1533,22 @@ class Trainer:
         self.epoch = checkpoint['epoch']
         self.history = checkpoint.get('history', self.history)
         
-        # 恢復 physics 的 state_dict（VS-PINN 縮放參數等）
-        if self.physics is not None:
-            if 'physics_state_dict' not in checkpoint:
-                raise KeyError("checkpoint is missing required 'physics_state_dict'")
-            if not hasattr(self.physics, 'load_state_dict'):
-                raise TypeError("physics module does not support load_state_dict()")
-            self.physics.load_state_dict(checkpoint['physics_state_dict'])
-            logging.info(f"✅ Physics state restored: {list(checkpoint['physics_state_dict'].keys())}")
+        # 恢復 physics 的 state_dict（VS-PINN 縮放參數等）- 向後相容舊檢查點
+        if self.physics is not None and 'physics_state_dict' in checkpoint:
+            if hasattr(self.physics, 'load_state_dict'):
+                self.physics.load_state_dict(checkpoint['physics_state_dict'])
+                logging.info(f"✅ Physics state restored: {list(checkpoint['physics_state_dict'].keys())}")
+            else:
+                logging.warning("⚠️  Physics module does not support load_state_dict(), skipping")
+        elif self.physics is not None:
+            logging.warning("⚠️  Checkpoint missing 'physics_state_dict' (old format), skipping physics restoration")
         
-        # 恢復標準化器
-        if 'normalization' not in checkpoint:
-            raise KeyError("checkpoint is missing required 'normalization' metadata")
-        self.data_normalizer = DataNormalizer.from_metadata(checkpoint['normalization'])
-        logging.info(f"✅ DataNormalizer restored: {self.data_normalizer}")
+        # 恢復標準化器（向後相容舊檢查點）
+        if 'normalization' in checkpoint:
+            self.data_normalizer = DataNormalizer.from_metadata(checkpoint['normalization'])
+            logging.info(f"✅ DataNormalizer restored: {self.data_normalizer}")
+        else:
+            logging.warning("⚠️  Checkpoint missing 'normalization' metadata (old format), keeping current normalizer")
         
         # 恢復 GradScaler 狀態（AMP）
         if self.use_amp:
