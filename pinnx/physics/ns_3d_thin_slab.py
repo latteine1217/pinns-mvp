@@ -12,108 +12,62 @@ Navier-Stokes 3D Thin-Slab 方程式模組
 設計依據：
 - 物理審查報告: tasks/3d_thin_slab_prep/physics_review.md
 - 目標案例: JHTDB channel flow Re_τ=1000, z⁺ ≈ 120
+
+重構記錄：
+- Phase 4-3 (2025-12-15): 重構為繼承 NavierStokesBase，消除重複代碼
+- 保留向後兼容接口，所有測試無需修改
 """
 
 import torch
 import torch.autograd as autograd
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List, Union
 import warnings
 
+# Import base class
+from .base.ns_base import NavierStokesBase
+from .base.gradient_ops import compute_gradient, compute_second_derivative
+from .base.laplacian_ops import compute_laplacian
+
 # ============================================================================
-# 核心自動微分工具（擴展至3D）
+# 向後兼容梯度工具（Wrapper for Base Module）
 # ============================================================================
 
 def compute_derivatives_3d(f: torch.Tensor, coords: torch.Tensor, 
                           order: int = 1, 
                           keep_graph: bool = True) -> torch.Tensor:
     """
-    3D安全梯度計算（擴展自2D版本）
+    3D梯度計算（向後兼容接口）
+    
+    **重構說明**: 此函數現在委派給 `gradient_ops.compute_gradient()` 和 `compute_second_derivative()`
     
     Args:
         f: 待微分的標量場 [batch_size, 1]
         coords: 座標變數 [batch_size, 3] -> [x, y, z]
         order: 微分階數 (1 或 2)
-        keep_graph: 是否保持計算圖
+        keep_graph: 是否保持計算圖（向後兼容參數，已無使用）
         
     Returns:
         一階: [batch_size, 3] -> [∂f/∂x, ∂f/∂y, ∂f/∂z]
         二階: [batch_size, 3] -> [∂²f/∂x², ∂²f/∂y², ∂²f/∂z²]
     """
-    # 確保輸入張量的requires_grad狀態
-    if not f.requires_grad:
-        f = f.clone().detach().requires_grad_(True)
-    if not coords.requires_grad:
-        coords = coords.clone().detach().requires_grad_(True)
-    
-    # 計算一階偏微分
-    grad_outputs = torch.ones_like(f)
-    try:
-        grads = autograd.grad(
-            outputs=f,
-            inputs=coords,
-            grad_outputs=grad_outputs,
-            create_graph=keep_graph,
-            retain_graph=keep_graph,
-            only_inputs=True,
-            allow_unused=True
-        )
-    except RuntimeError as e:
-        if "backward through the graph" in str(e):
-            # 處理梯度圖重複使用錯誤
-            f_fresh = f.clone().detach().requires_grad_(True)
-            coords_fresh = coords.clone().detach().requires_grad_(True)
-            grads = autograd.grad(
-                outputs=f_fresh,
-                inputs=coords_fresh,
-                grad_outputs=grad_outputs,
-                create_graph=keep_graph,
-                retain_graph=keep_graph,
-                only_inputs=True,
-                allow_unused=True
-            )
-        else:
-            raise e
-    
-    first_derivs = grads[0]
-    if first_derivs is None:
-        first_derivs = torch.zeros_like(f.expand(-1, coords.shape[1]))
+    spatial_dim = coords.shape[1]
     
     if order == 1:
-        return first_derivs
+        # Compute all first derivatives
+        first_derivs = []
+        for i in range(spatial_dim):
+            df_dxi = compute_gradient(f, coords, component=i, spatial_dim=spatial_dim)
+            first_derivs.append(df_dxi)
+        return torch.cat(first_derivs, dim=1)
     
     elif order == 2:
-        # 計算二階偏微分（拉普拉斯算子對角項）
+        # compute_second_derivative for diagonal elements [∂²f/∂x², ∂²f/∂y², ∂²f/∂z²]
         second_derivs = []
-        for i in range(coords.shape[1]):  # 3個空間維度
-            first_deriv_i = first_derivs[:, i:i+1]
-            
-            if not first_deriv_i.requires_grad and first_deriv_i.grad_fn is None:
-                second_deriv = torch.zeros_like(first_deriv_i)
-                second_derivs.append(second_deriv)
-                continue
-            
-            grad_outputs_2nd = torch.ones_like(first_deriv_i)
-            try:
-                second_deriv = autograd.grad(
-                    outputs=first_deriv_i,
-                    inputs=coords if coords.requires_grad else coords.clone().detach().requires_grad_(True),
-                    grad_outputs=grad_outputs_2nd,
-                    create_graph=keep_graph,
-                    retain_graph=keep_graph,
-                    only_inputs=True,
-                    allow_unused=True
-                )[0]
-            except RuntimeError as e:
-                if "backward through the graph" in str(e) or "does not require grad" in str(e):
-                    second_deriv = torch.zeros_like(first_deriv_i)
-                else:
-                    raise e
-            
-            if second_deriv is not None:
-                second_derivs.append(second_deriv[:, i:i+1])  # 只取對角項
-            else:
-                second_derivs.append(torch.zeros_like(first_deriv_i))
-        
+        for i in range(spatial_dim):
+            d2f_dxi2 = compute_second_derivative(
+                f, coords, component1=i, component2=i, spatial_dim=spatial_dim
+            )
+            second_derivs.append(d2f_dxi2)
         return torch.cat(second_derivs, dim=1)
     
     else:
@@ -124,9 +78,9 @@ def compute_laplacian_3d(f: torch.Tensor, coords: torch.Tensor,
                         stabilize: bool = True,
                         max_value: float = 1e4) -> torch.Tensor:
     """
-    計算3D拉普拉斯算子 ∇²f = ∂²f/∂x² + ∂²f/∂y² + ∂²f/∂z²
+    計算3D拉普拉斯算子（向後兼容接口）
     
-    包含數值穩定性保護（依據物理審查報告建議）
+    **重構說明**: 此函數現在委派給 `laplacian_ops.compute_laplacian()`
     
     Args:
         f: 標量場 [batch_size, 1]
@@ -137,21 +91,17 @@ def compute_laplacian_3d(f: torch.Tensor, coords: torch.Tensor,
     Returns:
         拉普拉斯算子結果 [batch_size, 1]
     """
-    # 計算二階偏微分
-    second_derivs = compute_derivatives_3d(f, coords, order=2, keep_graph=True)
+    laplacian_result = compute_laplacian(f, coords, spatial_dim=3)
     
-    # 對所有空間方向求和
-    laplacian = torch.sum(second_derivs, dim=1, keepdim=True)
-    
-    # 數值穩定性保護（物理審查報告: 風險項目1）
+    # 數值穩定性保護
     if stabilize:
-        laplacian = torch.clamp(laplacian, -max_value, max_value)
+        laplacian_result = torch.clamp(laplacian_result, -max_value, max_value)
     
-    return laplacian
+    return laplacian_result
 
 
 # ============================================================================
-# 3D NS 方程殘差計算
+# 3D NS 方程殘差計算（向後兼容接口）
 # ============================================================================
 
 def ns_residual_3d_thin_slab(
@@ -164,6 +114,8 @@ def ns_residual_3d_thin_slab(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     計算3D不可壓縮Navier-Stokes方程殘差（thin-slab配置）
+    
+    **重構說明**: 此函數現在是 `NSEquations3DThinSlab.residual()` 的向後兼容 wrapper
     
     控制方程（壁面單位）：
     ∂u/∂t + u∂u/∂x + v∂u/∂y + w∂u/∂z = -∂p/∂x + (1/Re_τ)∇²u  (x-動量)
@@ -189,75 +141,23 @@ def ns_residual_3d_thin_slab(
     - 邊界條件兼容: ✅ 週期性(x,z) + 無滑移(y)
     - 守恆定律: ✅ 質量、動量守恆
     """
-    # 確保輸入需要梯度計算
-    if not coords.requires_grad:
-        coords.requires_grad_(True)
-    if not pred.requires_grad:
-        pred.requires_grad_(True)
-    if time is not None and not time.requires_grad:
-        time.requires_grad_(True)
+    # 創建臨時實例（使用傳入的參數）
+    ns_eq = NSEquations3DThinSlab(viscosity=nu, stabilize=stabilize)
     
-    # 分解預測變數
-    u = pred[:, 0:1].requires_grad_(True)  # x方向速度（流向）
-    v = pred[:, 1:2].requires_grad_(True)  # y方向速度（壁法向）
-    w = pred[:, 2:3].requires_grad_(True)  # z方向速度（展向）
-    p = pred[:, 3:4].requires_grad_(True)  # 壓力
+    # 解析速度和壓力
+    velocity = pred[:, :3]  # [u, v, w]
+    pressure = pred[:, 3:4]  # [p]
     
-    # 計算速度的空間偏微分
-    u_derivs = compute_derivatives_3d(u, coords, order=1, keep_graph=True)
-    v_derivs = compute_derivatives_3d(v, coords, order=1, keep_graph=True)
-    w_derivs = compute_derivatives_3d(w, coords, order=1, keep_graph=True)
-    p_derivs = compute_derivatives_3d(p, coords, order=1, keep_graph=True)
+    # 調用類方法
+    res_dict = ns_eq.residual(coords, velocity, pressure, time=time, source_term=source_term)
     
-    u_x, u_y, u_z = u_derivs[:, 0:1], u_derivs[:, 1:2], u_derivs[:, 2:3]
-    v_x, v_y, v_z = v_derivs[:, 0:1], v_derivs[:, 1:2], v_derivs[:, 2:3]
-    w_x, w_y, w_z = w_derivs[:, 0:1], w_derivs[:, 1:2], w_derivs[:, 2:3]
-    p_x, p_y, p_z = p_derivs[:, 0:1], p_derivs[:, 1:2], p_derivs[:, 2:3]
-    
-    # 計算拉普拉斯算子（黏性項）
-    u_laplacian = compute_laplacian_3d(u, coords, stabilize=stabilize)
-    v_laplacian = compute_laplacian_3d(v, coords, stabilize=stabilize)
-    w_laplacian = compute_laplacian_3d(w, coords, stabilize=stabilize)
-    
-    # 時間導數（非定常情況）
-    if time is not None:
-        u_t = compute_derivatives_3d(u, time, order=1, keep_graph=True)
-        v_t = compute_derivatives_3d(v, time, order=1, keep_graph=True)
-        w_t = compute_derivatives_3d(w, time, order=1, keep_graph=True)
-    else:
-        u_t = torch.zeros_like(u)
-        v_t = torch.zeros_like(v)
-        w_t = torch.zeros_like(w)
-    
-    # 對流項（非線性項）
-    u_convection = u * u_x + v * u_y + w * u_z  # (u·∇)u
-    v_convection = u * v_x + v * v_y + w * v_z  # (u·∇)v
-    w_convection = u * w_x + v * w_y + w * w_z  # (u·∇)w
-    
-    # 源項處理
-    if source_term is not None:
-        S_x = source_term[:, 0:1]
-        S_y = source_term[:, 1:2]
-        S_z = source_term[:, 2:3]
-    else:
-        S_x = torch.zeros_like(u)
-        S_y = torch.zeros_like(v)
-        S_z = torch.zeros_like(w)
-    
-    # NS方程殘差計算
-    # x-動量方程: ∂u/∂t + (u·∇)u + ∂p/∂x - ν∇²u - S_x = 0
-    momentum_x = u_t + u_convection + p_x - nu * u_laplacian - S_x
-    
-    # y-動量方程: ∂v/∂t + (u·∇)v + ∂p/∂y - ν∇²v - S_y = 0
-    momentum_y = v_t + v_convection + p_y - nu * v_laplacian - S_y
-    
-    # z-動量方程: ∂w/∂t + (u·∇)w + ∂p/∂z - ν∇²w - S_z = 0
-    momentum_z = w_t + w_convection + p_z - nu * w_laplacian - S_z
-    
-    # 連續方程（不可壓縮）: ∂u/∂x + ∂v/∂y + ∂w/∂z = 0
-    continuity = u_x + v_y + w_z
-    
-    return momentum_x, momentum_y, momentum_z, continuity
+    # 返回與原接口一致的元組
+    return (
+        res_dict['momentum_x'],
+        res_dict['momentum_y'],
+        res_dict['momentum_z'],
+        res_dict['continuity']
+    )
 
 
 # ============================================================================
@@ -544,12 +444,14 @@ def check_conservation_3d(coords: torch.Tensor,
 
 
 # ============================================================================
-# 統一接口類別（物件導向封裝）
+# 統一接口類別（繼承 NavierStokesBase）
 # ============================================================================
 
-class NSEquations3DThinSlab:
+class NSEquations3DThinSlab(NavierStokesBase):
     """
     3D Thin-Slab Navier-Stokes 方程式統一接口
+    
+    **重構說明**: 現在繼承 `NavierStokesBase`，復用梯度/Laplacian/NS 組件
     
     設計目標：
     - 提供一致的API與2D版本對接
@@ -567,58 +469,147 @@ class NSEquations3DThinSlab:
                  viscosity: float = 1e-3,
                  density: float = 1.0,
                  domain_lengths: Optional[Dict[str, float]] = None,
-                 stabilize: bool = True):
+                 stabilize: bool = True,
+                 **kwargs):
         """
         Args:
             viscosity: 運動黏度 ν (= 1/Re_τ for normalized)
             density: 流體密度 ρ
             domain_lengths: 域長度 {'L_x': float, 'L_y': float, 'L_z': float}
             stabilize: 是否啟用數值穩定性保護
+            **kwargs: 傳遞給基類的額外參數
         """
-        self.viscosity = viscosity
-        self.density = density
-        self.stabilize = stabilize
-        
         # 預設域長度（JHTDB channel flow Re_τ=1000）
         if domain_lengths is None:
-            self.domain_lengths = {
+            domain_lengths = {
                 'L_x': 8.0 * 3.141592653589793,  # 8π (流向)
                 'L_y': 2.0,                      # 2h (壁法向, h=1)
                 'L_z': 0.12                      # z⁺ ≈ 120
             }
-        else:
-            self.domain_lengths = domain_lengths
+        
+        # 構建物理參數字典
+        physics_params = {
+            'nu': viscosity,
+            'rho': density
+        }
+        
+        # 構建域邊界字典（從 domain_lengths 轉換）
+        domain_bounds = {
+            'x': [0.0, domain_lengths.get('L_x', 8.0 * 3.141592653589793)],
+            'y': [-1.0, 1.0],  # Thin-slab: y ∈ [-1, 1]
+            'z': [0.0, domain_lengths.get('L_z', 0.12)]
+        }
+        
+        # 調用基類初始化（spatial_dim=3 for 3D）
+        super().__init__(
+            physics_params=physics_params,
+            domain_bounds=domain_bounds,
+            spatial_dim=3,
+            **kwargs
+        )
+        
+        # Thin-slab 特有屬性
+        self.domain_lengths = domain_lengths
+        self.stabilize = stabilize
     
     def residual(self,
                 coords: torch.Tensor,
-                velocity: torch.Tensor,
+                velocity: Union[torch.Tensor, List[torch.Tensor]],
                 pressure: torch.Tensor,
-                time: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+                time: Optional[torch.Tensor] = None,
+                source_term: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """
         計算NS方程殘差（統一接口）
         
+        **重構說明**: 現在使用基類方法計算各項，避免重複代碼
+        
         Args:
             coords: 座標 [batch_size, 3]
-            velocity: 速度場 [batch_size, 3] -> [u, v, w]
+            velocity: 速度場 [batch_size, 3] -> [u, v, w] 或 List[u, v, w]
             pressure: 壓力場 [batch_size, 1]
             time: 時間 [batch_size, 1] (可選)
+            source_term: 外部源項 [batch_size, 3] -> [S_x, S_y, S_z] (可選)
             
         Returns:
             殘差字典 {'momentum_x', 'momentum_y', 'momentum_z', 'continuity'}
         """
-        # 組合預測張量
-        pred = torch.cat([velocity, pressure], dim=1)
+        # 確保輸入需要梯度
+        if not coords.requires_grad:
+            coords.requires_grad_(True)
         
-        # 計算殘差
-        mom_x, mom_y, mom_z, cont = ns_residual_3d_thin_slab(
-            coords, pred, self.viscosity, time, stabilize=self.stabilize
-        )
+        # 解析速度分量
+        if isinstance(velocity, torch.Tensor):
+            if velocity.shape[1] != 3:
+                raise ValueError(f"Velocity must have 3 components, got shape {velocity.shape}")
+            u = velocity[:, 0:1]
+            v = velocity[:, 1:2]
+            w = velocity[:, 2:3]
+            velocity_list = [u, v, w]
+        else:
+            u, v, w = velocity
+            velocity_list = [u, v, w]
+        
+        if not pressure.requires_grad:
+            pressure = pressure.requires_grad_(True)
+        
+        # 時間導數（非定常情況）
+        if time is not None:
+            if not time.requires_grad:
+                time.requires_grad_(True)
+            # time is [batch, 1], treat it as 1D coordinate
+            u_t = compute_gradient(u, time, component=0, spatial_dim=1)
+            v_t = compute_gradient(v, time, component=0, spatial_dim=1)
+            w_t = compute_gradient(w, time, component=0, spatial_dim=1)
+        else:
+            u_t = torch.zeros_like(u)
+            v_t = torch.zeros_like(v)
+            w_t = torch.zeros_like(w)
+        
+        # 連續性方程（基類方法）
+        continuity = self.compute_continuity_residual(coords, velocity_list)
+        
+        # 對流項（基類方法）
+        conv_u = self.compute_advection_term(coords, u, velocity_list)
+        conv_v = self.compute_advection_term(coords, v, velocity_list)
+        conv_w = self.compute_advection_term(coords, w, velocity_list)
+        
+        # 黏性項（基類方法 - 返回 ν∇²u）
+        visc_u = self.compute_viscous_term(coords, u)
+        visc_v = self.compute_viscous_term(coords, v)
+        visc_w = self.compute_viscous_term(coords, w)
+        
+        # 壓力梯度（基類方法）
+        p_x = self.compute_pressure_gradient(pressure, coords, component=0)
+        p_y = self.compute_pressure_gradient(pressure, coords, component=1)
+        p_z = self.compute_pressure_gradient(pressure, coords, component=2)
+        
+        # 源項處理
+        if source_term is not None:
+            S_x = source_term[:, 0:1]
+            S_y = source_term[:, 1:2]
+            S_z = source_term[:, 2:3]
+        else:
+            S_x = torch.zeros_like(u)
+            S_y = torch.zeros_like(v)
+            S_z = torch.zeros_like(w)
+        
+        # 組裝動量方程殘差: ∂u/∂t + (u·∇)u + ∂p/∂x - ν∇²u - S = 0
+        momentum_x = u_t + conv_u + p_x - visc_u - S_x
+        momentum_y = v_t + conv_v + p_y - visc_v - S_y
+        momentum_z = w_t + conv_w + p_z - visc_w - S_z
+        
+        # 數值穩定性保護（如果啟用）
+        if self.stabilize:
+            max_val = 1e4
+            momentum_x = torch.clamp(momentum_x, -max_val, max_val)
+            momentum_y = torch.clamp(momentum_y, -max_val, max_val)
+            momentum_z = torch.clamp(momentum_z, -max_val, max_val)
         
         return {
-            'momentum_x': mom_x,
-            'momentum_y': mom_y,
-            'momentum_z': mom_z,
-            'continuity': cont
+            'momentum_x': momentum_x,
+            'momentum_y': momentum_y,
+            'momentum_z': momentum_z,
+            'continuity': continuity
         }
     
     def check_conservation(self,
@@ -626,12 +617,12 @@ class NSEquations3DThinSlab:
                           velocity: torch.Tensor,
                           pressure: torch.Tensor) -> Dict[str, Any]:
         """
-        守恆律檢查
+        守恆律檢查（向後兼容接口）
         
         Returns:
             包含數值指標與通過/失敗判定的字典
         """
-        return check_conservation_3d(coords, velocity, pressure, self.viscosity)
+        return check_conservation_3d(coords, velocity, pressure, self.nu)
     
     def apply_boundary_conditions(self,
                                  coords_wall: torch.Tensor,
@@ -681,12 +672,25 @@ class NSEquations3DThinSlab:
     
     def get_physical_properties(self) -> Dict[str, Any]:
         """
-        獲取物理屬性
+        獲取物理屬性（擴展基類方法）
         """
-        return {
-            'viscosity': self.viscosity,
-            'density': self.density,
+        base_props = self.get_physics_info()
+        base_props.update({
             'domain_lengths': self.domain_lengths,
-            'reynolds_tau': 1.0 / self.viscosity,
+            'reynolds_tau': 1.0 / self.nu,
             'stabilize': self.stabilize
-        }
+        })
+        return base_props
+    
+    # ========================================================================
+    # 向後兼容屬性（測試期望 self.viscosity 存在）
+    # ========================================================================
+    @property
+    def viscosity(self) -> float:
+        """向後兼容: 返回 self.nu"""
+        return self.nu
+    
+    @property
+    def density(self) -> float:
+        """向後兼容: 返回 self.rho"""
+        return self.rho
