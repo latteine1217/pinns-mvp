@@ -1478,158 +1478,46 @@ class Trainer:
         epoch: int,
         metrics: Optional[Dict[str, float]] = None,
         is_best: bool = False
-    ):
+    ) -> None:
         """
-        保存檢查點
-
+        保存檢查點（Phase 4 重構版）
+        
         Args:
             epoch: 當前 epoch
             metrics: 評估指標（可選）
             is_best: 是否為最佳模型
         """
-        # ✅ 物理驗證：在保存前檢查模型物理一致性
-        from pinnx.train.checkpointing import validate_physics_before_save
-
-        # 生成驗證點座標（從域邊界均勻採樣）
-        validation_n_points = 1000  # 驗證點數量
-        
-        # 嘗試從配置中獲取 domain 資訊（支援多種配置格式）
-        domain = None
-        
-        # 優先順序 1: physics.domain
-        physics_config = self.config.get('physics', {})
-        if 'domain' in physics_config:
-            domain_data = physics_config['domain']
-            if 'x_range' in domain_data:
-                # 格式: x_range: [min, max]
-                domain = {
-                    'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
-                    'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
-                    'z_min': domain_data.get('z_range', [0, 1])[0],
-                    'z_max': domain_data.get('z_range', [0, 1])[1],
-                }
-        
-        # 優先順序 2: data.jhtdb_config.domain
-        if domain is None:
-            data_config = self.config.get('data', {})
-            jhtdb_config = data_config.get('jhtdb_config', {})
-            if 'domain' in jhtdb_config:
-                domain_data = jhtdb_config['domain']
-                # 格式: x: [min, max]
-                domain = {
-                    'x_min': domain_data.get('x', [0, 1])[0],
-                    'x_max': domain_data.get('x', [0, 1])[1],
-                    'y_min': domain_data.get('y', [-1, 1])[0],
-                    'y_max': domain_data.get('y', [-1, 1])[1],
-                    'z_min': domain_data.get('z', [0, 1])[0] if 'z' in domain_data else 0.0,
-                    'z_max': domain_data.get('z', [0, 1])[1] if 'z' in domain_data else 1.0,
-                }
-        
-        # 優先順序 3: 頂層 domain
-        if domain is None:
-            domain_data = self.config.get('domain', None)
-            if domain_data is not None:
-                if 'x_range' in domain_data:
-                    domain = {
-                        'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
-                        'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
-                        'z_min': domain_data.get('z_range', [0, 1])[0],
-                        'z_max': domain_data.get('z_range', [0, 1])[1],
-                    }
-                elif 'x_min' in domain_data:
-                    domain = domain_data
-        
-        # 預設值（通道流標準域）
-        if domain is None:
-            logging.warning("配置中未找到 domain 資訊，使用預設值（通道流 Re_tau=1000）")
-            domain = {
-                'x_min': 0.0, 'x_max': 25.13,
-                'y_min': -1.0, 'y_max': 1.0,
-                'z_min': 0.0, 'z_max': 9.42
-            }
-
-        if self.model_input_dim == 2:
-            x = torch.linspace(domain['x_min'], domain['x_max'], 32, device=self.device)
-            y = torch.linspace(domain['y_min'], domain['y_max'], 32, device=self.device)
-            X, Y = torch.meshgrid(x, y, indexing='ij')
-            validation_coords = torch.stack([X.flatten(), Y.flatten()], dim=1)
-        elif self.model_input_dim == 3:
-            x = torch.linspace(domain['x_min'], domain['x_max'], 10, device=self.device)
-            y = torch.linspace(domain['y_min'], domain['y_max'], 10, device=self.device)
-            z = torch.linspace(domain['z_min'], domain['z_max'], 10, device=self.device)
-            X, Y, Z = torch.meshgrid(x, y, z, indexing='ij')
-            validation_coords = torch.stack([X.flatten(), Y.flatten(), Z.flatten()], dim=1)
-        else:
-            logging.warning(f"未知的模型輸入維度: {self.model_input_dim}，跳過物理驗證")
-            validation_coords = None
-
-        # 執行物理驗證
-        physics_metrics = {}
-        if validation_coords is not None:
-            validation_passed, physics_metrics = validate_physics_before_save(
-                self.model,
-                validation_coords,
-                self.config,
-                self.device
-            )
-
-            # 物理診斷完成（記錄但不拒絕保存）
-            # 注意：validate_physics_before_save 已修改為診斷模式
-            # 僅在 strict_mode=True 且檢測到 trivial solution 時才返回 False
-            if not validation_passed:
-                # 檢查是否是因為 trivial solution 被拒絕（strict mode）
-                if physics_metrics.get('trivial_solution', {}).get('is_trivial', False):
-                    strict_mode = self.config.get('physics_validation', {}).get('strict_mode', False)
-                    if strict_mode:
-                        logging.error("❌ Strict Mode: 檢測到 Trivial Solution，拒絕保存")
-                        return  # 僅在此情況下拒絕
-
-                # 其他情況：物理約束未滿足（訓練初期正常）
-                logging.info("ℹ️  物理診斷完成，指標已記錄至檢查點元數據")
-                # 繼續保存，讓使用者根據診斷資訊判斷
-
-        checkpoint_path = self.checkpoint_dir / f"epoch_{epoch}.pth"
-
-        checkpoint_data = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'history': self.history,
-            'config': self.config,
-        }
-
-        # 🆕 保存 physics 的 state_dict（VS-PINN 縮放參數等）
-        if self.physics is not None and hasattr(self.physics, 'state_dict'):
-            checkpoint_data['physics_state_dict'] = self.physics.state_dict()
-            logging.debug(f"💾 Physics state saved: {list(self.physics.state_dict().keys())}")
-
-        # ✅ TASK-008: 保存標準化 metadata
-        checkpoint_data['normalization'] = self.data_normalizer.get_metadata()
-        logging.debug(f"💾 Normalization metadata saved: type={self.data_normalizer.norm_type}")
-
-        # ⭐ P0.2: 保存 GradScaler 狀態（AMP）
-        if self.use_amp and hasattr(self, 'scaler'):
-            checkpoint_data['scaler_state_dict'] = self.scaler.state_dict()
-            logging.debug(f"💾 GradScaler state saved: scale={self.scaler.get_scale():.0f}")
-
-        # ✅ 保存物理驗證指標
-        if physics_metrics:
-            checkpoint_data['physics_metrics'] = physics_metrics
-            logging.debug(f"💾 Physics metrics saved: validation_passed={physics_metrics.get('validation_passed', False)}")
-
-        if metrics:
-            checkpoint_data['metrics'] = metrics
-
-        if self.lr_scheduler:
-            checkpoint_data['lr_scheduler_state_dict'] = self.lr_scheduler.state_dict()
-
-        torch.save(checkpoint_data, checkpoint_path)
-        logging.info(f"💾 檢查點已保存: {checkpoint_path}")
-
-        if is_best:
-            best_path = self.checkpoint_dir / "best_model.pth"
-            torch.save(checkpoint_data, best_path)
-            logging.info(f"⭐ 最佳模型已保存: {best_path}")
+        try:
+            # 1. 解析 domain 配置
+            domain = self._parse_domain_from_config()
+            
+            # 2. 生成驗證座標
+            validation_coords = self._generate_validation_coords(domain)
+            
+            # 3. 執行物理驗證（可能 early return via exception）
+            physics_metrics = self._run_physics_validation_before_save(validation_coords)
+            
+            # 4. 打包檢查點數據
+            checkpoint_data = self._build_checkpoint_data(epoch, metrics, physics_metrics)
+            
+            # 5. 保存到磁碟
+            checkpoint_path = self.checkpoint_dir / f"epoch_{epoch}.pth"
+            torch.save(checkpoint_data, checkpoint_path)
+            logging.info(f"💾 檢查點已保存: {checkpoint_path}")
+            
+            # 6. 如果是最佳模型，額外保存
+            if is_best:
+                best_path = self.checkpoint_dir / "best_model.pth"
+                torch.save(checkpoint_data, best_path)
+                logging.info(f"⭐ 最佳模型已保存: {best_path}")
+                
+        except RuntimeError as e:
+            # 處理 strict mode 拒絕保存的情況（來自 _run_physics_validation_before_save）
+            if "Physics validation failed" in str(e):
+                logging.warning("檢查點保存被中止（physics validation failed）")
+                return
+            else:
+                raise  # 其他 RuntimeError 繼續拋出
     
     def load_checkpoint(self, checkpoint_path: str):
         """
