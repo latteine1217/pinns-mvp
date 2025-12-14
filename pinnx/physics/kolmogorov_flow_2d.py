@@ -44,51 +44,6 @@ from .base.gradient_ops import compute_gradient
 
 
 # ==============================================================================
-# Backward Compatibility: Legacy Gradient Functions
-# ==============================================================================
-
-def compute_gradient_2d(
-    field: torch.Tensor,
-    coords: torch.Tensor,
-    component: int
-) -> torch.Tensor:
-    """
-    計算 2D 場的偏導數（向後兼容包裝器）
-    
-    ⚠️ DEPRECATED: 請使用 pinnx.physics.base.gradient_ops.compute_gradient()
-
-    Args:
-        field: 標量場 [batch, 1]
-        coords: 坐標 [batch, N]（N >= 2）
-        component: 微分分量 (0=x, 1=y)
-
-    Returns:
-        偏導數 [batch, 1]
-    """
-    return compute_gradient(field, coords, component=component, spatial_dim=2)
-
-
-def compute_laplacian_2d(
-    field: torch.Tensor,
-    coords: torch.Tensor
-) -> torch.Tensor:
-    """
-    計算 2D Laplacian（向後兼容包裝器）
-    
-    ⚠️ DEPRECATED: 請使用 pinnx.physics.base.laplacian_ops.compute_laplacian()
-
-    Args:
-        field: 標量場 [batch, 1]
-        coords: 2D 坐標 [batch, 2]
-
-    Returns:
-        laplacian: [batch, 1]
-    """
-    from .base.laplacian_ops import compute_laplacian as compute_laplacian_base
-    return compute_laplacian_base(field, coords, spatial_dim=2)
-
-
-# ==============================================================================
 # Main Class: KolmogorovFlow2D (Refactored)
 # ==============================================================================
 

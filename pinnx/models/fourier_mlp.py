@@ -799,8 +799,7 @@ def create_pinn_model(config: dict) -> nn.Module:
             f"不支援的模型類型: {model_type}\n"
             f"支援的類型: 'fourier_vs_mlp'\n"
             f"注意: \n"
-            f"  - 'multiscale' 已移除，請使用 fourier_vs_mlp + fourier_multiscale=True\n"
-            f"  - 'enhanced_fourier_mlp' 已移除，請使用 'fourier_vs_mlp'"
+            f"  - 'multiscale' 已移除，請使用 fourier_vs_mlp + fourier_multiscale=True"
         )
 
 
@@ -940,3 +939,66 @@ if __name__ == "__main__":
         print(f"   {key:20s}: {value}")
 
     print("\n✅ 所有測試通過！")
+
+
+# ============================================================================
+# Backward Compatibility Aliases (Deprecated)
+# ============================================================================
+
+# 向後兼容別名：舊測試可能仍在使用這些名稱
+# 注意：這些別名已棄用，建議更新代碼使用 PINNNet 或 create_pinn_model()
+
+import warnings
+
+def _deprecated_alias(old_name: str, new_name: str):
+    """創建棄用警告的包裝器"""
+    warnings.warn(
+        f"{old_name} is deprecated and will be removed in a future version. "
+        f"Use {new_name} instead.",
+        DeprecationWarning,
+        stacklevel=3
+    )
+
+# FourierMLP 別名（舊名稱）
+class FourierMLP(PINNNet):
+    """
+    已棄用：使用 PINNNet 代替
+    
+    這是向後兼容別名，將在未來版本中移除。
+    """
+    def __init__(self, *args, **kwargs):
+        _deprecated_alias('FourierMLP', 'PINNNet')
+        super().__init__(*args, **kwargs)
+
+# MultiScalePINNNet 別名（舊名稱）
+class MultiScalePINNNet(PINNNet):
+    """
+    已棄用：使用 create_pinn_model() 配置 fourier_multiscale=True 代替
+    
+    這是向後兼容別名，將在未來版本中移除。
+    
+    遷移示例：
+    ```python
+    # 舊代碼
+    model = MultiScalePINNNet(in_dim=3, out_dim=4, ...)
+    
+    # 新代碼
+    config = {
+        'model': {
+            'type': 'fourier_vs_mlp',
+            'in_dim': 3,
+            'out_dim': 4,
+            'fourier_multiscale': True,
+            ...
+        }
+    }
+    model = create_pinn_model(config)
+    ```
+    """
+    def __init__(self, *args, **kwargs):
+        _deprecated_alias('MultiScalePINNNet', 'create_pinn_model() with fourier_multiscale=True')
+        # MultiScalePINNNet 實際上就是開啟 fourier_multiscale 的 PINNNet
+        if 'fourier_config' not in kwargs:
+            kwargs['fourier_config'] = {}
+        kwargs['fourier_config']['multiscale'] = True
+        super().__init__(*args, **kwargs)

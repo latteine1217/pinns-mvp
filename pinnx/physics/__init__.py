@@ -16,7 +16,6 @@ from .ns_2d import (
     incompressible_ns_2d,
     compute_vorticity,
     compute_q_criterion,
-    compute_derivatives,
     check_conservation_laws
 )
 
@@ -114,7 +113,7 @@ def check_cfl_condition(velocity, grid_spacing, time_step):
 __all__ = [
     # NS方程相關
     'ns_residual_2d', 'incompressible_ns_2d', 'compute_vorticity', 
-    'compute_q_criterion', 'compute_derivatives', 'check_conservation_laws',
+    'compute_q_criterion', 'check_conservation_laws',
     
     # 3D時間依賴NS方程
     'NSEquations3DTemporal', 'compute_derivatives_3d_temporal',

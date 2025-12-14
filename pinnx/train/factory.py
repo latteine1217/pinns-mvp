@@ -415,26 +415,10 @@ def create_model(
         )
 
     else:
-        # 基礎 PINN
-        base_model = PINNNet(
-            in_dim=model_cfg['in_dim'],
-            out_dim=model_cfg['out_dim'],
-            width=model_cfg['width'],
-            depth=model_cfg['depth'],
-            activation=model_cfg['activation'],
-            use_fourier=use_fourier,
-            fourier_m=model_cfg.get('fourier_m', 32),
-            fourier_sigma=model_cfg.get('fourier_sigma', 1.0),
-            use_rwf=model_cfg.get('use_rwf', False),
-            rwf_scale_std=model_cfg.get('rwf_scale_std', 0.1),
-            use_layer_norm=model_cfg.get('use_layer_norm', False),
-            use_residual=model_cfg.get('use_residual', False),
-            dropout=model_cfg.get('dropout', 0.0),
-            sine_omega_0=model_cfg.get('sine_omega_0', 1.0),
-            fourier_normalize_input=fourier_normalize_input,
-            input_scale_factors=input_scale_factors
-        ).to(device)
-        logging.info(f"✅ Created PINNNet (use_fourier={use_fourier}, use_rwf={model_cfg.get('use_rwf', False)})")
+        raise ValueError(
+            f"Unsupported model type: '{model_type}'. "
+            f"Supported types: 'fourier_vs_mlp', 'resnet', 'axis_selective_fourier_mlp'"
+        )
     
     # === 4. 應用手動標準化包裝器（若配置啟用且非 VS-PINN）===
     scaling_cfg = model_cfg.get('scaling', {})

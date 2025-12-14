@@ -76,7 +76,7 @@ normalization:
 # ====================================================================
 sensors:
   K: 500                               # 感測點數量
-  strategy: "qr_pivot"                # 選點策略：qr_pivot / random / uniform / hybrid
+  selection_method: "qr_pivot"         # 選點策略：qr_pivot / random / uniform / hybrid
   sensor_file: "sensors_K500_qr_pivot_3d_wall_enhanced.npz"  # 預生成感測點文件（相對於 cache_dir）
   
   # Hybrid 策略配置（若使用 hybrid）
@@ -89,7 +89,7 @@ sensors:
 # 5. 模型架構配置
 # ====================================================================
 model:
-  type: "fourier_mlp"                 # 模型類型：fourier_mlp / siren / vanilla_mlp
+  type: "fourier_vs_mlp"              # 模型類型：fourier_vs_mlp / siren / vanilla_mlp
   width: 200                          # 隱藏層寬度
   depth: 8                            # 隱藏層深度
   out_dim: 4                          # 輸出維度（u, v, w, p）

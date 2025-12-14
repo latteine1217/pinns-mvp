@@ -12,9 +12,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from pinnx.physics.ns_2d import (
     ns_residual_2d, incompressible_ns_2d, 
-    compute_derivatives, compute_laplacian, compute_vorticity,
+    compute_vorticity,
     check_conservation_laws
 )
+from pinnx.physics.base.gradient_ops import compute_gradient, compute_all_gradients
+from pinnx.physics.base.laplacian_ops import compute_laplacian
 from pinnx.physics.scaling import (
     VSScaler,
     create_scaler_from_data, denormalize_gradients
@@ -46,7 +48,7 @@ class TestNSEquations:
         predictions = net(coords)
         
         # 計算殘差
-        residuals = ns_residual_2d(coords, predictions, nu=0.01)
+        residuals = ns_residual_2d(coords, predictions, viscosity=0.01)
         
         # 檢查輸出格式
         assert len(residuals) == 3  # momentum_x, momentum_y, continuity
@@ -62,7 +64,7 @@ class TestNSEquations:
         net = nn.Sequential(nn.Linear(2, 10), nn.Tanh(), nn.Linear(10, 3)).to(self.device)
         predictions = net(coords)  # [u, v, p]
         
-        result = incompressible_ns_2d(coords, predictions, nu=0.01)
+        result = incompressible_ns_2d(coords, predictions, viscosity=0.01)
         
         assert result.shape[0] == coords.shape[0]
         assert not torch.isnan(result).any()
@@ -78,7 +80,7 @@ class TestNSEquations:
         f = f.unsqueeze(1)  # 變為 [batch, 1]
         
         # 計算導數
-        derivs = compute_derivatives(f, coords, order=1)
+        derivs = compute_all_gradients(f, coords, spatial_dim=2)
         
         # 檢查導數維度
         assert derivs.shape == coords.shape
@@ -92,7 +94,7 @@ class TestNSEquations:
         # 簡單的二次函數: f = x^2 + y^2, laplacian = 4
         f = torch.sum(coords**2, dim=1, keepdim=True)
         
-        laplacian = compute_laplacian(f, coords)
+        laplacian = compute_laplacian(f, coords, spatial_dim=2)
         
         assert laplacian.shape == (coords.shape[0], 1)
         assert not torch.isnan(laplacian).any()
@@ -114,32 +116,6 @@ class TestNSEquations:
         
         assert vorticity.shape == (coords.shape[0], 1)
         assert not torch.isnan(vorticity).any()
-
-
-# class TestBoundaryConditions:
-#     """測試邊界條件模組"""
-#     
-#     def test_boundary_conditions_application(self):
-#         """測試邊界條件應用"""
-#         coords = torch.tensor([[0.0, 0.5], [1.0, 0.5], [0.5, 0.0], [0.5, 1.0]], 
-#                              device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-#         
-#         predictions = torch.tensor([[0.1, 0.2, 0.0], [0.15, 0.25, 0.05], 
-#                                    [0.05, 0.1, -0.02], [0.2, 0.3, 0.1]], 
-#                                   device=coords.device)
-#         
-#         # Dirichlet 邊界條件 (零速度)
-#         bc_config = {
-#             'type': 'dirichlet',
-#             'value': torch.zeros(4, 2, device=coords.device),  # 零速度
-#             'components': [0, 1]  # u, v 分量
-#         }
-#         
-#         bc_loss = apply_boundary_conditions(coords, predictions, bc_config)
-#         
-#         assert bc_loss.numel() == 1
-#         assert bc_loss >= 0
-#         assert not torch.isnan(bc_loss)
 
 
 class TestConservationLaws:
@@ -219,7 +195,7 @@ def test_integration_physics_modules():
     predictions = net(coords)
     
     # NS 方程計算
-    residuals = ns_residual_2d(coords, predictions, nu=0.01)
+    residuals = ns_residual_2d(coords, predictions, viscosity=0.01)
     
     # 渦量計算
     vorticity = compute_vorticity(coords, predictions[:, :2])

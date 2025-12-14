@@ -24,9 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pinnx.physics.kolmogorov_flow_2d import (
     KolmogorovFlow2D,
     create_kolmogorov_flow_2d,
-    compute_gradient_2d,
-    compute_laplacian_2d,
 )
+from pinnx.physics.base.gradient_ops import compute_gradient
+from pinnx.physics.base.laplacian_ops import compute_laplacian
 
 
 @pytest.fixture
@@ -153,8 +153,8 @@ class TestGradientComputation:
         coords = torch.rand(50, 2, device=device, requires_grad=True)
         field = 2.0 * coords[:, 0:1] + 3.0 * coords[:, 1:2]
 
-        grad_x = compute_gradient_2d(field, coords, component=0)
-        grad_y = compute_gradient_2d(field, coords, component=1)
+        grad_x = compute_gradient(field, coords, component=0, spatial_dim=2)
+        grad_y = compute_gradient(field, coords, component=1, spatial_dim=2)
 
         # 解析解：∂f/∂x = 2, ∂f/∂y = 3
         assert torch.allclose(grad_x, torch.full_like(grad_x, 2.0), atol=1e-5)
@@ -166,7 +166,7 @@ class TestGradientComputation:
         coords = torch.rand(50, 2, device=device, requires_grad=True)
         field = coords[:, 0:1] ** 2 + coords[:, 1:2] ** 2
 
-        laplacian = compute_laplacian_2d(field, coords)
+        laplacian = compute_laplacian(field, coords, spatial_dim=2)
 
         # 解析解：∇²f = 2 + 2 = 4
         assert torch.allclose(laplacian, torch.full_like(laplacian, 4.0), atol=1e-4)

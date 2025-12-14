@@ -17,7 +17,6 @@ Note (2025-10-20):
     - MultiScalePINNNet 已移除，使用 fourier_multiscale=True 替代
     - create_standard_pinn/create_enhanced_pinn 已移除，統一使用 create_pinn_model()
     - 推薦模型類型: 'fourier_vs_mlp'
-    - 'enhanced_fourier_mlp' 已移除，請改用 'fourier_vs_mlp'
 """
 
 from .fourier_mlp import (
