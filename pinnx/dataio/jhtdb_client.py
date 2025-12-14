@@ -535,30 +535,59 @@ class PyJHTDBClient(BaseJHTDBClient):
 
 
 class MockJHTDBClient(BaseJHTDBClient):
-    """模擬 JHTDB 客戶端（用於測試和離線開發）"""
+    """模擬 JHTDB 客戶端（用於測試和離線開發）
+    
+    使用 mock_turbulence_generator 模組生成物理真實的湍流場數據。
+    支援 Channel Flow 和 Isotropic Turbulence 兩種數據集類型。
+    
+    Attributes:
+        seed: 隨機種子，確保可重現性
+    """
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.seed = 42  # 固定隨機種子確保可重現性
     
     def _fetch_raw_data(self, dataset: str, query_params: Dict) -> Dict[str, np.ndarray]:
-        """生成模擬的湍流資料"""
+        """生成模擬的湍流資料
         
-        np.random.seed(self.seed)
+        Args:
+            dataset: 資料集名稱 ('channel', 'isotropic1024coarse', etc.)
+            query_params: 查詢參數字典
+                - type: 'cutout' 或 'points'
+                - variables: 變數列表 ['u', 'v', 'w', 'p']
+                - start, end, resolution (cutout)
+                - points (points query)
+        
+        Returns:
+            包含速度/壓力場的字典
+        """
+        from pinnx.dataio.mock_turbulence_generator import create_generator
+        
+        # 創建湍流生成器
+        generator = create_generator(dataset, seed=self.seed)
         
         query_type = query_params.get('type', 'cutout')
         variables = query_params.get('variables', ['u', 'v', 'w', 'p'])
         
         if query_type == 'cutout':
-            return self._generate_cutout_data(dataset, query_params, variables)
+            return self._generate_cutout(generator, query_params, variables)
         elif query_type == 'points':
-            return self._generate_points_data(dataset, query_params, variables)
+            return self._generate_points(generator, query_params, variables)
         else:
             raise ValueError(f"不支援的查詢類型: {query_type}")
     
-    def _generate_cutout_data(self, dataset: str, params: Dict, variables: List[str]) -> Dict[str, np.ndarray]:
-        """生成模擬 cutout 資料"""
+    def _generate_cutout(self, generator, params: Dict, variables: List[str]) -> Dict[str, np.ndarray]:
+        """生成模擬 cutout 資料
         
+        Args:
+            generator: TurbulenceGenerator 實例
+            params: 參數字典 (start, end, resolution)
+            variables: 變數列表
+        
+        Returns:
+            速度/壓力場字典
+        """
         start = np.array(params['start'])
         end = np.array(params['end'])
         resolution = params.get('resolution', [64, 64, 64])
@@ -569,260 +598,38 @@ class MockJHTDBClient(BaseJHTDBClient):
         z = np.linspace(start[2], end[2], resolution[2])
         X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
         
-        data = {}
-        
-        # 獲取資料集配置
-        dataset_config = JHTDBConfig.DATASETS.get(dataset, {})
-        domain = dataset_config.get('domain', {'x': [0, 2*np.pi], 'y': [0, 2*np.pi], 'z': [0, 2*np.pi]})
-        
-        # 針對 Channel Flow 生成具有正確物理特徵的數據
-        if dataset == 'channel':
-            return self._generate_channel_flow_data(X, Y, Z, variables, domain)
-        else:
-            # 對於其他數據集，使用等向性湍流模擬
-            return self._generate_isotropic_data(X, Y, Z, variables, domain)
+        # 委託給 generator 生成數據
+        return generator.generate_velocity_field(X, Y, Z, variables)
     
-    def _generate_channel_flow_data(self, X: np.ndarray, Y: np.ndarray, Z: np.ndarray, 
-                                   variables: List[str], domain: Dict) -> Dict[str, np.ndarray]:
-        """生成具有 Channel Flow 特徵的模擬數據"""
+    def _generate_points(self, generator, params: Dict, variables: List[str]) -> Dict[str, np.ndarray]:
+        """生成模擬散點資料
         
-        # 標準化座標：y 方向為壁面法向 [-1, 1]
-        x_norm = 2 * np.pi * (X - domain['x'][0]) / (domain['x'][1] - domain['x'][0])
-        y_norm = (Y - domain['y'][0]) / (domain['y'][1] - domain['y'][0]) * 2 - 1  # [-1, 1]
-        z_norm = 2 * np.pi * (Z - domain['z'][0]) / (domain['z'][1] - domain['z'][0])
+        Args:
+            generator: TurbulenceGenerator 實例
+            params: 參數字典 (points)
+            variables: 變數列表
         
-        data = {}
-        
-        for var in variables:
-            if var == 'u':
-                # 流向速度：拋物型平均分布 + 湍流擾動
-                u_mean = 15.0 * (1 - y_norm**2)  # 拋物型分布，最大值 15 m/s
-                
-                # 湍流擾動：近壁面小，中心大
-                turbulent_intensity = 0.5 * (1 - abs(y_norm)**3)
-                u_fluctuation = (
-                    turbulent_intensity * 3.0 * np.sin(2*x_norm) * np.cos(3*z_norm) +
-                    turbulent_intensity * 1.5 * np.sin(4*x_norm) * np.cos(6*z_norm) +
-                    turbulent_intensity * 0.3 * np.random.randn(*X.shape)
-                )
-                
-                data[var] = u_mean + u_fluctuation
-                
-            elif var == 'v':
-                # 壁面法向速度：很小，主要是湍流擾動
-                # 邊界條件：壁面處 v=0
-                wall_factor = 1 - y_norm**2  # 壁面處為 0
-                
-                data[var] = wall_factor * (
-                    0.8 * np.cos(x_norm) * np.sin(2*z_norm) +
-                    0.4 * np.cos(3*x_norm) * np.sin(4*z_norm) +
-                    0.1 * np.random.randn(*X.shape)
-                )
-                
-            elif var == 'w':
-                # 展向速度：增強湍流擾動以達到合理的展向比例 (目標 w/u ~ 0.4-0.6)
-                wall_factor = 1 - y_norm**2  # 壁面處為 0
-                turbulent_intensity = 0.8 * (1 - abs(y_norm)**2)
-                
-                data[var] = wall_factor * (
-                    8.0 * np.sin(x_norm) * np.cos(z_norm) +
-                    4.0 * np.sin(3*x_norm) * np.cos(2*z_norm) +
-                    turbulent_intensity * 4.0 * np.random.randn(*X.shape)
-                )
-                
-            elif var == 'p':
-                # 壓力場：受平均速度梯度和湍流影響
-                u_val = data.get('u', np.zeros_like(X))
-                v_val = data.get('v', np.zeros_like(X))
-                w_val = data.get('w', np.zeros_like(X))
-                
-                # 基於連續性方程和動量方程的壓力估計
-                p_mean = -2.0 * y_norm  # 線性壓力梯度（驅動流動）
-                p_fluctuation = (
-                    -0.3 * (u_val**2 + v_val**2 + w_val**2) +  # 動壓項
-                    5.0 * np.cos(x_norm + z_norm) * (1 - y_norm**2) +  # 湍流壓力
-                    0.1 * np.random.randn(*X.shape)
-                )
-                
-                data[var] = p_mean + p_fluctuation
-        
-        return data
-    
-    def _generate_isotropic_data(self, X: np.ndarray, Y: np.ndarray, Z: np.ndarray, 
-                                variables: List[str], domain: Dict) -> Dict[str, np.ndarray]:
-        """生成等向性湍流數據（原有邏輯）"""
-        
-        # 標準化座標
-        x_norm = 2 * np.pi * (X - domain['x'][0]) / (domain['x'][1] - domain['x'][0])
-        y_norm = 2 * np.pi * (Y - domain['y'][0]) / (domain['y'][1] - domain['y'][0])
-        z_norm = 2 * np.pi * (Z - domain['z'][0]) / (domain['z'][1] - domain['z'][0])
-        
-        data = {}
-        
-        for var in variables:
-            if var == 'u':
-                # 主流方向速度：包含多尺度渦結構
-                data[var] = (
-                    5.0 * np.sin(x_norm) * np.cos(y_norm) * np.sin(z_norm) +
-                    2.0 * np.sin(2*x_norm) * np.cos(2*y_norm) * np.sin(2*z_norm) +
-                    0.5 * np.sin(4*x_norm) * np.cos(4*y_norm) * np.sin(4*z_norm) +
-                    0.1 * np.random.randn(*X.shape)
-                )
-                
-            elif var == 'v':
-                # 橫向速度
-                data[var] = (
-                    3.0 * np.cos(x_norm) * np.sin(y_norm) * np.cos(z_norm) +
-                    1.5 * np.cos(2*x_norm) * np.sin(2*y_norm) * np.cos(2*z_norm) +
-                    0.1 * np.random.randn(*X.shape)
-                )
-                
-            elif var == 'w':
-                # 展向速度
-                data[var] = (
-                    2.0 * np.sin(x_norm) * np.sin(y_norm) * np.cos(z_norm) +
-                    1.0 * np.sin(2*x_norm) * np.sin(2*y_norm) * np.cos(2*z_norm) +
-                    0.1 * np.random.randn(*X.shape)
-                )
-                
-            elif var == 'p':
-                # 壓力場：需要滿足連續性方程的約束
-                data[var] = (
-                    -0.5 * (data.get('u', 0)**2 + data.get('v', 0)**2 + data.get('w', 0)**2) +
-                    10.0 * np.cos(x_norm + y_norm + z_norm) +
-                    0.05 * np.random.randn(*X.shape)
-                )
-        
-        return data
-    
-    def _generate_points_data(self, dataset: str, params: Dict, variables: List[str]) -> Dict[str, np.ndarray]:
-        """生成模擬散點資料"""
-        
+        Returns:
+            速度/壓力場字典
+        """
         points = np.array(params['points'])  # [N, 3]
-        n_points = points.shape[0]
         
-        data = {}
-        
-        # 獲取資料集配置
-        dataset_config = JHTDBConfig.DATASETS.get(dataset, {})
-        domain = dataset_config.get('domain', {'x': [0, 2*np.pi], 'y': [0, 2*np.pi], 'z': [0, 2*np.pi]})
-        
-        # 針對 Channel Flow 生成具有正確物理特徵的數據
-        if dataset == 'channel':
-            return self._generate_channel_flow_points(points, variables, domain)
-        else:
-            # 對於其他數據集，使用等向性湍流模擬
-            return self._generate_isotropic_points(points, variables, domain)
-    
-    def _generate_channel_flow_points(self, points: np.ndarray, variables: List[str], domain: Dict) -> Dict[str, np.ndarray]:
-        """生成具有 Channel Flow 特徵的散點數據"""
-        
-        # 標準化座標：y 方向為壁面法向 [-1, 1]
-        x_norm = 2 * np.pi * (points[:, 0] - domain['x'][0]) / (domain['x'][1] - domain['x'][0])
-        y_norm = (points[:, 1] - domain['y'][0]) / (domain['y'][1] - domain['y'][0]) * 2 - 1  # [-1, 1]
-        z_norm = 2 * np.pi * (points[:, 2] - domain['z'][0]) / (domain['z'][1] - domain['z'][0])
-        
-        n_points = len(points)
-        data = {}
-        
-        for var in variables:
-            if var == 'u':
-                # 流向速度：拋物型平均分布 + 湍流擾動
-                u_mean = 15.0 * (1 - y_norm**2)  # 拋物型分布，最大值 15 m/s
-                
-                # 湍流擾動：近壁面小，中心大
-                turbulent_intensity = 0.5 * (1 - np.abs(y_norm)**3)
-                u_fluctuation = (
-                    turbulent_intensity * 3.0 * np.sin(2*x_norm) * np.cos(3*z_norm) +
-                    turbulent_intensity * 1.5 * np.sin(4*x_norm) * np.cos(6*z_norm) +
-                    turbulent_intensity * 0.3 * np.random.randn(n_points)
-                )
-                
-                data[var] = u_mean + u_fluctuation
-                
-            elif var == 'v':
-                # 壁面法向速度：很小，主要是湍流擾動
-                wall_factor = 1 - y_norm**2  # 壁面處為 0
-                
-                data[var] = wall_factor * (
-                    0.8 * np.cos(x_norm) * np.sin(2*z_norm) +
-                    0.4 * np.cos(3*x_norm) * np.sin(4*z_norm) +
-                    0.1 * np.random.randn(n_points)
-                )
-                
-            elif var == 'w':
-                # 展向速度：中等強度的湍流擾動
-                wall_factor = 1 - y_norm**2  # 壁面處為 0
-                
-                data[var] = wall_factor * (
-                    2.0 * np.sin(x_norm) * np.cos(z_norm) +
-                    1.0 * np.sin(3*x_norm) * np.cos(2*z_norm) +
-                    0.2 * np.random.randn(n_points)
-                )
-                
-            elif var == 'p':
-                # 壓力場：受平均速度梯度和湍流影響
-                u_val = data.get('u', np.zeros(n_points))
-                v_val = data.get('v', np.zeros(n_points))
-                w_val = data.get('w', np.zeros(n_points))
-                
-                # 基於連續性方程和動量方程的壓力估計
-                p_mean = -2.0 * y_norm  # 線性壓力梯度（驅動流動）
-                p_fluctuation = (
-                    -0.3 * (u_val**2 + v_val**2 + w_val**2) +  # 動壓項
-                    5.0 * np.cos(x_norm + z_norm) * (1 - y_norm**2) +  # 湍流壓力
-                    0.1 * np.random.randn(n_points)
-                )
-                
-                data[var] = p_mean + p_fluctuation
-        
-        return data
-    
-    def _generate_isotropic_points(self, points: np.ndarray, variables: List[str], domain: Dict) -> Dict[str, np.ndarray]:
-        """生成等向性湍流散點數據（原有邏輯）"""
-        
-        # 標準化座標
-        x_norm = 2 * np.pi * (points[:, 0] - domain['x'][0]) / (domain['x'][1] - domain['x'][0])
-        y_norm = 2 * np.pi * (points[:, 1] - domain['y'][0]) / (domain['y'][1] - domain['y'][0])
-        z_norm = 2 * np.pi * (points[:, 2] - domain['z'][0]) / (domain['z'][1] - domain['z'][0])
-        
-        n_points = len(points)
-        data = {}
-        
-        for var in variables:
-            if var == 'u':
-                data[var] = (
-                    5.0 * np.sin(x_norm) * np.cos(y_norm) * np.sin(z_norm) +
-                    2.0 * np.sin(2*x_norm) * np.cos(2*y_norm) * np.sin(2*z_norm) +
-                    0.1 * np.random.randn(n_points)
-                )
-            elif var == 'v':
-                data[var] = (
-                    3.0 * np.cos(x_norm) * np.sin(y_norm) * np.cos(z_norm) +
-                    1.5 * np.cos(2*x_norm) * np.sin(2*y_norm) * np.cos(2*z_norm) +
-                    0.1 * np.random.randn(n_points)
-                )
-            elif var == 'w':
-                data[var] = (
-                    2.0 * np.sin(x_norm) * np.sin(y_norm) * np.cos(z_norm) +
-                    1.0 * np.sin(2*x_norm) * np.sin(2*y_norm) * np.cos(2*z_norm) +
-                    0.1 * np.random.randn(n_points)
-                )
-            elif var == 'p':
-                u_val = data.get('u', np.zeros(n_points))
-                v_val = data.get('v', np.zeros(n_points))
-                w_val = data.get('w', np.zeros(n_points))
-                data[var] = (
-                    -0.5 * (u_val**2 + v_val**2 + w_val**2) +
-                    10.0 * np.cos(x_norm + y_norm + z_norm) +
-                    0.05 * np.random.randn(n_points)
-                )
-        
-        return data
+        # 委託給 generator 生成數據
+        return generator.generate_points(points, variables)
 
 
 class HTTPJHTDBClient(BaseJHTDBClient):
-    """使用 HTTP Web Services API 的 JHTDB 客戶端實現"""
+    """基於 HTTP Web Services 的 JHTDB 客戶端
+    
+    使用 SOAP 協議與 JHTDB Web Services API 通信。
+    SOAP 邏輯委託給 pinnx.dataio.soap_utils 模組。
+    
+    Attributes:
+        base_url: JHTDB SOAP 服務端點
+        soap_request: SOAPRequest 實例（處理請求構建和發送）
+        soap_parser: SOAPResponseParser 實例（處理響應解析）
+        mock_client: Mock fallback 客戶端（當 token 失效時使用）
+    """
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -837,6 +644,16 @@ class HTTPJHTDBClient(BaseJHTDBClient):
         if not self.auth_token:
             logger.warning("未提供 JHTDB 認證令牌，將使用測試令牌")
             self.auth_token = self.test_token
+        
+        # 初始化 SOAP 工具
+        from pinnx.dataio.soap_utils import SOAPRequest, SOAPResponseParser
+        self.soap_request = SOAPRequest(
+            base_url=self.base_url,
+            auth_token=self.auth_token,
+            timeout=self.timeout,
+            max_retry=JHTDBConfig.MAX_RETRY
+        )
+        self.soap_parser = SOAPResponseParser()
         
         # Mock fallback 客戶端 (當token失效時使用)
         self.mock_client = None
@@ -1044,8 +861,18 @@ class HTTPJHTDBClient(BaseJHTDBClient):
     def _call_get_any_cutout_web(self, dataset: str, field: str, 
                                  start: List[float], end: List[float], 
                                  timestep: int) -> np.ndarray:
-        """調用 GetAnyCutoutWeb API（替代已棄用的 GetRawVelocity）"""
+        """調用 GetAnyCutoutWeb API（使用 soap_utils）
         
+        Args:
+            dataset: 資料集名稱
+            field: 場類型 ('velocity', 'pressure')
+            start: 起始物理座標
+            end: 結束物理座標
+            timestep: 時間步
+        
+        Returns:
+            速度場 [nx, ny, nz, 3] 或壓力場 [nx, ny, nz]
+        """
         # 將物理座標轉換為 1-based 網格索引
         start_int, end_int = self._physical_to_grid(dataset, start, end)
         
@@ -1057,43 +884,24 @@ class HTTPJHTDBClient(BaseJHTDBClient):
         start_int = [max(1, min(s, res_list[i])) for i, s in enumerate(start_int)]
         end_int = [max(1, min(e, res_list[i])) for i, e in enumerate(end_int)]
         
-        # 構建 SOAP 請求 - 使用正確的 GetAnyCutoutWeb API 格式
-        soap_request = f"""<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
-               xmlns:xsd="http://www.w3.org/2001/XMLSchema" 
-               xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <GetAnyCutoutWeb xmlns="http://turbulence.pha.jhu.edu/">
-      <authToken>{self.auth_token}</authToken>
-      <dataset>{dataset}</dataset>
-      <field>{field}</field>
-      <T>{timestep}</T>
-      <x_start>{start_int[0]}</x_start>
-      <y_start>{start_int[1]}</y_start>
-      <z_start>{start_int[2]}</z_start>
-      <x_end>{end_int[0]}</x_end>
-      <y_end>{end_int[1]}</y_end>
-      <z_end>{end_int[2]}</z_end>
-      <x_step>1</x_step>
-      <y_step>1</y_step>
-      <z_step>1</z_step>
-      <filter_width>1</filter_width>
-      <addr></addr>
-    </GetAnyCutoutWeb>
-  </soap:Body>
-</soap:Envelope>"""
+        # 構建 SOAP 請求（委託給 soap_utils）
+        soap_xml = self.soap_request.build_get_any_cutout_request(
+            dataset, field, start_int, end_int, timestep
+        )
         
-        response_data = self._send_soap_request(soap_request, "GetAnyCutoutWeb")
+        # 發送請求（委託給 soap_utils）
+        binary_data = self.soap_request.send_request(soap_xml, "GetAnyCutoutWeb")
         
         # 計算實際的網格尺寸
         width = [end_int[0] - start_int[0] + 1, 
                  end_int[1] - start_int[1] + 1, 
                  end_int[2] - start_int[2] + 1]
         
+        # 解析響應（委託給 soap_utils）
         if field == "velocity":
-            return self._parse_velocity_response(response_data, width)
+            return self.soap_parser.parse_velocity_cutout(binary_data, width)
         elif field == "pressure":
-            return self._parse_pressure_response(response_data, width)
+            return self.soap_parser.parse_pressure_cutout(binary_data, width)
         else:
             raise ValueError(f"不支援的場類型: {field}")
     
@@ -1129,38 +937,24 @@ class HTTPJHTDBClient(BaseJHTDBClient):
     
     def _call_get_velocity(self, dataset: str, points: List[List[float]], 
                           timestep: int) -> np.ndarray:
-        """調用 GetVelocity API（散點插值）"""
+        """調用 GetVelocity API（散點插值，使用 soap_utils）
         
-        # 構建點的 XML 格式 (不是二進制編碼)
-        points_xml = ""
-        for point in points:
-            points_xml += f"""
-        <Point3>
-          <x>{point[0]}</x>
-          <y>{point[1]}</y>
-          <z>{point[2]}</z>
-        </Point3>"""
+        Args:
+            dataset: 資料集名稱
+            points: 查詢點列表 [[x, y, z], ...]
+            timestep: 時間步
         
-        # 構建 SOAP 請求 - 使用正確的參數格式
-        soap_request = f"""<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
-               xmlns:xsd="http://www.w3.org/2001/XMLSchema" 
-               xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <GetVelocity xmlns="http://turbulence.pha.jhu.edu/">
-      <authToken>{self.auth_token}</authToken>
-      <dataset>{dataset}</dataset>
-      <time>{float(timestep)}</time>
-      <spatialInterpolation>Lag4</spatialInterpolation>
-      <temporalInterpolation>None</temporalInterpolation>
-      <points>{points_xml}
-      </points>
-    </GetVelocity>
-  </soap:Body>
-</soap:Envelope>"""
+        Returns:
+            速度場陣列 [n_points, 3]
+        """
+        # 構建 SOAP 請求（委託給 soap_utils）
+        soap_xml = self.soap_request.build_get_velocity_request(dataset, points, float(timestep))
         
-        response_data = self._send_soap_request(soap_request, "GetVelocity")
-        return self._parse_velocity_points_response(response_data, len(points))
+        # 發送請求（委託給 soap_utils）
+        response_data = self.soap_request.send_request(soap_xml, "GetVelocity")
+        
+        # 解析響應（委託給 soap_utils）
+        return self.soap_parser.parse_velocity_points(response_data, len(points))
     
     def _call_get_raw_pressure(self, dataset: str, start: List[float], 
                               width: List[int], timestep: int) -> np.ndarray:
@@ -1194,236 +988,24 @@ class HTTPJHTDBClient(BaseJHTDBClient):
     
     def _call_get_pressure(self, dataset: str, points: List[List[float]], 
                           timestep: int) -> np.ndarray:
-        """調用 GetPressure API（散點插值）"""
+        """調用 GetPressure API（散點插值，使用 soap_utils）
         
-        points_binary = self._encode_points(points)
+        Args:
+            dataset: 資料集名稱
+            points: 查詢點列表 [[x, y, z], ...]
+            timestep: 時間步
         
-        soap_request = f"""<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
-               xmlns:xsd="http://www.w3.org/2001/XMLSchema" 
-               xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <GetPressure xmlns="http://turbulence.pha.jhu.edu/">
-      <authToken>{self.auth_token}</authToken>
-      <dataset>{dataset}</dataset>
-      <time>{timestep}</time>
-      <spatialInterpolation>6</spatialInterpolation>
-      <temporalInterpolation>0</temporalInterpolation>
-       <points>{points_binary}</points>
-     </GetPressure>
-   </soap:Body>
-</soap:Envelope>"""
+        Returns:
+            壓力場陣列 [n_points]
+        """
+        # 構建 SOAP 請求（委託給 soap_utils）
+        soap_xml = self.soap_request.build_get_pressure_request(dataset, points, float(timestep))
         
-        response_data = self._send_soap_request(soap_request, "GetPressure")
-        return self._parse_pressure_points_response(response_data, len(points))
-    
-    def _send_soap_request(self, soap_request: str, api_method: str) -> bytes:
-        """發送 SOAP 請求到 JHTDB 服務器"""
+        # 發送請求（委託給 soap_utils）
+        binary_data = self.soap_request.send_request(soap_xml, "GetPressure")
         
-        # ASMX Web Service 使用統一的端點 URL
-        url = self.base_url
-        
-        headers = {
-            'Content-Type': 'text/xml; charset=utf-8',
-            'SOAPAction': f'http://turbulence.pha.jhu.edu/{api_method}',
-            'User-Agent': 'Python JHTDB Client'
-        }
-        
-        # 編碼請求
-        request_data = soap_request.encode('utf-8')
-        
-        # 創建請求
-        req = urllib.request.Request(
-            url, 
-            data=request_data, 
-            headers=headers
-        )
-        
-        # 發送請求並處理重試
-        for attempt in range(JHTDBConfig.MAX_RETRY):
-            try:
-                logger.debug(f"發送 SOAP 請求（嘗試 {attempt + 1}/{JHTDBConfig.MAX_RETRY}）")
-                
-                with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                    if response.status == 200:
-                        response_data = response.read()
-                        logger.debug(f"請求成功，響應大小: {len(response_data)} bytes")
-                        return self._extract_binary_data(response_data)
-                    else:
-                        raise JHTDBError(f"HTTP 錯誤: {response.status}")
-                        
-            except urllib.error.URLError as e:
-                logger.warning(f"請求失敗（嘗試 {attempt + 1}）: {e}")
-                if attempt == JHTDBConfig.MAX_RETRY - 1:
-                    raise JHTDBError(f"所有重試均失敗: {e}")
-                time.sleep(2 ** attempt)  # 指數退避
-            
-            except Exception as e:
-                logger.error(f"未預期的錯誤: {e}")
-                if attempt == JHTDBConfig.MAX_RETRY - 1:
-                    raise JHTDBError(f"請求處理失敗: {e}")
-                time.sleep(2 ** attempt)
-        
-        # 如果所有重試都失敗，拋出錯誤
-        raise JHTDBError("所有連接嘗試均失敗")
-    
-    def _extract_binary_data(self, response_data: bytes) -> bytes:
-        """從 SOAP 響應中提取 Base64 編碼的二進制數據"""
-        
-        try:
-            # 解析 XML 響應
-            response_str = response_data.decode('utf-8')
-            root = ET.fromstring(response_str)
-            
-            # 尋找包含 Base64 數據的元素
-            # JHTDB 通常在 <soap:Body> 的結果元素中返回 Base64 數據
-            namespaces = {
-                'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
-                'jhtdb': 'http://turbulence.pha.jhu.edu/'
-            }
-            
-            # 尋找結果元素（可能是不同的名稱）
-            result_elements = root.findall('.//soap:Body/*/*', namespaces)
-            
-            if not result_elements:
-                # 如果沒有找到，嘗試沒有命名空間的查找
-                result_elements = root.findall('.//Body/*/*')
-            
-            if result_elements:
-                base64_data = result_elements[0].text
-                if base64_data:
-                    return base64.b64decode(base64_data)
-                else:
-                    logger.error("Base64 數據為空")
-                    raise JHTDBError("響應中的數據為空")
-            
-            # 如果仍然沒有找到，記錄響應內容用於調試
-            logger.error(f"無法從 SOAP 響應中提取數據")
-            logger.debug(f"響應內容（前1000字符）: {response_str[:1000]}")
-            raise JHTDBError("無法解析 SOAP 響應")
-            
-        except ET.ParseError as e:
-            logger.error(f"XML 解析失敗: {e}")
-            raise JHTDBError(f"響應格式錯誤: {e}")
-        except Exception as e:
-            logger.error(f"數據提取失敗: {e}")
-            raise JHTDBError(f"響應處理失敗: {e}")
-    
-    def _encode_points(self, points: List[List[float]]) -> str:
-        """將點座標編碼為 Base64 二進制格式"""
-        
-        # JHTDB 期望的格式是：float32 陣列，每個點 3 個座標 (x, y, z)
-        points_array = np.array(points, dtype=np.float32)
-        
-        # 轉換為二進制
-        binary_data = points_array.tobytes()
-        
-        # Base64 編碼
-        return base64.b64encode(binary_data).decode('ascii')
-    
-    def _parse_velocity_response(self, binary_data: bytes, width: List[int]) -> np.ndarray:
-        """解析速度場 cutout 響應"""
-        
-        # JHTDB velocity 數據格式: float32, [width[0], width[1], width[2], 3]
-        expected_size = width[0] * width[1] * width[2] * 3 * 4  # 4 bytes per float32
-        
-        if len(binary_data) != expected_size:
-            logger.warning(f"數據大小不符：期望 {expected_size}, 實際 {len(binary_data)}")
-        
-        # 解析為 float32 陣列
-        data_array = np.frombuffer(binary_data, dtype=np.float32)
-        
-        # 重塑為 [width[0], width[1], width[2], 3] 形狀
-        return data_array.reshape(width[0], width[1], width[2], 3)
-    
-    def _parse_pressure_response(self, binary_data: bytes, width: List[int]) -> np.ndarray:
-        """解析壓力場 cutout 響應"""
-        
-        # JHTDB pressure 數據格式: float32, [width[0], width[1], width[2]]
-        expected_size = width[0] * width[1] * width[2] * 4  # 4 bytes per float32
-        
-        if len(binary_data) != expected_size:
-            logger.warning(f"數據大小不符：期望 {expected_size}, 實際 {len(binary_data)}")
-        
-        # 解析為 float32 陣列
-        data_array = np.frombuffer(binary_data, dtype=np.float32)
-        
-        # 重塑為 [width[0], width[1], width[2]] 形狀
-        return data_array.reshape(width[0], width[1], width[2])
-    
-    def _parse_velocity_points_response(self, response_data: bytes, n_points: int) -> np.ndarray:
-        """解析 GetVelocity 的 XML 響應，包含 Vector3 數組"""
-        
-        try:
-            # 解析 XML 響應
-            response_str = response_data.decode('utf-8')
-            root = ET.fromstring(response_str)
-            
-            # 尋找 GetVelocityResult 元素
-            namespaces = {
-                'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
-                'jhtdb': 'http://turbulence.pha.jhu.edu/'
-            }
-            
-            # 查找結果元素
-            result_elem = root.find('.//jhtdb:GetVelocityResult', namespaces)
-            if result_elem is None:
-                # 嘗試不使用命名空間
-                result_elem = root.find('.//GetVelocityResult')
-            
-            if result_elem is None:
-                logger.error("無法找到 GetVelocityResult 元素")
-                logger.debug(f"響應內容: {response_str[:1000]}")
-                raise JHTDBError("響應格式錯誤：找不到結果元素")
-            
-            # 解析 Vector3 元素
-            vectors = []
-            vector_elems = result_elem.findall('.//Vector3') or result_elem.findall('.//jhtdb:Vector3', namespaces)
-            
-            for vector_elem in vector_elems:
-                x = float(vector_elem.find('x').text or vector_elem.find('jhtdb:x', namespaces).text)
-                y = float(vector_elem.find('y').text or vector_elem.find('jhtdb:y', namespaces).text)
-                z = float(vector_elem.find('z').text or vector_elem.find('jhtdb:z', namespaces).text)
-                vectors.append([x, y, z])
-            
-            if len(vectors) != n_points:
-                logger.warning(f"返回的點數不符：期望 {n_points}, 實際 {len(vectors)}")
-            
-            return np.array(vectors, dtype=np.float32)
-            
-        except Exception as e:
-            logger.error(f"解析 Vector3 響應失敗: {e}")
-            # 回退到二進制解析（適用於舊版本或不同格式）
-            try:
-                binary_data = self._extract_binary_data(response_data)
-                expected_size = n_points * 3 * 4  # 4 bytes per float32
-                
-                if len(binary_data) != expected_size:
-                    logger.warning(f"數據大小不符：期望 {expected_size}, 實際 {len(binary_data)}")
-                
-                # 解析為 float32 陣列
-                data_array = np.frombuffer(binary_data, dtype=np.float32)
-                
-                # 重塑為 [n_points, 3] 形狀
-                return data_array.reshape(n_points, 3)
-            except Exception as e2:
-                logger.error(f"二進制回退解析也失敗: {e2}")
-                raise JHTDBError(f"無法解析響應數據: {e}")
-    
-    def _parse_pressure_points_response(self, binary_data: bytes, n_points: int) -> np.ndarray:
-        """解析壓力場散點響應"""
-        
-        # JHTDB pressure points 數據格式: float32, [n_points]
-        expected_size = n_points * 4  # 4 bytes per float32
-        
-        if len(binary_data) != expected_size:
-            logger.warning(f"數據大小不符：期望 {expected_size}, 實際 {len(binary_data)}")
-        
-        # 解析為 float32 陣列
-        data_array = np.frombuffer(binary_data, dtype=np.float32)
-        
-        # 返回一維陣列
-        return data_array
+        # 解析響應（委託給 soap_utils）
+        return self.soap_parser.parse_pressure_points(binary_data, len(points))
 
 
 class JHTDBManager:
