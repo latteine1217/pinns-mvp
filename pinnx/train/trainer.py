@@ -869,75 +869,24 @@ class Trainer:
 
     def validate(self) -> Optional[Dict[str, float]]:
         """
-        計算驗證指標（MSE 與 relative L2）
+        計算驗證指標（MSE 與 relative L2）（Phase 3 重構版）
         
         Returns:
             驗證指標字典，若無驗證資料則返回 None
             - 'mse': 均方誤差
             - 'relative_l2': 相對 L2 誤差
         """
-        # 檢查驗證資料是否存在
-        if self.validation_data is None:
+        # 1. 檢查驗證資料
+        result = self._validate_data_available()
+        if result is None:
             return None
+        coords, targets = result
         
-        if self.validation_data.get('size', 0) == 0:
-            return None
+        # 2. 執行模型推理
+        preds_phys = self._run_validation_inference(coords)
         
-        coords = self.validation_data.get('coords')
-        targets = self.validation_data.get('targets')
-        
-        if coords is None or targets is None or coords.numel() == 0 or targets.numel() == 0:
-            return None
-        
-        # 移動至設備
-        coords = coords.to(self.device)
-        targets = targets.to(self.device)
-        
-        # 保存訓練狀態
-        training_mode = self.model.training
-        self.model.eval()
-        
-        with torch.no_grad():
-            # 使用共享的坐標預處理方法
-            _, _, coords_for_model = self._prepare_model_coords(
-                coords, require_grad=False, is_vs_pinn=None
-            )
-            
-            # 模型預測（標準化空間輸出）
-            preds_norm = self.model(coords_for_model)
-            
-            # ✅ 反標準化為物理量（與真實物理量比較）
-            var_order_val = self._infer_variable_order(preds_norm.shape[1], context='validation')
-            preds_phys_raw = self.data_normalizer.denormalize_batch(preds_norm, var_order=var_order_val)
-            preds_phys: torch.Tensor = preds_phys_raw if isinstance(preds_phys_raw, torch.Tensor) else torch.tensor(preds_phys_raw, device=self.device)  # type: ignore
-            
-            # 處理維度不匹配（僅比較可用的場分量）
-            n_pred = preds_phys.shape[1]
-            n_targets = targets.shape[1]
-            n_common = min(n_pred, n_targets)
-            
-            if n_pred != n_targets:
-                logging.debug(
-                    f"[Validation] 輸出維度不匹配 (pred={n_pred}, target={n_targets})；"
-                    f"比較前 {n_common} 個分量。"
-                )
-            
-            preds_final = preds_phys[:, :n_common]
-            targets_final = targets[:, :n_common]
-            
-            # ✅ 計算誤差指標（物理空間）
-            diff = preds_final - targets_final
-            mse = torch.mean(diff**2).item()
-            rel_l2 = relative_L2(preds_final, targets_final).mean().item()
-        
-        # 恢復訓練狀態
-        if training_mode:
-            self.model.train()
-        
-        return {
-            'mse': mse,
-            'relative_l2': rel_l2
-        }
+        # 3. 計算驗證指標
+        return self._compute_validation_metrics(preds_phys, targets)
     
     # ========================================================================
     # 驗證輔助方法（Phase 3 重構）
