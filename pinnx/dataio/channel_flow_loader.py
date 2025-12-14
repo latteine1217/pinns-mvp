@@ -30,7 +30,7 @@ from dataclasses import dataclass
 import warnings
 
 # 導入現有模組
-from .lowfi_loader import LowFiData, LowFiLoader, SpatialInterpolator
+from .lowfi_loader import LowFiData, LowFiLoader, SpatialInterpolator, NPZReader, DataReader
 from .jhtdb_client import JHTDBManager, JHTDBConfig
 from .structures import (
     StructuredGrid,
@@ -42,6 +42,176 @@ from .structures import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class SensorDataReader(NPZReader):
+    """
+    Channel Flow 感測點資料專用讀取器
+    
+    擴展 NPZReader 以支援：
+    - coords_2d → 3D 擴展 (添加 z 座標)
+    - 多種 sensor_data 格式 (物件/2D array/分離欄位)
+    - selection_info 元數據提取
+    """
+    
+    def __init__(self, z_default: float = 4.71):
+        """
+        初始化感測點資料讀取器
+        
+        Args:
+            z_default: 2D 座標擴展為 3D 時的預設 z 值
+        """
+        super().__init__()
+        self.z_default = z_default
+    
+    def read(self, filepath: Union[str, Path]) -> LowFiData:
+        """讀取感測點 NPZ 檔案"""
+        data_dict = np.load(filepath, allow_pickle=True)
+        
+        # 處理座標 (支援 2D → 3D 轉換)
+        coordinates = self._extract_coordinates(data_dict)
+        
+        # 處理感測點資料 (支援多種格式)
+        fields = self._extract_sensor_data(data_dict)
+        
+        # 提取元數據 (包含 selection_info)
+        metadata = self._build_sensor_metadata(filepath, data_dict)
+        
+        return LowFiData(coordinates, fields, metadata)
+    
+    def _extract_coordinates(self, data: dict) -> Dict[str, np.ndarray]:
+        """
+        提取座標，支援 2D → 3D 轉換
+        
+        支援的鍵名：
+        - 'sensor_points': 直接的 3D 座標 (K, 3)
+        - 'coords': 新格式的 3D 座標
+        - 'coords_2d': 2D 座標，需要擴展到 3D
+        """
+        if 'sensor_points' in data:
+            points = np.asarray(data['sensor_points'])
+        elif 'coords' in data:
+            points = np.asarray(data['coords'])
+        elif 'coords_2d' in data:
+            # 2D → 3D 擴展
+            coords_2d = np.asarray(data['coords_2d'])
+            points = np.column_stack([
+                coords_2d[:, 0],  # x
+                coords_2d[:, 1],  # y
+                np.full(len(coords_2d), self.z_default)  # z (constant)
+            ])
+        else:
+            raise KeyError(
+                f"Cannot find sensor coordinates. "
+                f"Expected 'sensor_points', 'coords', or 'coords_2d'"
+            )
+        
+        # 返回標準格式：{'x': [...], 'y': [...], 'z': [...]}
+        return {
+            'x': points[:, 0],
+            'y': points[:, 1],
+            'z': points[:, 2] if points.shape[1] >= 3 else np.full(len(points), self.z_default)
+        }
+    
+    def _extract_sensor_data(self, data: dict) -> Dict[str, np.ndarray]:
+        """
+        提取感測點資料，支援多種格式
+        
+        格式 1: 'sensor_data' 鍵 (物件或 2D array)
+        格式 2: 分離的 'sensor_u', 'sensor_v' 等
+        格式 3: 直接的 'u', 'v', 'w', 'p' 鍵
+        """
+        fields = {}
+        
+        if 'sensor_data' in data:
+            sensor_data_raw = data['sensor_data']
+            
+            # 情況 1: 0 維物件 (字典)
+            if sensor_data_raw.ndim == 0:
+                sensor_data_raw = sensor_data_raw.item()
+                if isinstance(sensor_data_raw, dict):
+                    fields = {k: np.asarray(v).reshape(-1) for k, v in sensor_data_raw.items()}
+                else:
+                    raise TypeError(f"sensor_data object must be a dict, got {type(sensor_data_raw)}")
+            
+            # 情況 2: 2D ndarray (K, n_vars)
+            elif sensor_data_raw.ndim == 2:
+                variables = self._infer_variable_names(data, sensor_data_raw.shape[1])
+                fields = {
+                    var: sensor_data_raw[:, i]
+                    for i, var in enumerate(variables)
+                }
+            
+            else:
+                raise ValueError(f"sensor_data has unexpected ndim: {sensor_data_raw.ndim}")
+        
+        else:
+            # 情況 3: 分離的欄位
+            # 優先檢查 'sensor_*' 格式
+            for field in ['u', 'v', 'w', 'p']:
+                key_sensor = f'sensor_{field}'
+                if key_sensor in data:
+                    fields[field] = np.asarray(data[key_sensor]).reshape(-1)
+            
+            # 若無 'sensor_*'，嘗試直接鍵名
+            if not fields:
+                for field in ['u', 'v', 'w', 'p']:
+                    if field in data:
+                        fields[field] = np.asarray(data[field]).reshape(-1)
+            
+            if not fields:
+                raise KeyError(
+                    "Cannot find velocity/pressure data. "
+                    "Expected 'sensor_data', 'sensor_u/v/w/p', or 'u/v/w/p'"
+                )
+        
+        return fields
+    
+    def _infer_variable_names(self, data: dict, n_vars: int) -> List[str]:
+        """從 metadata 或欄位數推斷變數名稱"""
+        if 'metadata' in data:
+            metadata = data['metadata'].item() if data['metadata'].ndim == 0 else data['metadata']
+            if 'variables' in metadata:
+                return metadata['variables']
+        
+        # 根據欄位數判斷
+        if n_vars == 2:
+            return ['u', 'v']
+        elif n_vars == 3:
+            return ['u', 'v', 'w']
+        elif n_vars == 4:
+            return ['u', 'v', 'w', 'p']
+        else:
+            raise ValueError(f"Cannot infer variable names for {n_vars} columns")
+    
+    def _build_sensor_metadata(self, filepath: Union[str, Path], data: dict) -> Dict[str, Any]:
+        """構建感測點元數據，包含 selection_info"""
+        # 使用基類的 build_metadata
+        metadata = self.build_metadata(filepath, 'NPZ-Sensor')
+        
+        # 提取 selection_info
+        if 'selection_info' in data:
+            selection_info = data['selection_info']
+            metadata['selection_info'] = selection_info.item() if selection_info.ndim == 0 else selection_info
+        else:
+            # 嘗試從其他欄位構建
+            metadata['selection_info'] = {
+                'strategy': str(data.get('strategy', 'unknown')),
+                'K_requested': int(data.get('K_requested', 0)),
+                'K_actual': int(len(data.get('coords', data.get('sensor_points', [])))),
+                'selection_timestamp': str(data.get('timestamp', 'unknown'))
+            }
+        
+        # 提取 sensor_indices (如果有)
+        if 'sensor_indices' in data:
+            metadata['sensor_indices'] = np.asarray(data['sensor_indices'])
+        
+        # 提取其他可能的元數據
+        if 'metadata' in data:
+            extra_meta = data['metadata']
+            metadata['extra'] = extra_meta.item() if extra_meta.ndim == 0 else extra_meta
+        
+        return metadata
 
 
 @dataclass
