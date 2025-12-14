@@ -657,215 +657,215 @@ class Trainer:
         logging.info(f"   - Variable Weights: {variable_weights}")
         logging.info(f"   - Distance Metric: {distance_metric}")
     
-def step(
-    self,
-    data_batch: Dict[str, torch.Tensor],
-    epoch: int
-) -> Dict[str, Any]:
-    """
-    執行單步訓練（使用 LossManager 重構版）
+    def step(
+        self,
+        data_batch: Dict[str, torch.Tensor],
+        epoch: int
+    ) -> Dict[str, Any]:
+        """
+        執行單步訓練（使用 LossManager 重構版）
     
-    核心改進：
-    - 所有損失計算委派給 LossManager
-    - step() 只負責：資料預處理、模型forward、Loss組合、反向傳播
-    - 大幅減少代碼重複與嵌套
+        核心改進：
+        - 所有損失計算委派給 LossManager
+        - step() 只負責：資料預處理、模型forward、Loss組合、反向傳播
+        - 大幅減少代碼重複與嵌套
     
-    Args:
-        data_batch: 訓練資料批次
-        epoch: 當前 epoch
+        Args:
+            data_batch: 訓練資料批次
+            epoch: 當前 epoch
     
-    Returns:
-        包含損失和指標的字典
-    """
-    self.optimizer.zero_grad()
+        Returns:
+            包含損失和指標的字典
+        """
+        self.optimizer.zero_grad()
     
-    # ==================== 0. 前置準備 ====================
-    is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
+        # ==================== 0. 前置準備 ====================
+        is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
     
-    # ==================== 1. PDE 點前向傳播 ====================
-    # 準備 PDE 點坐標
-    x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
-    z_pde = data_batch.get('z_pde')
-    t_pde = data_batch.get('t_pde')
+        # ==================== 1. PDE 點前向傳播 ====================
+        # 準備 PDE 點坐標
+        x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
+        z_pde = data_batch.get('z_pde')
+        t_pde = data_batch.get('t_pde')
     
-    if t_pde is not None:
-        t_pde = t_pde.to(self.device).requires_grad_(True)
+        if t_pde is not None:
+            t_pde = t_pde.to(self.device).requires_grad_(True)
     
-    # 構建輸入張量
-    spatial_components = [x_pde, y_pde]
-    if z_pde is not None:
-        spatial_components.append(z_pde)
-    coords_spatial = torch.cat(spatial_components, dim=1)
+        # 構建輸入張量
+        spatial_components = [x_pde, y_pde]
+        if z_pde is not None:
+            spatial_components.append(z_pde)
+        coords_spatial = torch.cat(spatial_components, dim=1)
     
-    if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
-        coords_full = torch.cat([coords_spatial, t_pde], dim=1)
-    else:
-        coords_full = coords_spatial
+        if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
+            coords_full = torch.cat([coords_spatial, t_pde], dim=1)
+        else:
+            coords_full = coords_spatial
     
-    # 準備模型輸入（使用實例方法）
-    coords_full_physical, coords_full_norm, model_coords_pde = self._prepare_model_coords(
-        coords_full, require_grad=True, is_vs_pinn=is_vs_pinn
-    )
-    coords_pde_physical = coords_full_physical
+        # 準備模型輸入（使用實例方法）
+        coords_full_physical, coords_full_norm, model_coords_pde = self._prepare_model_coords(
+            coords_full, require_grad=True, is_vs_pinn=is_vs_pinn
+        )
+        coords_pde_physical = coords_full_physical
     
-    # 模型預測 + 反標準化
-    u_pred_norm = self.model(model_coords_pde)
-    var_order = self._infer_variable_order(u_pred_norm.shape[1], context='pde')
-    u_pred_pde_physical_raw = self.data_normalizer.denormalize_batch(u_pred_norm, var_order=var_order)
-    u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)
+        # 模型預測 + 反標準化
+        u_pred_norm = self.model(model_coords_pde)
+        var_order = self._infer_variable_order(u_pred_norm.shape[1], context='pde')
+        u_pred_pde_physical_raw = self.data_normalizer.denormalize_batch(u_pred_norm, var_order=var_order)
+        u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)
     
-    # ==================== 2. 邊界條件點前向傳播 ====================
-    spatial_bc = [data_batch['x_bc'], data_batch['y_bc']]
-    if 'z_bc' in data_batch:
-        spatial_bc.append(data_batch['z_bc'])
-    coords_bc = torch.cat(spatial_bc, dim=1)
+        # ==================== 2. 邊界條件點前向傳播 ====================
+        spatial_bc = [data_batch['x_bc'], data_batch['y_bc']]
+        if 'z_bc' in data_batch:
+            spatial_bc.append(data_batch['z_bc'])
+        coords_bc = torch.cat(spatial_bc, dim=1)
     
-    t_bc = data_batch.get('t_bc')
-    if t_bc is not None:
-        t_bc = t_bc.to(self.device)
+        t_bc = data_batch.get('t_bc')
+        if t_bc is not None:
+            t_bc = t_bc.to(self.device)
     
-    final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
-    coords_bc_physical, coords_bc_norm, model_coords_bc = self._prepare_model_coords(
-        final_bc_input, require_grad=False, is_vs_pinn=is_vs_pinn
-    )
-    
-    u_bc_pred_norm = self.model(model_coords_bc)
-    var_order_bc = self._infer_variable_order(u_bc_pred_norm.shape[1], context='bc')
-    u_bc_pred_phys_raw = self.data_normalizer.denormalize_batch(u_bc_pred_norm, var_order=var_order_bc)
-    u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)
-    
-    # ==================== 3. 感測器點前向傳播 ====================
-    spatial_sensors = [data_batch['x_sensors'], data_batch['y_sensors']]
-    if 'z_sensors' in data_batch:
-        spatial_sensors.append(data_batch['z_sensors'])
-    coords_sensors = torch.cat(spatial_sensors, dim=1)
-    
-    t_sensors = data_batch.get('t_sensors')
-    if t_sensors is not None:
-        t_sensors = t_sensors.to(self.device)
-    
-    final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
-    coords_sensors_physical, coords_sensors_norm, model_coords_sensors = self._prepare_model_coords(
-        final_sensor_input, require_grad=False, is_vs_pinn=is_vs_pinn
-    )
-    
-    u_sensors_pred_norm = self.model(model_coords_sensors)
-    var_order_sensors = self._infer_variable_order(u_sensors_pred_norm.shape[1], context='sensors', data_batch=data_batch)
-    u_sensors_pred_phys_raw = self.data_normalizer.denormalize_batch(u_sensors_pred_norm, var_order=var_order_sensors)
-    u_sensors_pred_phys: torch.Tensor = u_sensors_pred_phys_raw if isinstance(u_sensors_pred_phys_raw, torch.Tensor) else torch.tensor(u_sensors_pred_phys_raw, device=self.device)
-    
-    # ==================== 4. 使用 LossManager 計算所有損失 ====================
-    # 4.1 PDE 損失
-    pde_losses = self.loss_manager.compute_pde_loss(
-        coords_pde_physical=coords_pde_physical,
-        model_coords_pde=model_coords_pde,
-        u_pred_pde_physical=u_pred_pde_physical,
-        data_batch=data_batch,
-        epoch=epoch,
-        is_vs_pinn=is_vs_pinn
-    )
-    
-    # 4.2 邊界條件損失
-    bc_losses = self.loss_manager.compute_bc_loss(
-        u_bc_pred_phys=u_bc_pred_phys,
-        data_batch=data_batch,
-        epoch=epoch
-    )
-    
-    # 4.3 資料監督損失
-    data_losses = self.loss_manager.compute_data_loss(
-        u_sensors_pred_phys=u_sensors_pred_phys,
-        data_batch=data_batch
-    )
-    
-    # 4.4 低保真先驗損失
-    prior_losses = self.loss_manager.compute_lowfi_prior_loss(
-        u_pred_pde_physical=u_pred_pde_physical,
-        coords_pde_physical=coords_pde_physical,
-        data_batch=data_batch,
-        epoch=epoch
-    )
-    
-    # 4.5 均值約束損失
-    mean_constraint_loss = self.loss_manager.compute_mean_constraint_loss(
-        u_pred_pde_physical=u_pred_pde_physical,
-        epoch=epoch
-    )
-    
-    # ==================== 5. 動態權重調整與損失組合 ====================
-    # 5.1 課程學習權重
-    curriculum_config, loss_cfg = self.loss_manager.apply_curriculum_weights(epoch)
-    
-    # 5.2 構建損失項字典（供 GradNorm 使用）
-    loss_terms = {
-        'data': data_losses['data_loss'],
-        'momentum_x': pde_losses['momentum_x_loss'],
-        'momentum_y': pde_losses['momentum_y_loss'],
-        'continuity': pde_losses['continuity_loss'],
-    }
-    
-    if hasattr(self.physics, 'compute_periodic_loss'):
-        loss_terms['periodic_x'] = bc_losses['periodic_x_loss']
-        loss_terms['periodic_y'] = bc_losses['periodic_y_loss']
-    else:
-        loss_terms['wall_constraint'] = bc_losses['wall_loss']
-    
-    if is_vs_pinn:
-        loss_terms['momentum_z'] = pde_losses['momentum_z_loss']
-    
-    # 5.3 GradNorm 動態權重
-    gradnorm_weights, gradnorm_ratio = self.loss_manager.apply_gradnorm_weights(loss_terms)
-    
-    # 5.4 組合所有損失
-    all_losses = {**pde_losses, **bc_losses, **data_losses, **prior_losses}
-    all_losses['mean_constraint_loss'] = mean_constraint_loss
-    
-    total_loss, result = self.loss_manager.combine_losses(
-        loss_dict=all_losses,
-        loss_cfg=loss_cfg,
-        gradnorm_ratio=gradnorm_ratio,
-        is_vs_pinn=is_vs_pinn,
-        epoch=epoch
-    )
-    
-    # ==================== 6. 反向傳播與優化 ====================
-    # AMP 混合精度
-    scaled_loss = self.scaler.scale(total_loss)
-    scaled_loss.backward()
-    
-    # 梯度裁剪
-    if self.train_cfg.get('gradient_clip', 0.0) > 0:
-        self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(),
-            self.train_cfg['gradient_clip']
+        final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
+        coords_bc_physical, coords_bc_norm, model_coords_bc = self._prepare_model_coords(
+            final_bc_input, require_grad=False, is_vs_pinn=is_vs_pinn
         )
     
-    # 優化器步進
-    if isinstance(self.optimizer, torch.optim.LBFGS):
-        def closure():
-            return total_loss
-        self.optimizer.step(closure)
-    else:
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        u_bc_pred_norm = self.model(model_coords_bc)
+        var_order_bc = self._infer_variable_order(u_bc_pred_norm.shape[1], context='bc')
+        u_bc_pred_phys_raw = self.data_normalizer.denormalize_batch(u_bc_pred_norm, var_order=var_order_bc)
+        u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)
     
-    # 學習率調度器更新
-    if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'current_step'):
-        self.lr_scheduler.step()
+        # ==================== 3. 感測器點前向傳播 ====================
+        spatial_sensors = [data_batch['x_sensors'], data_batch['y_sensors']]
+        if 'z_sensors' in data_batch:
+            spatial_sensors.append(data_batch['z_sensors'])
+        coords_sensors = torch.cat(spatial_sensors, dim=1)
     
-    # ==================== 7. 附加課程學習與 GradNorm 信息 ====================
-    if curriculum_config is not None:
-        is_curriculum_transition = curriculum_config.get('is_transition', False)
-        result['_curriculum_transition'] = 1.0 if is_curriculum_transition else 0.0
-        result['_curriculum_stage'] = curriculum_config.get('stage_name', 'unknown')
-        if 'lr' in curriculum_config:
-            result['_curriculum_lr'] = curriculum_config['lr']
+        t_sensors = data_batch.get('t_sensors')
+        if t_sensors is not None:
+            t_sensors = t_sensors.to(self.device)
     
-    if gradnorm_weights is not None:
-        result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
+        final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
+        coords_sensors_physical, coords_sensors_norm, model_coords_sensors = self._prepare_model_coords(
+            final_sensor_input, require_grad=False, is_vs_pinn=is_vs_pinn
+        )
     
-    return result
+        u_sensors_pred_norm = self.model(model_coords_sensors)
+        var_order_sensors = self._infer_variable_order(u_sensors_pred_norm.shape[1], context='sensors', data_batch=data_batch)
+        u_sensors_pred_phys_raw = self.data_normalizer.denormalize_batch(u_sensors_pred_norm, var_order=var_order_sensors)
+        u_sensors_pred_phys: torch.Tensor = u_sensors_pred_phys_raw if isinstance(u_sensors_pred_phys_raw, torch.Tensor) else torch.tensor(u_sensors_pred_phys_raw, device=self.device)
+    
+        # ==================== 4. 使用 LossManager 計算所有損失 ====================
+        # 4.1 PDE 損失
+        pde_losses = self.loss_manager.compute_pde_loss(
+            coords_pde_physical=coords_pde_physical,
+            model_coords_pde=model_coords_pde,
+            u_pred_pde_physical=u_pred_pde_physical,
+            data_batch=data_batch,
+            epoch=epoch,
+            is_vs_pinn=is_vs_pinn
+        )
+    
+        # 4.2 邊界條件損失
+        bc_losses = self.loss_manager.compute_bc_loss(
+            u_bc_pred_phys=u_bc_pred_phys,
+            data_batch=data_batch,
+            epoch=epoch
+        )
+    
+        # 4.3 資料監督損失
+        data_losses = self.loss_manager.compute_data_loss(
+            u_sensors_pred_phys=u_sensors_pred_phys,
+            data_batch=data_batch
+        )
+    
+        # 4.4 低保真先驗損失
+        prior_losses = self.loss_manager.compute_lowfi_prior_loss(
+            u_pred_pde_physical=u_pred_pde_physical,
+            coords_pde_physical=coords_pde_physical,
+            data_batch=data_batch,
+            epoch=epoch
+        )
+    
+        # 4.5 均值約束損失
+        mean_constraint_loss = self.loss_manager.compute_mean_constraint_loss(
+            u_pred_pde_physical=u_pred_pde_physical,
+            epoch=epoch
+        )
+    
+        # ==================== 5. 動態權重調整與損失組合 ====================
+        # 5.1 課程學習權重
+        curriculum_config, loss_cfg = self.loss_manager.apply_curriculum_weights(epoch)
+    
+        # 5.2 構建損失項字典（供 GradNorm 使用）
+        loss_terms = {
+            'data': data_losses['data_loss'],
+            'momentum_x': pde_losses['momentum_x_loss'],
+            'momentum_y': pde_losses['momentum_y_loss'],
+            'continuity': pde_losses['continuity_loss'],
+        }
+    
+        if hasattr(self.physics, 'compute_periodic_loss'):
+            loss_terms['periodic_x'] = bc_losses['periodic_x_loss']
+            loss_terms['periodic_y'] = bc_losses['periodic_y_loss']
+        else:
+            loss_terms['wall_constraint'] = bc_losses['wall_loss']
+    
+        if is_vs_pinn:
+            loss_terms['momentum_z'] = pde_losses['momentum_z_loss']
+    
+        # 5.3 GradNorm 動態權重
+        gradnorm_weights, gradnorm_ratio = self.loss_manager.apply_gradnorm_weights(loss_terms)
+    
+        # 5.4 組合所有損失
+        all_losses = {**pde_losses, **bc_losses, **data_losses, **prior_losses}
+        all_losses['mean_constraint_loss'] = mean_constraint_loss
+    
+        total_loss, result = self.loss_manager.combine_losses(
+            loss_dict=all_losses,
+            loss_cfg=loss_cfg,
+            gradnorm_ratio=gradnorm_ratio,
+            is_vs_pinn=is_vs_pinn,
+            epoch=epoch
+        )
+    
+        # ==================== 6. 反向傳播與優化 ====================
+        # AMP 混合精度
+        scaled_loss = self.scaler.scale(total_loss)
+        scaled_loss.backward()
+    
+        # 梯度裁剪
+        if self.train_cfg.get('gradient_clip', 0.0) > 0:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                self.train_cfg['gradient_clip']
+            )
+    
+        # 優化器步進
+        if isinstance(self.optimizer, torch.optim.LBFGS):
+            def closure():
+                return total_loss
+            self.optimizer.step(closure)
+        else:
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+    
+        # 學習率調度器更新
+        if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'current_step'):
+            self.lr_scheduler.step()
+    
+        # ==================== 7. 附加課程學習與 GradNorm 信息 ====================
+        if curriculum_config is not None:
+            is_curriculum_transition = curriculum_config.get('is_transition', False)
+            result['_curriculum_transition'] = 1.0 if is_curriculum_transition else 0.0
+            result['_curriculum_stage'] = curriculum_config.get('stage_name', 'unknown')
+            if 'lr' in curriculum_config:
+                result['_curriculum_lr'] = curriculum_config['lr']
+    
+        if gradnorm_weights is not None:
+            result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
+    
+        return result
 
     def validate(self) -> Optional[Dict[str, float]]:
         """
