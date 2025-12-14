@@ -216,36 +216,36 @@ class NetCDFReader(DataReader):
     def read(self, filepath: Union[str, Path]) -> LowFiData:
         """讀取 NetCDF 檔案"""
         with nc.Dataset(filepath, 'r') as ds:
-            # 提取座標
+            # 提取座標 (使用基類的 find_by_names)
             coordinates = {}
             for std_name, possible_names in self.coord_mapping.items():
-                coord_var = self._find_variable(ds, possible_names)
-                if coord_var:
-                    coordinates[std_name] = np.array(ds[coord_var][:])
+                coord_data = self.find_by_names(
+                    ds.variables, 
+                    possible_names,
+                    lambda vars_dict, name: np.array(vars_dict[name][:]) if name in vars_dict else None
+                )
+                if coord_data is not None:
+                    coordinates[std_name] = coord_data
             
-            # 提取物理場
+            # 提取物理場 (使用基類的 find_by_names)
             fields = {}
             for std_name, possible_names in self.field_mapping.items():
-                field_var = self._find_variable(ds, possible_names)
-                if field_var:
-                    fields[std_name] = np.array(ds[field_var][:])
+                field_data = self.find_by_names(
+                    ds.variables,
+                    possible_names,
+                    lambda vars_dict, name: np.array(vars_dict[name][:]) if name in vars_dict else None
+                )
+                if field_data is not None:
+                    fields[std_name] = field_data
             
-            # 提取元數據
-            metadata = {
-                'source_file': str(filepath),
-                'format': 'NetCDF',
-                'global_attrs': {attr: ds.getncattr(attr) for attr in ds.ncattrs()},
-                'variables': list(ds.variables.keys())
-            }
+            # 提取元數據 (使用基類的 build_metadata)
+            metadata = self.build_metadata(
+                filepath, 'NetCDF',
+                global_attrs={attr: ds.getncattr(attr) for attr in ds.ncattrs()},
+                variables=list(ds.variables.keys())
+            )
             
         return LowFiData(coordinates=coordinates, fields=fields, metadata=metadata)
-    
-    def _find_variable(self, dataset, possible_names: List[str]) -> Optional[str]:
-        """在資料集中尋找變數"""
-        for name in possible_names:
-            if name in dataset.variables:
-                return name
-        return None
 
 
 class HDF5Reader(DataReader):
