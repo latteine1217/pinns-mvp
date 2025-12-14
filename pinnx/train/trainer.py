@@ -24,9 +24,10 @@ from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
 from pinnx.losses.priors import PriorLossManager
 from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
 from pinnx.train.loop import TrainingLoopManager, apply_point_weights_to_loss
+from pinnx.train.loss_manager import LossManager  # type: ignore
 from pinnx.utils.normalization import InputNormalizer, NormalizationConfig, DataNormalizer
 from pinnx.evals.metrics import relative_L2
-from pinnx.physics.turbulence_utils import preprocess_rans_prior, preprocess_rans_prior_from_config
+from pinnx.physics.turbulence_utils import preprocess_rans_prior, preprocess_rans_prior_from_config  # type: ignore
 
 
 class Trainer:
@@ -146,6 +147,19 @@ class Trainer:
         # 🆕 初始化 Prior Loss Manager（若配置啟用）
         self.prior_loss_manager: Optional[PriorLossManager] = None
         self._setup_prior_loss_manager()
+        
+        # 🆕 Phase 1-3: 初始化 LossManager（統一損失計算）
+        self.loss_manager = LossManager(
+            config=config,
+            physics=physics,
+            model=model,
+            device=device,
+            data_normalizer=self.data_normalizer,
+            prior_loss_manager=self.prior_loss_manager,
+            weighters=self.weighters,
+            losses=losses
+        )
+        logging.info(f"✅ LossManager 初始化完成")
         
         # 初始化訓練組件
         self._setup_optimizer()
@@ -600,12 +614,13 @@ class Trainer:
         epoch: int
     ) -> Dict[str, Any]:
         """
-        執行單步訓練（簡化版）
+        執行單步訓練（使用 LossManager 簡化版）
         
         包含核心損失計算：
         - PDE 殘差（momentum + continuity）
         - 壁面邊界條件（無滑移）
         - 資料監督損失（sensor points）
+        - 低保真先驗一致性（可選）
         
         Args:
             data_batch: 訓練資料批次（包含 PDE、邊界、資料點）
@@ -616,8 +631,7 @@ class Trainer:
         """
         self.optimizer.zero_grad()
         
-        # ⭐ Phase 5: 檢查是否為 VS-PINN 物理（用於選擇對應的殘差計算方法）
-        # 注意：座標維度已由 self.model_input_dim 控制，此 flag 僅用於 physics API 選擇
+        # 檢查是否為 VS-PINN 物理
         is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
         
         # ==================== 輔助函數 ====================
