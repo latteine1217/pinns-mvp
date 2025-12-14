@@ -11,8 +11,14 @@ PINNx: Physics-Informed Neural Networks for Inverse Problems
 - losses: 損失函數（殘差、先驗、動態權重）
 - sensors: 感測點選擇（QR-pivot、最佳化佈點）
 - dataio: 資料輸入輸出（JHTDB 客戶端、低保真載入）
-- train: 訓練框架（單模型、集成訓練）
+- train: 訓練框架（重構完成，模組化設計）
 - evals: 評估與分析（指標計算、可視化）
+
+重構歷史 (2025-12):
+- Phase 1-4 完成：Trainer 核心方法減少 74% 行數（971 → 251 lines）
+- 新增 TrainingLoopManager 類別管理 TensorBoard 與自適應更新
+- 17 個 helper methods 實現單一職責原則
+- 詳見 REFACTORING_REPORT_PHASE*.md
 """
 
 # 版本資訊

@@ -182,9 +182,21 @@ graph TD
 
 詳見 `configs/templates/README.md` 獲取完整模板說明。
 
-## 📈 最近更新 (2025-12-13)
+## 📈 最近更新
 
-### ✅ 專案整理與文檔重構
+### ✅ Trainer 重構完成 (2025-12-14)
+- **代碼質量提升**：`Trainer` 類別完成 Phase 1-4 全面重構
+  - **74% 行數減少**：4 個核心方法從 971 行 → 251 行
+  - **模組化設計**：新增 `TrainingLoopManager` 類別 + 17 個 helper methods
+  - **零回歸**：所有測試通過，功能完全保留
+  - **可維護性**：單一職責原則，每個方法聚焦單一任務
+- **重構細節**：詳見 `REFACTORING_REPORT_PHASE*.md` 完整文檔
+  - Phase 1: `step()` (371 → 92 lines, -75%)
+  - Phase 2: `train()` (371 → 92 lines, -75%)
+  - Phase 3: `validate()` (71 → 21 lines, -70%)
+  - Phase 4: `save_checkpoint()` (158 → 46 lines, -71%)
+
+### ✅ 專案整理與文檔重構 (2025-12-13)
 - **文檔精簡**：33 個冗長文檔 → 5 個核心文檔（85% 減量）
   - 📖 快速入門、📚 技術文檔、⚙️ 配置參考、🔧 API 參考、🐛 疑難排解
   - 舊文檔移至 `docs/archive/` 供參考
