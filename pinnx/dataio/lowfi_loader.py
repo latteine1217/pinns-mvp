@@ -348,11 +348,11 @@ class NPZReader(DataReader):
                 else:
                     fields[key] = arr
         
-        metadata = {
-            'source_file': str(filepath),
-            'format': 'NPZ',
-            'arrays': list(data.files)
-        }
+        # 使用基類的 build_metadata
+        metadata = self.build_metadata(
+            filepath, 'NPZ',
+            arrays=list(data.files)
+        )
         
         return LowFiData(coordinates=coordinates, fields=fields, metadata=metadata)
 
