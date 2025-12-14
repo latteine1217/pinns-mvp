@@ -78,7 +78,12 @@ class LowFiData:
 
 
 class DataReader(ABC):
-    """抽象資料讀取器基類"""
+    """
+    抽象資料讀取器基類
+    
+    提供共用的資料查找、驗證與錯誤處理邏輯，
+    子類只需實現格式特定的讀取邏輯。
+    """
     
     @abstractmethod
     def read(self, filepath: Union[str, Path]) -> LowFiData:
@@ -89,6 +94,90 @@ class DataReader(ABC):
     def supports_format(self, filepath: Union[str, Path]) -> bool:
         """檢查是否支援此檔案格式"""
         pass
+    
+    # === 共用工具方法 (Phase 5-1 新增) ===
+    
+    @staticmethod
+    def find_by_names(container, possible_names: List[str], 
+                      accessor: callable) -> Optional[Any]:
+        """
+        統一的名稱查找邏輯
+        
+        Args:
+            container: 資料容器 (Dataset, HDF5 Group, dict 等)
+            possible_names: 可能的變數名列表
+            accessor: 存取函數，接收 (container, name) 返回資料
+        
+        Returns:
+            找到的資料，或 None
+        
+        Example:
+            >>> # NetCDF
+            >>> DataReader.find_by_names(
+            ...     ds, ['u', 'U', 'velocity_x'],
+            ...     lambda c, n: c.variables[n][:]
+            ... )
+            >>> # HDF5
+            >>> DataReader.find_by_names(
+            ...     group, ['fields/u', 'u'],
+            ...     lambda c, n: np.array(c[n])
+            ... )
+        """
+        for name in possible_names:
+            try:
+                result = accessor(container, name)
+                if result is not None:
+                    return result
+            except (KeyError, AttributeError, ValueError):
+                continue
+        return None
+    
+    def validate_data(self, data: np.ndarray, field_name: str,
+                      max_value: float = 1e6) -> bool:
+        """
+        統一的資料驗證邏輯
+        
+        Args:
+            data: 待驗證的資料陣列
+            field_name: 欄位名稱 (用於日誌)
+            max_value: 合理值上限
+        
+        Returns:
+            True 如果資料有效
+        """
+        if not np.all(np.isfinite(data)):
+            logging.warning(f"{field_name}: contains NaN/Inf values")
+            return False
+        
+        if np.abs(data).max() > max_value:
+            logging.warning(
+                f"{field_name}: max value {np.abs(data).max():.2e} "
+                f"exceeds threshold {max_value:.2e}"
+            )
+            return False
+        
+        return True
+    
+    def build_metadata(self, filepath: Union[str, Path], 
+                       format_name: str, **extra) -> Dict[str, Any]:
+        """
+        構建標準元數據結構
+        
+        Args:
+            filepath: 來源檔案路徑
+            format_name: 格式名稱 (NetCDF, HDF5, NPZ)
+            **extra: 額外的元數據欄位
+        
+        Returns:
+            標準化的元數據字典
+        """
+        metadata = {
+            'source_file': str(filepath),
+            'format': format_name,
+            'read_timestamp': pd.Timestamp.now().isoformat(),
+        }
+        metadata.update(extra)
+        return metadata
 
 
 class NetCDFReader(DataReader):
