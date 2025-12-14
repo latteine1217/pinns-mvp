@@ -403,7 +403,8 @@ class ChannelFlowLoader:
         
         # 提取域配置
         domain_config = self._extract_domain_config()
-        coordinate_info = self._extract_coordinate_info(data)
+        # 從 lowfi_data.metadata 提取座標資訊（如果有的話）
+        coordinate_info = lowfi_data.metadata.get('coordinate_info', {})
         domain_spec = self._build_domain_spec(domain_config)
         
         # 計算統計資訊（用於 VS-PINN 與自動輸出範圍）
@@ -833,13 +834,15 @@ class ChannelFlowLoader:
             for field, values in channel_data.sensor_data.items():
                 checks[f'{field}_dimension_match'] = len(values) == n_points
         
-        # 物理合理性
+        # 物理合理性（內聯驗證邏輯，避免實例化抽象類）
         for field, values in channel_data.sensor_data.items():
+            # 設定 Channel Flow Re1000 的合理範圍
+            max_reasonable = 30.0 if field == 'u' else 5.0
+            
+            # NaN/Inf 檢查
             checks[f'{field}_finite'] = np.all(np.isfinite(values))
-            if field in ['u', 'v']:
-                # 調整 Channel Flow Re1000 的合理範圍
-                max_reasonable = 30.0 if field == 'u' else 5.0  # u可達25+, v較小
-                checks[f'{field}_reasonable'] = np.abs(values).max() < max_reasonable
+            # 範圍檢查
+            checks[f'{field}_reasonable'] = np.abs(values).max() < max_reasonable
         
         # 域參數合理性
         domain = channel_data.domain_config
@@ -848,13 +851,17 @@ class ChannelFlowLoader:
         if 'nu' in domain:
             checks['nu_positive'] = domain['nu'] > 0
         
-        # 低保真先驗檢查 (如果有)
+        # 低保真先驗檢查
         if channel_data.has_lowfi_prior() and channel_data.lowfi_prior:
             checks['lowfi_prior_available'] = True
             for field in ['u', 'v', 'p']:
                 if field in channel_data.lowfi_prior.values:
                     values = channel_data.lowfi_prior.values[field]
+                    max_val = 30.0 if field == 'u' else 5.0
+                    # NaN/Inf 檢查
                     checks[f'lowfi_{field}_finite'] = np.all(np.isfinite(values))
+                    # 範圍檢查
+                    checks[f'lowfi_{field}_reasonable'] = np.abs(values).max() < max_val
         
         # 統計資訊檢查
         if channel_data.statistics:
@@ -864,9 +871,7 @@ class ChannelFlowLoader:
     
     def load_full_field_data(self,
                            noise_sigma: Optional[float] = None) -> StructuredField:
-        """
-        載入完整流場數據並返回統一的 StructuredField 物件。
-        """
+        """載入完整流場數據並返回統一的 StructuredField 物件（使用 NPZReader）"""
         cutout_file = self.cache_dir / "cutout_128x64_with_w.npz"
         if not cutout_file.exists():
             raise FileNotFoundError(
@@ -875,40 +880,39 @@ class ChannelFlowLoader:
             )
 
         logger.info(f"Loading full field data from {cutout_file}")
-        data = np.load(cutout_file, allow_pickle=True)
-
+        
+        # 使用 NPZReader 讀取數據
+        reader = NPZReader()
+        lowfi_data = reader.read(cutout_file)
+        
+        # 提取 fields（確保包含 u, v, w, p）
         fields = {
-            'u': np.asarray(data['u']),
-            'v': np.asarray(data['v']),
-            'w': np.asarray(data['w']),
-            'p': np.asarray(data['p'])
+            'u': lowfi_data.fields['u'],
+            'v': lowfi_data.fields['v'],
+            'w': lowfi_data.fields['w'],
+            'p': lowfi_data.fields['p']
         }
-
+        
+        # 添加噪聲（如果指定）
         if noise_sigma is not None and noise_sigma > 0:
             noisy = self._add_noise({k: v.reshape(-1) for k, v in fields.items()}, noise_sigma)
             for key, arr in noisy.items():
                 fields[key] = arr.reshape(fields[key].shape)
-
-        if 'coordinates' not in data:
-            raise KeyError("cutout_128x64_with_w.npz must include structured 'coordinates'")
-        coordinates_obj = data['coordinates'].item()
-        if not isinstance(coordinates_obj, dict):
-            raise TypeError("coordinates metadata must be provided as a dictionary")
-        if 'x' in coordinates_obj and 'y' in coordinates_obj:
-            x_axis = np.asarray(coordinates_obj['x'])
-            y_axis = np.asarray(coordinates_obj['y'])
-        elif 'X' in coordinates_obj and 'Y' in coordinates_obj:
-            X = np.asarray(coordinates_obj['X'])
-            Y = np.asarray(coordinates_obj['Y'])
-            x_axis = X[:, 0]
-            y_axis = Y[0, :]
-        else:
-            raise KeyError(f"Unsupported coordinate keys: {list(coordinates_obj.keys())}")
-
+        
+        # 提取坐標軸（從 LowFiData.coordinates）
+        if 'x' not in lowfi_data.coordinates or 'y' not in lowfi_data.coordinates:
+            raise KeyError(f"Missing x/y coordinates in {cutout_file}")
+        
+        x_axis = lowfi_data.coordinates['x']
+        y_axis = lowfi_data.coordinates['y']
+        
+        # 創建結構化網格
         grid = StructuredGrid.from_axes({'x': x_axis, 'y': y_axis})
+        
+        # 計算統計資訊
         stats_input = {k: v.reshape(-1) for k, v in fields.items()}
         statistics = self._compute_statistics(stats_input, grid.to_points(order=('x', 'y')))
-
+        
         return StructuredField(
             grid=grid,
             fields=fields,
