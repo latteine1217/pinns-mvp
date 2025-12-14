@@ -608,792 +608,240 @@ class Trainer:
         logging.info(f"   - Variable Weights: {variable_weights}")
         logging.info(f"   - Distance Metric: {distance_metric}")
     
-    def step(
-        self,
-        data_batch: Dict[str, torch.Tensor],
-        epoch: int
-    ) -> Dict[str, Any]:
-        """
-        執行單步訓練（使用 LossManager 簡化版）
-        
-        包含核心損失計算：
-        - PDE 殘差（momentum + continuity）
-        - 壁面邊界條件（無滑移）
-        - 資料監督損失（sensor points）
-        - 低保真先驗一致性（可選）
-        
-        Args:
-            data_batch: 訓練資料批次（包含 PDE、邊界、資料點）
-            epoch: 當前 epoch 數
-        
-        Returns:
-            包含損失和指標的字典
-        """
-        self.optimizer.zero_grad()
-        
-        # 檢查是否為 VS-PINN 物理
-        is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
-        
-        # ==================== 輔助函數 ====================
-        def prepare_model_coords(
-            coord_tensor: torch.Tensor,
-            require_grad: bool = False
-        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            """
-            準備模型輸入座標（處理標準化與縮放）
-
-            ⚠️ 修正：不使用 clone() 以保持計算圖連接
-
-            Returns:
-                (coords_physical, coords_norm, model_coords):
-                - coords_physical: 物理座標（供 PDE autograd 使用）
-                - coords_norm: 標準化後的座標（若無 InputNormalizer 則與 coords_physical 相同）
-                - model_coords: 最終模型輸入（可能經過 VS-PINN scaling）
-            """
-            # 1. 直接使用物理座標（不 clone，保持計算圖）
-            coords_physical = coord_tensor
-            if require_grad and not coords_physical.requires_grad:
-                coords_physical.requires_grad_(True)
-
-            # 2. 輸入標準化（可選）
-            if self.input_normalizer is not None:
-                coords_norm = self.input_normalizer.transform(coords_physical)
-            else:
-                coords_norm = coords_physical
-
-            # 3. VS-PINN 縮放（可選，作用於標準化後的座標）
-            if is_vs_pinn and hasattr(self.physics, 'scale_coordinates'):
-                # ⚠️ 關鍵修正：VS-PINN scale_coordinates 僅接受 (x, y, z) 空間坐標
-                # 如果輸入包含時間 t (4D)，需要拆分處理
-                if coords_norm.shape[1] > 3: # 假設 4D (x, y, z, t) 或 (t, x, y, z)
-                    # 假設前3維是空間 (x, y, z)，第4維是時間 (t)
-                    # 需要根據 prepare_model_coords 的調用上下文確認順序
-                    # 在 Trainer.step 中，我們將 spatial_coords 放在前面 (x, y, z, t)
-                    coords_spatial = coords_norm[:, :3]
-                    coords_time = coords_norm[:, 3:]
-                    scaled_spatial = self.physics.scale_coordinates(coords_spatial)
-                    model_coords = torch.cat([scaled_spatial, coords_time], dim=1)
-                else:
-                    model_coords = self.physics.scale_coordinates(coords_norm)
-            else:
-                model_coords = coords_norm
-
-            return coords_physical, coords_norm, model_coords
-        
-        # ==================== 1. PDE 殘差損失 ====================
-        # 1. 準備 PDE 點的空間與時間分量
-        x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
-        z_pde = data_batch.get('z_pde')
-        t_pde = data_batch.get('t_pde')
-        
-        if t_pde is not None:
-            t_pde = t_pde.to(self.device).requires_grad_(True)
-
-        # 2. 構建輸入張量：分離空間與時間
-        spatial_components = [x_pde, y_pde]
-        if z_pde is not None:
-            spatial_components.append(z_pde)
-        
-        # 物理空間坐標（純空間，用於物理方程計算）
-        coords_spatial = torch.cat(spatial_components, dim=1)
-        
-        # 模型輸入坐標（全維度，用於 forward pass）
-        if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
-            # 假設順序：(x, y, [z], t) 以匹配 InputNormalizer 預期（如果有）
-            # 或者 (t, x, y, [z])? 
-            # 根據 prepare_mock_training_data，沒有特別順序約定，通常 x, y, t
-            # 讓我們約定：(spatial..., t)
-            coords_full = torch.cat([coords_spatial, t_pde], dim=1)
-        else:
-            coords_full = coords_spatial
-        
-        # ✅ 調用輔助函數處理標準化與縮放
-        # 注意：這裡傳入 coords_full，它可能包含 t
-        coords_full_physical, coords_full_norm, model_coords_pde = prepare_model_coords(coords_full, require_grad=True)
-        
-        # ⚠️ 關鍵修正：不要在這裡切片！
-        # 傳遞完整的 coords_full_physical（可能包含時間維度）給物理模組
-        # 讓物理模組自行處理維度切片，以保持計算圖連接
-        coords_pde_physical = coords_full_physical
-        
-        #調試：打印維度（僅第一個 epoch）
-        if epoch == 0 and not hasattr(self, '_debug_printed'):
-            logging.info(f"🔍 調試資訊：coords_spatial.shape={coords_spatial.shape}, model_coords_pde.shape={model_coords_pde.shape}")
-            if t_pde is not None:
-                logging.info(f"  - t_pde.shape={t_pde.shape}")
-            logging.info(f"  - coords_pde_physical 梯度追蹤: {coords_pde_physical.requires_grad}")
-            self._debug_printed = True
-        
-        # 模型預測（標準化空間輸出）
-        u_pred_norm = self.model(model_coords_pde)
-
-        # ✅ 立即反標準化為物理量（供 PDE 殘差計算使用）
-        var_order = self._infer_variable_order(u_pred_norm.shape[1], context='pde')
-        u_pred_pde_physical_raw = self.data_normalizer.denormalize_batch(u_pred_norm, var_order=var_order)
-        # 確保是 Tensor 類型（denormalize_batch 保持輸入類型）
-        u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)  # type: ignore
-
-        # ✅ 計算圖連接已驗證（診斷代碼已移除，避免干擾訓練）
-        
-        # ✅ 提取速度和壓力分量（物理空間）
-        if is_vs_pinn:
-            if u_pred_pde_physical.shape[1] == 3:
-                # 模型只輸出 [u, v, p]，添加 w=0
-                velocity_phys = u_pred_pde_physical[:, :2]
-                pressure_phys = u_pred_pde_physical[:, 2:3]
-                w_component_phys = torch.zeros_like(pressure_phys)
-                predictions_phys = torch.cat([velocity_phys, w_component_phys, pressure_phys], dim=1)
-            elif u_pred_pde_physical.shape[1] == 4:
-                # 模型輸出完整 [u, v, w, p]
-                predictions_phys = u_pred_pde_physical
-                velocity_phys = u_pred_pde_physical[:, :2]
-                pressure_phys = u_pred_pde_physical[:, 3:4]
-            else:
-                raise ValueError(f"VS-PINN 模型輸出維度錯誤：{u_pred_pde_physical.shape[1]}，期望 3 或 4")
-        else:
-            if u_pred_pde_physical.shape[1] == 3:
-                velocity_phys = u_pred_pde_physical[:, :2]
-                pressure_phys = u_pred_pde_physical[:, 2:3]
-            elif u_pred_pde_physical.shape[1] == 4:
-                velocity_phys = u_pred_pde_physical[:, :2]
-                pressure_phys = u_pred_pde_physical[:, 3:4]
-            else:
-                raise ValueError(f"標準 PINN 輸出維度錯誤: {u_pred_pde_physical.shape[1]}，期望 3 或 4")
-            predictions_phys = None
-        
-        # ✅ 計算物理殘差（使用物理座標 + 物理量）
-        try:
-            if is_vs_pinn and hasattr(self.physics, 'compute_momentum_residuals'):
-                # VS-PINN 3D
-                # 注意：VS-PINN 目前主要針對穩態通道流，可能未處理時間項
-                residuals_mom = self.physics.compute_momentum_residuals(
-                    coords_pde_physical,    # ✅ 物理座標（含梯度）
-                    predictions_phys,        # ✅ 物理量
-                    scaled_coords=model_coords_pde  # VS-PINN 仍需縮放座標
-                )
-                continuity_residual = self.physics.compute_continuity_residual(
-                    coords_pde_physical,    # ✅ 物理座標（含梯度）
-                    predictions_phys,        # ✅ 物理量
-                    scaled_coords=model_coords_pde
-                )
-                residuals = {
-                    'momentum_x': residuals_mom['momentum_x'],
-                    'momentum_y': residuals_mom['momentum_y'],
-                    'momentum_z': residuals_mom['momentum_z'],
-                    'continuity': continuity_residual,
-                }
-            else:
-                # 標準 NS 2D 或 Kolmogorov Flow
-                # 檢查物理模組是否接受 time 和 nu_t 參數
-                import inspect
-                residual_fn = self.physics.residual_unified
-                sig = inspect.signature(residual_fn)
-                
-                kwargs = {}
-                if 'time' in sig.parameters and t_pde is not None:
-                    kwargs['time'] = t_pde
-                
-                # ⭐ 添加 RANS 湍流黏度（如果存在）
-                if 'nu_t' in sig.parameters:
-                    nu_t_pde = None
-                    if 'lowfi_prior' in data_batch and data_batch['lowfi_prior'] is not None:
-                        lowfi_prior = data_batch['lowfi_prior']
-                        if 'nu_t_pde' in lowfi_prior:
-                            nu_t_raw = lowfi_prior['nu_t_pde']
-                            
-                            # 🆕 預處理 RANS 湍流黏度（damping + clipping + smoothing）
-                            if nu_t_raw is not None and hasattr(self, 'config'):
-                                preprocessing_cfg = self.config.get('lowfi_prior', {}).get('preprocessing', {})
-                                if preprocessing_cfg.get('enabled', True):
-                                    # 使用簡化介面（自動從配置推斷所有參數）
-                                    nu_t_pde, stats = preprocess_rans_prior_from_config(
-                                        nu_t_raw,
-                                        coords_pde_physical,
-                                        self.config,
-                                        epoch=epoch
-                                    )
-                                else:
-                                    nu_t_pde = nu_t_raw
-                            else:
-                                nu_t_pde = nu_t_raw
-                    kwargs['nu_t'] = nu_t_pde
-                
-                residuals = residual_fn(
-                    coords=coords_pde_physical,  # 傳入純空間物理坐標
-                    predictions=u_pred_pde_physical,
-                    **kwargs
-                )
-            
-            # 應用點權重（如果存在）
-            pde_point_weights = data_batch.get('pde_point_weights', None)
-            
-            # 🆕 Causal Training: 計算並應用時間因果權重
-            causal_weighter = self.weighters.get('causal')
-            if causal_weighter is not None and t_pde is not None:
-                # 1. 匯總每個點的殘差平方和 (L2 Norm squared per point)
-                total_res_sq = torch.zeros_like(t_pde)
-                for r in residuals.values():
-                    total_res_sq += r.detach()**2 
-                
-                # 2. 計算權重 w(t)
-                causal_weights = causal_weighter.compute_weights(total_res_sq, t_pde)
-                
-                # 3. 記錄權重統計 (可選，用於調試)
-                if epoch % 100 == 0 and epoch > 0:
-                    logging.debug(f"Causal Weights: min={causal_weights.min():.4f}, max={causal_weights.max():.4f}, mean={causal_weights.mean():.4f}")
-
-                # 4. 應用權重到每個殘差項
-                final_weights = causal_weights
-                if pde_point_weights is not None:
-                    final_weights = final_weights * pde_point_weights
-                
-                momentum_x_loss = torch.mean(final_weights * residuals['momentum_x']**2)
-                momentum_y_loss = torch.mean(final_weights * residuals['momentum_y']**2)
-                momentum_z_loss = torch.mean(final_weights * residuals['momentum_z']**2) if is_vs_pinn else torch.tensor(0.0, device=self.device)
-                continuity_loss = torch.mean(final_weights * residuals['continuity']**2)
-                
-            elif pde_point_weights is not None:
-                momentum_x_loss = apply_point_weights_to_loss(residuals['momentum_x']**2, pde_point_weights)
-                momentum_y_loss = apply_point_weights_to_loss(residuals['momentum_y']**2, pde_point_weights)
-                momentum_z_loss = apply_point_weights_to_loss(residuals['momentum_z']**2, pde_point_weights) if is_vs_pinn else torch.tensor(0.0, device=self.device)
-                continuity_loss = apply_point_weights_to_loss(residuals['continuity']**2, pde_point_weights)
-            else:
-                momentum_x_loss = torch.mean(residuals['momentum_x']**2)
-                momentum_y_loss = torch.mean(residuals['momentum_y']**2)
-                momentum_z_loss = torch.mean(residuals['momentum_z']**2) if is_vs_pinn else torch.tensor(0.0, device=self.device)
-                continuity_loss = torch.mean(residuals['continuity']**2)
-        
-        except Exception as e:
-            logging.error(f"🚨 物理殘差計算失敗: {e}")
-            logging.error(f"coords_pde_physical shape: {coords_pde_physical.shape}, requires_grad: {coords_pde_physical.requires_grad}")
-            logging.error(f"u_pred_norm shape: {u_pred_norm.shape}, requires_grad: {u_pred_norm.requires_grad}")
-            logging.error(f"u_pred_pde_physical shape: {u_pred_pde_physical.shape}, requires_grad: {u_pred_pde_physical.requires_grad}")
-            if is_vs_pinn:
-                logging.error(f"predictions_phys shape: {predictions_phys.shape if predictions_phys is not None else None}")
-            raise
-        
-        # ==================== 1B. RANS 已移除（僅保留為 LoFi 場診斷工具）====================
-        # ⚠️ RANS 不再作為損失項參與訓練（2025-10-14 變更）
-        # compute_rans_residuals() 保留在 physics 模組中用於：
-        # 1. 未來 LoFi 場輸入特徵提取
-        # 2. 訓練過程中的診斷與監控
-        
-        # ==================== 2. 壁面邊界條件損失 ====================
-        # 組合邊界條件座標（使用模型實際輸入維度）
-        # 修正：基於存在的空間分量構建
-        spatial_bc = [data_batch['x_bc'], data_batch['y_bc']]
-        if 'z_bc' in data_batch:
-            spatial_bc.append(data_batch['z_bc'])
-        coords_bc = torch.cat(spatial_bc, dim=1)
-        
-        # 🆕 Causal: 處理邊界條件的時間
-        t_bc = data_batch.get('t_bc')
-        if t_bc is not None:
-            t_bc = t_bc.to(self.device)
-            
-        final_bc_input = None
-        if t_bc is not None and self.model_input_dim > coords_bc.shape[1]:
-             final_bc_input = torch.cat([coords_bc, t_bc], dim=1) # 傳入完整座標給 prepare_model_coords
-        else:
-             final_bc_input = coords_bc
-
-        # ✅ 解包三元組
-        coords_bc_physical, coords_bc_norm, model_coords_bc = prepare_model_coords(final_bc_input, require_grad=False)
-        
-        u_bc_pred_norm = self.model(model_coords_bc)
-        
-        # ✅ 反標準化為物理量（壁面邊界條件在物理空間應為 0）
-        var_order_bc = self._infer_variable_order(u_bc_pred_norm.shape[1], context='bc')
-        u_bc_pred_phys_raw = self.data_normalizer.denormalize_batch(u_bc_pred_norm, var_order=var_order_bc)
-        u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)  # type: ignore
-        
-        # 識別壁面點（y = ±1）
-        y_bc = data_batch['y_bc']
-        wall_mask = (torch.abs(y_bc - 1.0) < 1e-3) | (torch.abs(y_bc + 1.0) < 1e-3)
-        wall_mask = wall_mask.squeeze()
-        
-        if wall_mask.sum() > 0:
-            # ✅ 使用物理量（壁面速度應為 0）
-            u_wall = u_bc_pred_phys[wall_mask, 0]  # u 分量（物理空間）
-            v_wall = u_bc_pred_phys[wall_mask, 1]  # v 分量（物理空間）
-            wall_loss = torch.mean(u_wall**2 + v_wall**2)
-        else:
-            wall_loss = torch.tensor(0.0, device=self.device)
-            if epoch == 0:
-                # ⚠️ 修正：處理 y_bc 為空的情況
-                if y_bc.numel() > 0:
-                    logging.warning(f"⚠️ 未檢測到壁面邊界點！y_bc 範圍: [{y_bc.min():.6f}, {y_bc.max():.6f}]")
-                else:
-                    logging.info(f"ℹ️ 無壁面邊界點（純週期性系統，如 Kolmogorov Flow）")
-
-        # ==================== 2B. 週期性邊界條件損失 ====================
-        # 僅用於 Kolmogorov Flow 或其他週期性系統
-        # ✅ 使用成對邊界點直接計算週期性損失（而非 compute_periodic_loss）
-        periodic_loss_dict = {}
-        if hasattr(self.physics, 'compute_periodic_loss'):
-            try:
-                # ✅ 邊界點結構：[左邊界, 右邊界, 下邊界, 上邊界]（成對順序）
-                # 假設前一半是 x 方向（左+右），後一半是 y 方向（下+上）
-                n_bc = u_bc_pred_phys.shape[0]
-                n_pairs_total = n_bc // 2
-                n_pairs_x = n_pairs_total // 2  # x 方向配對數
-                n_pairs_y = n_pairs_total - n_pairs_x  # y 方向配對數
-                
-                # x 方向週期性：左邊界 (0:n_pairs_x) vs 右邊界 (n_pairs_x:2*n_pairs_x)
-                if n_pairs_x > 0:
-                    pred_left = u_bc_pred_phys[0:n_pairs_x]
-                    pred_right = u_bc_pred_phys[n_pairs_x:2*n_pairs_x]
-                    periodic_x_loss = torch.mean((pred_left - pred_right) ** 2)
-                else:
-                    periodic_x_loss = torch.tensor(0.0, device=self.device)
-                
-                # y 方向週期性：下邊界 (2*n_pairs_x:2*n_pairs_x+n_pairs_y) vs 上邊界 (2*n_pairs_x+n_pairs_y:)
-                if n_pairs_y > 0:
-                    start_y = 2 * n_pairs_x
-                    pred_bottom = u_bc_pred_phys[start_y:start_y+n_pairs_y]
-                    pred_top = u_bc_pred_phys[start_y+n_pairs_y:]
-                    periodic_y_loss = torch.mean((pred_bottom - pred_top) ** 2)
-                else:
-                    periodic_y_loss = torch.tensor(0.0, device=self.device)
-
-                if epoch == 0:
-                    logging.info(f"✅ 週期性邊界條件已啟用（成對計算，x方向{n_pairs_x}對，y方向{n_pairs_y}對）")
-            except Exception as e:
-                logging.warning(f"⚠️ 週期性損失計算失敗: {e}")
-                periodic_x_loss = torch.tensor(0.0, device=self.device)
-                periodic_y_loss = torch.tensor(0.0, device=self.device)
-        else:
-            periodic_x_loss = torch.tensor(0.0, device=self.device)
-            periodic_y_loss = torch.tensor(0.0, device=self.device)
-
-        # ==================== 3. 資料監督損失 ====================
-        # 組合感測器座標（使用模型實際輸入維度）
-        # 修正：基於存在的空間分量構建
-        spatial_sensors = [data_batch['x_sensors'], data_batch['y_sensors']]
-        if 'z_sensors' in data_batch:
-            spatial_sensors.append(data_batch['z_sensors'])
-        coords_sensors = torch.cat(spatial_sensors, dim=1)
-        
-        # ✅ 解包三元組
-        
-        # 🆕 Causal: 處理感測器時間
-        t_sensors = data_batch.get('t_sensors')
-        if t_sensors is not None:
-            t_sensors = t_sensors.to(self.device)
-            
-        final_sensor_input = None
-        if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1]:
-             final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1)
-        else:
-             final_sensor_input = coords_sensors
-
-        coords_sensors_physical, coords_sensors_norm, model_coords_sensors = prepare_model_coords(final_sensor_input, require_grad=False)
-        
-        u_sensors_pred_norm = self.model(model_coords_sensors)
-        
-        # ✅ 反標準化為物理量（直接與真實物理量比較）
-        var_order_sensors = self._infer_variable_order(
-            u_sensors_pred_norm.shape[1],
-            context='sensors',
-            data_batch=data_batch
-        )
-        u_sensors_pred_phys_raw = self.data_normalizer.denormalize_batch(u_sensors_pred_norm, var_order=var_order_sensors)
-        u_sensors_pred_phys: torch.Tensor = u_sensors_pred_phys_raw if isinstance(u_sensors_pred_phys_raw, torch.Tensor) else torch.tensor(u_sensors_pred_phys_raw, device=self.device)  # type: ignore
-        
-        # 提取真實資料（物理空間）
-        u_true = data_batch['u_sensors']
-        v_true = data_batch['v_sensors']
-        w_true = data_batch.get('w_sensors', None)  # 3D 通道流才有 w
-        p_true = data_batch['p_sensors']
-        
-        # ✅ 物理空間的 MSE（直接比對，不再標準化真實值）
-        u_loss = torch.mean((u_sensors_pred_phys[:, 0:1] - u_true)**2)
-        v_loss = torch.mean((u_sensors_pred_phys[:, 1:2] - v_true)**2)
-        
-        # ⭐ Phase 5: 根據資料與模型維度動態選擇損失計算
-        # 檢查 w 分量是否存在且有效（非空張量）
-        has_w_data = w_true is not None and w_true.numel() > 0
-        model_has_w = u_sensors_pred_phys.shape[1] >= 4  # 模型輸出至少 4 個分量
-        
-        if has_w_data and model_has_w:
-            # 完整 3D 模式：u, v, w, p
-            w_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - w_true)**2)
-            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true)**2)
-            velocity_loss = u_loss + v_loss + w_loss
-        elif model_has_w and not has_w_data:
-            # 混合模式：模型輸出 4D 但資料僅有 3D（忽略 w 預測）
-            w_loss = torch.tensor(0.0, device=u_loss.device)
-            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true)**2)  # ⚠️ 壓力在 index 3
-            velocity_loss = u_loss + v_loss
-        else:
-            # 標準 2D 模式：u, v, p
-            w_loss = torch.tensor(0.0, device=u_loss.device)
-            pressure_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - p_true)**2)  # 壓力在 index 2
-            velocity_loss = u_loss + v_loss
-        
-        data_loss = velocity_loss + pressure_loss
-        
-        # 統計原始 PDE 損失（未加權，便於日志與分析）
-        pde_loss = momentum_x_loss + momentum_y_loss + momentum_z_loss + continuity_loss
-        
-        # ==================== 4. 組合損失（含 課程學習 / GradNorm 動態權重）====================
-        loss_cfg = self.loss_cfg
-        
-        # 收集可供權重調整的損失項
-        loss_terms: Dict[str, torch.Tensor] = {
-            'data': data_loss,
-            'momentum_x': momentum_x_loss,
-            'momentum_y': momentum_y_loss,
-            'continuity': continuity_loss,
-        }
-
-        # 條件性添加邊界條件損失（互斥：壁面 vs 週期性）
-        if hasattr(self.physics, 'compute_periodic_loss'):
-            # Kolmogorov Flow 使用週期性邊界
-            loss_terms['periodic_x'] = periodic_x_loss
-            loss_terms['periodic_y'] = periodic_y_loss
-            loss_terms['periodicity'] = periodic_x_loss + periodic_y_loss  # 課程學習使用統一項
-        else:
-            # 通道流使用壁面邊界
-            loss_terms['wall_constraint'] = wall_loss
-
-        if is_vs_pinn:
-            loss_terms['momentum_z'] = momentum_z_loss
-        
-        # 🆕 ==================== 4A. 課程學習權重覆蓋 ====================
-        curriculum_weighter = self.weighters.get('curriculum') if hasattr(self, 'weighters') else None
-        curriculum_config = None
-        is_curriculum_transition = False
-        
-        if curriculum_weighter is not None:
-            # 獲取當前階段配置
-            curriculum_config = curriculum_weighter.get_stage_config(epoch)
-            is_curriculum_transition = curriculum_config.get('is_transition', False)
-            
-            # 應用課程學習權重（覆蓋配置文件的基礎權重）
-            curriculum_weights = curriculum_config.get('weights', {})
-            if curriculum_weights:
-                # 更新 loss_cfg（臨時覆蓋）
-                loss_cfg = self.loss_cfg.copy()
-                for key, value in curriculum_weights.items():
-                    # 映射課程學習的權重名稱到配置項
-                    if key == 'data':
-                        loss_cfg['data_weight'] = value
-                    elif key == 'boundary':
-                        loss_cfg['bc_weight'] = value
-                    elif key == 'periodicity':
-                        loss_cfg['periodicity_weight'] = value
-                    elif key == 'prior':
-                        loss_cfg['prior_weight'] = value
-                        # 🆕 同時更新 lowfi_prior.consistency_weight
-                        if 'lowfi_prior' in curriculum_config:
-                            prior_cfg = curriculum_config['lowfi_prior']
-                            if 'consistency_weight' in prior_cfg:
-                                # 更新 PriorLossManager 的權重
-                                if self.prior_loss_manager is not None:
-                                    self.prior_loss_manager.consistency_weight = prior_cfg['consistency_weight']
-                                    self.prior_loss_manager.low_fidelity_loss.consistency_weight = prior_cfg['consistency_weight']
-                    else:
-                        # 其他權重直接映射（如 momentum_x, momentum_y 等）
-                        weight_key = f'{key}_weight'
-                        if weight_key not in loss_cfg:
-                            # 嘗試通用映射（如 'continuity' -> 'continuity_weight'）
-                            loss_cfg[weight_key] = value
-                        else:
-                            loss_cfg[weight_key] = value
-                
-                # 階段切換日誌
-                if is_curriculum_transition:
-                    logging.info(f"🎯 課程階段切換：{curriculum_config['stage_name']}")
-                    logging.info(f"   損失權重更新: {curriculum_weights}")
-                    if 'lowfi_prior' in curriculum_config:
-                        prior_weight = curriculum_config['lowfi_prior'].get('consistency_weight', 'N/A')
-                        logging.info(f"   RANS 先驗權重: {prior_weight}")
-        
-        gradnorm_weighter = self.weighters.get('gradnorm') if hasattr(self, 'weighters') else None
-        gradnorm_weights: Optional[Dict[str, float]] = None
-        gradnorm_ratio: Dict[str, float] = {}
-        if gradnorm_weighter is not None:
-            available_losses = {
-                name: loss_terms[name]
-                for name in gradnorm_weighter.loss_names
-                if name in loss_terms
-            }
-            if len(available_losses) >= 2:
-                gradnorm_weights = gradnorm_weighter.update_weights(available_losses)
-                initial_values = getattr(gradnorm_weighter, 'initial_weight_values', {})
-                eps = float(getattr(gradnorm_weighter, 'eps', 1e-12))
-                for name, weight_val in gradnorm_weights.items():
-                    base = float(initial_values.get(name, 1.0))
-                    if abs(base) < eps:
-                        base = 1.0
-                    gradnorm_ratio[name] = float(weight_val) / base
-                if gradnorm_weighter.step_count % gradnorm_weighter.update_frequency == 0:
-                    logging.debug(
-                        "GradNorm weights @ step %d: %s",
-                        gradnorm_weighter.step_count,
-                        {k: round(v, 4) for k, v in gradnorm_weights.items()}
-                    )
-            else:
-                logging.debug("GradNorm requires at least two loss terms; skipping update.")
-        
-        def scaled_weight(name: str, base: float) -> float:
-            return float(base) * gradnorm_ratio.get(name, 1.0)
-
-        # 基礎權重（可從配置讀取或使用預設）
-        base_data_weight = loss_cfg.get('data_weight', 100.0)
-        base_pde_weight = loss_cfg.get('pde_weight', 1.0)
-        base_bc_weight = loss_cfg.get('bc_weight', 10.0)
-        
-        # ⭐ 支援細粒度權重配置（優先級：細項 > 統一 > 預設）
-        # 優先讀取細項權重，若不存在則回退到統一權重
-        w_data = scaled_weight('data', base_data_weight)
-        w_momentum_x = scaled_weight('momentum_x', loss_cfg.get('momentum_x_weight', base_pde_weight))
-        w_momentum_y = scaled_weight('momentum_y', loss_cfg.get('momentum_y_weight', base_pde_weight))
-        w_momentum_z = scaled_weight('momentum_z', loss_cfg.get('momentum_z_weight', base_pde_weight)) if is_vs_pinn else 0.0
-        
-        # 🆕 Div_loss 權重 (優先讀取 div_weight，相容 continuity_weight)
-        w_div = scaled_weight('divergence', loss_cfg.get('div_weight', loss_cfg.get('continuity_weight', base_pde_weight)))
-
-        # 邊界條件權重（互斥：壁面 vs 週期性）
-        if hasattr(self.physics, 'compute_periodic_loss'):
-            w_periodic_x = scaled_weight('periodic_x', loss_cfg.get('periodic_x_weight', base_bc_weight))
-            w_periodic_y = scaled_weight('periodic_y', loss_cfg.get('periodic_y_weight', base_bc_weight))
-            w_bc = 0.0  # 週期性系統不使用壁面損失
-        else:
-            w_periodic_x = 0.0
-            w_periodic_y = 0.0
-            w_bc = scaled_weight('wall_constraint', loss_cfg.get('wall_constraint_weight', base_bc_weight))
-
-        # 📊 診斷日誌：在訓練開始時打印實際應用的權重
-        if epoch == 0 and not hasattr(self, '_weights_logged'):
-            logging.info("=" * 60)
-            logging.info("📊 Loss 權重配置摘要")
-            logging.info("=" * 60)
-            logging.info(f"  Data Loss:        {w_data:.2e}")
-            logging.info(f"  Momentum X:       {w_momentum_x:.2e}")
-            logging.info(f"  Momentum Y:       {w_momentum_y:.2e}")
-            if is_vs_pinn:
-                logging.info(f"  Momentum Z:       {w_momentum_z:.2e}")
-            logging.info(f"  Divergence:       {w_div:.2e}")
-            if hasattr(self.physics, 'compute_periodic_loss'):
-                logging.info(f"  Periodic X:       {w_periodic_x:.2e}")
-                logging.info(f"  Periodic Y:       {w_periodic_y:.2e}")
-            else:
-                logging.info(f"  Wall Constraint:  {w_bc:.2e}")
-            logging.info("=" * 60)
-            self._weights_logged = True
-        
-        # ==================== RANS 損失已移除（2025-10-14）====================
-        # RANS 權重預熱功能已停用，相關損失項已從訓練循環中移除
-
-        # 🆕 分離動量損失與散度損失
-        weighted_momentum_loss = (
-            w_momentum_x * momentum_x_loss +
-            w_momentum_y * momentum_y_loss +
-            w_momentum_z * momentum_z_loss
-        )
-        weighted_div_loss = w_div * continuity_loss  # continuity 即為 divergence
-        
-        weighted_data_loss = w_data * data_loss
-
-        # 邊界條件損失（互斥）
-        if hasattr(self.physics, 'compute_periodic_loss'):
-            weighted_bc_loss = w_periodic_x * periodic_x_loss + w_periodic_y * periodic_y_loss
-        else:
-            weighted_bc_loss = w_bc * wall_loss
-        
-        # ⭐ Phase 6C: 均值約束損失（若啟用）
-        mean_constraint_loss = torch.tensor(0.0, device=data_loss.device)
-        mean_constraint_cfg = loss_cfg.get('mean_constraint', {})
-        if mean_constraint_cfg.get('enabled', False) and 'mean_constraint' in self.losses:
-            # ✅ 使用已反標準化的 PDE 點預測（更全域的統計量）
-            # u_pred_pde_physical 已在 Line 515 反標準化完成
-            
-            target_means = mean_constraint_cfg.get('target_means', {})
-            field_indices = {'u': 0, 'v': 1, 'w': 2}  # 不約束壓力場
-            
-            mean_constraint_loss_fn = self.losses['mean_constraint']
-            mean_constraint_loss = mean_constraint_loss_fn(
-                predictions=u_pred_pde_physical,  # ✅ 使用物理空間的預測
-                target_means=target_means,         # 物理空間的目標均值
-                field_indices=field_indices
-            )
-            
-            w_mean_constraint = mean_constraint_cfg.get('weight', 10.0)
-            mean_constraint_loss = w_mean_constraint * mean_constraint_loss
-            
-            # 記錄（低頻率）
-            if epoch == 0 or (epoch > 0 and epoch % 100 == 0):
-                logging.info(f"📊 均值約束損失 @ Epoch {epoch}: {mean_constraint_loss.item():.6f}")
-                # 記錄預測均值以便診斷
-                with torch.no_grad():
-                    for field_name, idx in field_indices.items():
-                        if idx < u_pred_pde_physical.shape[-1]:
-                            pred_mean = u_pred_pde_physical[:, idx].mean().item()
-                            target_mean = target_means.get(field_name, 0.0)
-                            logging.info(f"   {field_name}: pred={pred_mean:.4f}, target={target_mean:.4f}")
-        
-        # 🆕 ==================== 4. 低保真先驗一致性損失 ====================
-        prior_consistency_loss = torch.tensor(0.0, device=data_loss.device)
-        prior_loss_u = torch.tensor(0.0, device=data_loss.device)
-        prior_loss_v = torch.tensor(0.0, device=data_loss.device)
-        prior_loss_p = torch.tensor(0.0, device=data_loss.device)
-        
-        if self.prior_loss_manager is not None and data_batch.get('has_prior', False):
-            # 提取低保真先驗資料
-            lowfi_prior = data_batch.get('lowfi_prior', {})
-            
-            # PDE 點的 RANS 先驗（已在 train.py 中插值到 PDE 點位置）
-            if 'u_pde' in lowfi_prior and 'v_pde' in lowfi_prior and 'p_pde' in lowfi_prior:
-                # 組合低保真資料 [N, 3] (u, v, p)
-                lowfi_data = torch.cat([
-                    lowfi_prior['u_pde'],
-                    lowfi_prior['v_pde'], 
-                    lowfi_prior['p_pde']
-                ], dim=1)
-                
-                # 提取 PINN 預測的對應變數（物理空間，已反標準化）
-                # u_pred_pde_physical 形狀: [N, n_vars]，通常 n_vars=3 (u,v,p) 或 4 (u,v,w,p)
-                if u_pred_pde_physical.shape[1] == 3:
-                    high_fi_pred = u_pred_pde_physical  # [u, v, p]
-                elif u_pred_pde_physical.shape[1] == 4:
-                    # 忽略 w 分量（2D 問題或 RANS 無 w）
-                    high_fi_pred = torch.cat([
-                        u_pred_pde_physical[:, 0:1],  # u
-                        u_pred_pde_physical[:, 1:2],  # v
-                        u_pred_pde_physical[:, 3:4]   # p
-                    ], dim=1)
-                else:
-                    raise ValueError(f"不支援的模型輸出維度: {u_pred_pde_physical.shape[1]}")
-                
-                # 計算先驗一致性損失
-                prior_losses = self.prior_loss_manager.low_fidelity_loss(
-                    high_fidelity_pred=high_fi_pred,
-                    low_fidelity_data=lowfi_data,
-                    coords=coords_pde_physical,
-                    variable_names=['u', 'v', 'p']
-                )
-                
-                # 提取各變數損失（用於日誌記錄）
-                prior_loss_u = prior_losses.get('prior_consistency_u', prior_loss_u)
-                prior_loss_v = prior_losses.get('prior_consistency_v', prior_loss_v)
-                prior_loss_p = prior_losses.get('prior_consistency_p', prior_loss_p)
-                prior_consistency_loss = prior_losses['prior_consistency_total']
-                
-                # 記錄（低頻率）
-                if epoch == 0 or (epoch > 0 and epoch % 100 == 0):
-                    logging.info(f"📊 先驗一致性損失 @ Epoch {epoch}: {prior_consistency_loss.item():.6f}")
-                    logging.info(f"   - u: {prior_loss_u.item():.6f}")
-                    logging.info(f"   - v: {prior_loss_v.item():.6f}")
-                    logging.info(f"   - p: {prior_loss_p.item():.6f}")
-        
-        # 總損失
-        total_loss = (
-            weighted_data_loss +
-            weighted_momentum_loss +  # 僅動量
-            weighted_div_loss +       # 🆕 獨立的散度損失
-            weighted_bc_loss +        # 統一邊界條件損失
-            mean_constraint_loss +
-            prior_consistency_loss    # 🆕 低保真先驗一致性損失
-        )
-        
-        # ==================== 5. 反向傳播與優化 ====================
-        # ⭐ P0.2: AMP 混合精度策略
-        # - Forward Pass: 已在上面完成（FP32）
-        # - Backward Pass: 使用 GradScaler（FP16 梯度累積）
-        
-        # 縮放損失並反向傳播
-        scaled_loss = self.scaler.scale(total_loss)
-        scaled_loss.backward()
-        
-        # 梯度裁剪（需先 unscale）
-        if self.train_cfg.get('gradient_clip', 0.0) > 0:
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(),
-                self.train_cfg['gradient_clip']
-            )
-        
-        # L-BFGS 需要 closure 函數，其他優化器直接 step()
-        if isinstance(self.optimizer, torch.optim.LBFGS):
-            # L-BFGS 不支援 AMP（已在 _setup_amp 中禁用）
-            def closure():
-                return total_loss
-            self.optimizer.step(closure)  # type: ignore
-        else:
-            # Adam: 使用 scaler.step() 自動處理 unscale + update
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        
-        # 📉 Steps-based 調度器更新（每步調用）
-        if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'current_step'):
-            # Steps-based scheduler (如 StepsBasedWarmupScheduler)
-            self.lr_scheduler.step()
-        
-        # ==================== 6. 返回結果 ====================
-        result = {
-            'total_loss': total_loss.item(),
-            'data_loss': data_loss.item(),
-            'pde_loss': (weighted_momentum_loss + weighted_div_loss).item(), # 保持兼容性，pde_loss 為動量+散度
-            'div_loss': continuity_loss.item(), # 🆕 明確記錄 Div loss
-            'weighted_data_loss': weighted_data_loss.item(),
-            'weighted_pde_loss': weighted_momentum_loss.item(), # 注意：這裡改變了語義，僅波動量
-            'weighted_div_loss': weighted_div_loss.item(), # 🆕
-            'weighted_bc_loss': weighted_bc_loss.item(),
-            'momentum_x_loss': momentum_x_loss.item(),
-            'momentum_y_loss': momentum_y_loss.item(),
-            'momentum_z_loss': momentum_z_loss.item(),
-            'continuity_loss': continuity_loss.item(),
-            'u_loss': u_loss.item(),
-            'v_loss': v_loss.item(),
-            'w_loss': w_loss.item(),
-            'pressure_loss': pressure_loss.item(),
-        }
-
-        # 添加邊界條件損失細項（條件性）
-        if hasattr(self.physics, 'compute_periodic_loss'):
-            result['periodic_x_loss'] = periodic_x_loss.item()
-            result['periodic_y_loss'] = periodic_y_loss.item()
-        else:
-            result['wall_loss'] = wall_loss.item()
-
-        # 🆕 添加先驗一致性損失細項（若啟用）
-        if self.prior_loss_manager is not None:
-            result['prior_consistency_loss'] = prior_consistency_loss.item()
-            result['prior_loss_u'] = prior_loss_u.item()
-            result['prior_loss_v'] = prior_loss_v.item()
-            result['prior_loss_p'] = prior_loss_p.item()
-
-        # 🆕 添加課程學習配置信息（用於學習率調整）
-        if curriculum_config is not None:
-            result['_curriculum_transition'] = 1.0 if is_curriculum_transition else 0.0
-            result['_curriculum_stage'] = curriculum_config.get('stage_name', 'unknown')
-            # 只有當階段明確指定 lr 時才添加到 result（觸發重設）
-            if 'lr' in curriculum_config:
-                result['_curriculum_lr'] = curriculum_config['lr']
-
-        if gradnorm_weights is not None:
-            result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
-
-            # 構建應用權重字典（包含週期性損失）
-            applied_weights_dict = {
-                'data': w_data,
-                'momentum_x': w_momentum_x,
-                'momentum_y': w_momentum_y,
-                'momentum_z': w_momentum_z,
-                'divergence': w_div, # 🆕
-            }
-            if hasattr(self.physics, 'compute_periodic_loss'):
-                applied_weights_dict['periodic_x'] = w_periodic_x
-                applied_weights_dict['periodic_y'] = w_periodic_y
-            else:
-                applied_weights_dict['wall_constraint'] = w_bc
-
-            result['applied_weights'] = applied_weights_dict
-        
-        return result
+def step(
+    self,
+    data_batch: Dict[str, torch.Tensor],
+    epoch: int
+) -> Dict[str, Any]:
+    """
+    執行單步訓練（使用 LossManager 重構版）
     
+    核心改進：
+    - 所有損失計算委派給 LossManager
+    - step() 只負責：資料預處理、模型forward、Loss組合、反向傳播
+    - 大幅減少代碼重複與嵌套
+    
+    Args:
+        data_batch: 訓練資料批次
+        epoch: 當前 epoch
+    
+    Returns:
+        包含損失和指標的字典
+    """
+    self.optimizer.zero_grad()
+    
+    # ==================== 0. 前置準備 ====================
+    is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
+    
+    # 輔助函數：準備模型坐標（標準化 + 縮放）
+    def prepare_model_coords(
+        coord_tensor: torch.Tensor,
+        require_grad: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """返回 (coords_physical, coords_norm, model_coords)"""
+        coords_physical = coord_tensor
+        if require_grad and not coords_physical.requires_grad:
+            coords_physical.requires_grad_(True)
+        
+        # 輸入標準化
+        if self.input_normalizer is not None:
+            coords_norm = self.input_normalizer.transform(coords_physical)
+        else:
+            coords_norm = coords_physical
+        
+        # VS-PINN 縮放
+        if is_vs_pinn and hasattr(self.physics, 'scale_coordinates'):
+            if coords_norm.shape[1] > 3:  # 包含時間維度
+                coords_spatial = coords_norm[:, :3]
+                coords_time = coords_norm[:, 3:]
+                scaled_spatial = self.physics.scale_coordinates(coords_spatial)
+                model_coords = torch.cat([scaled_spatial, coords_time], dim=1)
+            else:
+                model_coords = self.physics.scale_coordinates(coords_norm)
+        else:
+            model_coords = coords_norm
+        
+        return coords_physical, coords_norm, model_coords
+    
+    # ==================== 1. PDE 點前向傳播 ====================
+    # 準備 PDE 點坐標
+    x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
+    z_pde = data_batch.get('z_pde')
+    t_pde = data_batch.get('t_pde')
+    
+    if t_pde is not None:
+        t_pde = t_pde.to(self.device).requires_grad_(True)
+    
+    # 構建輸入張量
+    spatial_components = [x_pde, y_pde]
+    if z_pde is not None:
+        spatial_components.append(z_pde)
+    coords_spatial = torch.cat(spatial_components, dim=1)
+    
+    if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
+        coords_full = torch.cat([coords_spatial, t_pde], dim=1)
+    else:
+        coords_full = coords_spatial
+    
+    # 準備模型輸入
+    coords_full_physical, coords_full_norm, model_coords_pde = prepare_model_coords(coords_full, require_grad=True)
+    coords_pde_physical = coords_full_physical
+    
+    # 模型預測 + 反標準化
+    u_pred_norm = self.model(model_coords_pde)
+    var_order = self._infer_variable_order(u_pred_norm.shape[1], context='pde')
+    u_pred_pde_physical_raw = self.data_normalizer.denormalize_batch(u_pred_norm, var_order=var_order)
+    u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)
+    
+    # ==================== 2. 邊界條件點前向傳播 ====================
+    spatial_bc = [data_batch['x_bc'], data_batch['y_bc']]
+    if 'z_bc' in data_batch:
+        spatial_bc.append(data_batch['z_bc'])
+    coords_bc = torch.cat(spatial_bc, dim=1)
+    
+    t_bc = data_batch.get('t_bc')
+    if t_bc is not None:
+        t_bc = t_bc.to(self.device)
+    
+    final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
+    coords_bc_physical, coords_bc_norm, model_coords_bc = prepare_model_coords(final_bc_input, require_grad=False)
+    
+    u_bc_pred_norm = self.model(model_coords_bc)
+    var_order_bc = self._infer_variable_order(u_bc_pred_norm.shape[1], context='bc')
+    u_bc_pred_phys_raw = self.data_normalizer.denormalize_batch(u_bc_pred_norm, var_order=var_order_bc)
+    u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)
+    
+    # ==================== 3. 感測器點前向傳播 ====================
+    spatial_sensors = [data_batch['x_sensors'], data_batch['y_sensors']]
+    if 'z_sensors' in data_batch:
+        spatial_sensors.append(data_batch['z_sensors'])
+    coords_sensors = torch.cat(spatial_sensors, dim=1)
+    
+    t_sensors = data_batch.get('t_sensors')
+    if t_sensors is not None:
+        t_sensors = t_sensors.to(self.device)
+    
+    final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
+    coords_sensors_physical, coords_sensors_norm, model_coords_sensors = prepare_model_coords(final_sensor_input, require_grad=False)
+    
+    u_sensors_pred_norm = self.model(model_coords_sensors)
+    var_order_sensors = self._infer_variable_order(u_sensors_pred_norm.shape[1], context='sensors', data_batch=data_batch)
+    u_sensors_pred_phys_raw = self.data_normalizer.denormalize_batch(u_sensors_pred_norm, var_order=var_order_sensors)
+    u_sensors_pred_phys: torch.Tensor = u_sensors_pred_phys_raw if isinstance(u_sensors_pred_phys_raw, torch.Tensor) else torch.tensor(u_sensors_pred_phys_raw, device=self.device)
+    
+    # ==================== 4. 使用 LossManager 計算所有損失 ====================
+    # 4.1 PDE 損失
+    pde_losses = self.loss_manager.compute_pde_loss(
+        coords_pde_physical=coords_pde_physical,
+        model_coords_pde=model_coords_pde,
+        u_pred_pde_physical=u_pred_pde_physical,
+        data_batch=data_batch,
+        epoch=epoch,
+        is_vs_pinn=is_vs_pinn
+    )
+    
+    # 4.2 邊界條件損失
+    bc_losses = self.loss_manager.compute_bc_loss(
+        u_bc_pred_phys=u_bc_pred_phys,
+        data_batch=data_batch,
+        epoch=epoch
+    )
+    
+    # 4.3 資料監督損失
+    data_losses = self.loss_manager.compute_data_loss(
+        u_sensors_pred_phys=u_sensors_pred_phys,
+        data_batch=data_batch
+    )
+    
+    # 4.4 低保真先驗損失
+    prior_losses = self.loss_manager.compute_lowfi_prior_loss(
+        u_pred_pde_physical=u_pred_pde_physical,
+        coords_pde_physical=coords_pde_physical,
+        data_batch=data_batch,
+        epoch=epoch
+    )
+    
+    # 4.5 均值約束損失
+    mean_constraint_loss = self.loss_manager.compute_mean_constraint_loss(
+        u_pred_pde_physical=u_pred_pde_physical,
+        epoch=epoch
+    )
+    
+    # ==================== 5. 動態權重調整與損失組合 ====================
+    # 5.1 課程學習權重
+    curriculum_config, loss_cfg = self.loss_manager.apply_curriculum_weights(epoch)
+    
+    # 5.2 構建損失項字典（供 GradNorm 使用）
+    loss_terms = {
+        'data': data_losses['data_loss'],
+        'momentum_x': pde_losses['momentum_x_loss'],
+        'momentum_y': pde_losses['momentum_y_loss'],
+        'continuity': pde_losses['continuity_loss'],
+    }
+    
+    if hasattr(self.physics, 'compute_periodic_loss'):
+        loss_terms['periodic_x'] = bc_losses['periodic_x_loss']
+        loss_terms['periodic_y'] = bc_losses['periodic_y_loss']
+    else:
+        loss_terms['wall_constraint'] = bc_losses['wall_loss']
+    
+    if is_vs_pinn:
+        loss_terms['momentum_z'] = pde_losses['momentum_z_loss']
+    
+    # 5.3 GradNorm 動態權重
+    gradnorm_weights, gradnorm_ratio = self.loss_manager.apply_gradnorm_weights(loss_terms)
+    
+    # 5.4 組合所有損失
+    all_losses = {**pde_losses, **bc_losses, **data_losses, **prior_losses}
+    all_losses['mean_constraint_loss'] = mean_constraint_loss
+    
+    total_loss, result = self.loss_manager.combine_losses(
+        loss_dict=all_losses,
+        loss_cfg=loss_cfg,
+        gradnorm_ratio=gradnorm_ratio,
+        is_vs_pinn=is_vs_pinn,
+        epoch=epoch
+    )
+    
+    # ==================== 6. 反向傳播與優化 ====================
+    # AMP 混合精度
+    scaled_loss = self.scaler.scale(total_loss)
+    scaled_loss.backward()
+    
+    # 梯度裁剪
+    if self.train_cfg.get('gradient_clip', 0.0) > 0:
+        self.scaler.unscale_(self.optimizer)
+        torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(),
+            self.train_cfg['gradient_clip']
+        )
+    
+    # 優化器步進
+    if isinstance(self.optimizer, torch.optim.LBFGS):
+        def closure():
+            return total_loss
+        self.optimizer.step(closure)
+    else:
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+    
+    # 學習率調度器更新
+    if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'current_step'):
+        self.lr_scheduler.step()
+    
+    # ==================== 7. 附加課程學習與 GradNorm 信息 ====================
+    if curriculum_config is not None:
+        is_curriculum_transition = curriculum_config.get('is_transition', False)
+        result['_curriculum_transition'] = 1.0 if is_curriculum_transition else 0.0
+        result['_curriculum_stage'] = curriculum_config.get('stage_name', 'unknown')
+        if 'lr' in curriculum_config:
+            result['_curriculum_lr'] = curriculum_config['lr']
+    
+    if gradnorm_weights is not None:
+        result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
+    
+    return result
+
     def validate(self) -> Optional[Dict[str, float]]:
         """
         計算驗證指標（MSE 與 relative L2）
