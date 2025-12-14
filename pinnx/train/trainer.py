@@ -1280,6 +1280,199 @@ class Trainer:
     # 檢查點管理
     # ========================================================================
     
+    def _parse_domain_from_config(self) -> Dict[str, float]:
+        """
+        從多種配置格式中解析 domain 參數（Phase 4-1 Helper）
+        
+        優先順序:
+        1. physics.domain（x_range, y_range, z_range 格式）
+        2. data.jhtdb_config.domain（x, y, z 格式）
+        3. 頂層 domain（x_range/x_min 格式）
+        4. 預設值（通道流 Re_tau=1000 標準域）
+        
+        Returns:
+            domain: {'x_min', 'x_max', 'y_min', 'y_max', 'z_min', 'z_max'}
+        """
+        domain = None
+        
+        # 優先順序 1: physics.domain
+        physics_config = self.config.get('physics', {})
+        if 'domain' in physics_config:
+            domain_data = physics_config['domain']
+            if 'x_range' in domain_data:
+                # 格式: x_range: [min, max]
+                domain = {
+                    'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
+                    'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
+                    'z_min': domain_data.get('z_range', [0, 1])[0],
+                    'z_max': domain_data.get('z_range', [0, 1])[1],
+                }
+        
+        # 優先順序 2: data.jhtdb_config.domain
+        if domain is None:
+            data_config = self.config.get('data', {})
+            jhtdb_config = data_config.get('jhtdb_config', {})
+            if 'domain' in jhtdb_config:
+                domain_data = jhtdb_config['domain']
+                # 格式: x: [min, max]
+                domain = {
+                    'x_min': domain_data.get('x', [0, 1])[0],
+                    'x_max': domain_data.get('x', [0, 1])[1],
+                    'y_min': domain_data.get('y', [-1, 1])[0],
+                    'y_max': domain_data.get('y', [-1, 1])[1],
+                    'z_min': domain_data.get('z', [0, 1])[0] if 'z' in domain_data else 0.0,
+                    'z_max': domain_data.get('z', [0, 1])[1] if 'z' in domain_data else 1.0,
+                }
+        
+        # 優先順序 3: 頂層 domain
+        if domain is None:
+            domain_data = self.config.get('domain', None)
+            if domain_data is not None:
+                if 'x_range' in domain_data:
+                    domain = {
+                        'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
+                        'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
+                        'z_min': domain_data.get('z_range', [0, 1])[0],
+                        'z_max': domain_data.get('z_range', [0, 1])[1],
+                    }
+                elif 'x_min' in domain_data:
+                    domain = domain_data
+        
+        # 預設值（通道流標準域）
+        if domain is None:
+            logging.warning("配置中未找到 domain 資訊，使用預設值（通道流 Re_tau=1000）")
+            domain = {
+                'x_min': 0.0, 'x_max': 25.13,
+                'y_min': -1.0, 'y_max': 1.0,
+                'z_min': 0.0, 'z_max': 9.42
+            }
+        
+        return domain
+    
+    def _generate_validation_coords(self, domain: Dict[str, float]) -> Optional[torch.Tensor]:
+        """
+        根據 domain 和維度生成驗證網格座標（Phase 4-1 Helper）
+        
+        Args:
+            domain: 包含 x_min, x_max, y_min, y_max, z_min, z_max 的字典
+        
+        Returns:
+            validation_coords: (N, dim) 的 torch.Tensor，或 None（未知維度）
+        """
+        if self.model_input_dim == 2:
+            x = torch.linspace(domain['x_min'], domain['x_max'], 32, device=self.device)
+            y = torch.linspace(domain['y_min'], domain['y_max'], 32, device=self.device)
+            X, Y = torch.meshgrid(x, y, indexing='ij')
+            validation_coords = torch.stack([X.flatten(), Y.flatten()], dim=1)
+        elif self.model_input_dim == 3:
+            x = torch.linspace(domain['x_min'], domain['x_max'], 10, device=self.device)
+            y = torch.linspace(domain['y_min'], domain['y_max'], 10, device=self.device)
+            z = torch.linspace(domain['z_min'], domain['z_max'], 10, device=self.device)
+            X, Y, Z = torch.meshgrid(x, y, z, indexing='ij')
+            validation_coords = torch.stack([X.flatten(), Y.flatten(), Z.flatten()], dim=1)
+        else:
+            logging.warning(f"未知的模型輸入維度: {self.model_input_dim}，跳過物理驗證")
+            validation_coords = None
+        
+        return validation_coords
+    
+    def _run_physics_validation_before_save(self, validation_coords: Optional[torch.Tensor]) -> Dict[str, Any]:
+        """
+        執行物理驗證，處理 strict mode 和 trivial solution（Phase 4-1 Helper）
+        
+        Args:
+            validation_coords: 驗證座標（N, dim），或 None
+        
+        Returns:
+            physics_metrics: 物理驗證指標字典
+        
+        Side Effects:
+            - 可能提前返回（early return via exception），當 strict_mode=True 且檢測到 trivial solution
+        """
+        from pinnx.train.checkpointing import validate_physics_before_save
+        
+        physics_metrics = {}
+        
+        if validation_coords is not None:
+            validation_passed, physics_metrics = validate_physics_before_save(
+                self.model,
+                validation_coords,
+                self.config,
+                self.device
+            )
+            
+            # 物理診斷完成（記錄但不拒絕保存）
+            # 注意：validate_physics_before_save 已修改為診斷模式
+            # 僅在 strict_mode=True 且檢測到 trivial solution 時才返回 False
+            if not validation_passed:
+                # 檢查是否是因為 trivial solution 被拒絕（strict mode）
+                if physics_metrics.get('trivial_solution', {}).get('is_trivial', False):
+                    strict_mode = self.config.get('physics_validation', {}).get('strict_mode', False)
+                    if strict_mode:
+                        logging.error("❌ Strict Mode: 檢測到 Trivial Solution，拒絕保存")
+                        # 使用 exception 模擬 early return（避免直接 return，讓調用者處理）
+                        raise RuntimeError("Physics validation failed: Trivial solution detected in strict mode")
+                
+                # 其他情況：物理約束未滿足（訓練初期正常）
+                logging.info("ℹ️  物理診斷完成，指標已記錄至檢查點元數據")
+                # 繼續保存，讓使用者根據診斷資訊判斷
+        
+        return physics_metrics
+    
+    def _build_checkpoint_data(
+        self, 
+        epoch: int, 
+        metrics: Optional[Dict[str, float]], 
+        physics_metrics: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        打包所有需要保存的狀態到檢查點字典（Phase 4-1 Helper）
+        
+        Args:
+            epoch: 當前 epoch
+            metrics: 評估指標（可選）
+            physics_metrics: 物理驗證指標
+        
+        Returns:
+            checkpoint_data: 包含所有狀態的字典
+        """
+        checkpoint_data = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'history': self.history,
+            'config': self.config,
+        }
+        
+        # 保存 physics 的 state_dict（VS-PINN 縮放參數等）
+        if self.physics is not None and hasattr(self.physics, 'state_dict'):
+            checkpoint_data['physics_state_dict'] = self.physics.state_dict()
+            logging.debug(f"💾 Physics state saved: {list(self.physics.state_dict().keys())}")
+        
+        # 保存標準化 metadata
+        checkpoint_data['normalization'] = self.data_normalizer.get_metadata()
+        logging.debug(f"💾 Normalization metadata saved: type={self.data_normalizer.norm_type}")
+        
+        # 保存 GradScaler 狀態（AMP）
+        if self.use_amp and hasattr(self, 'scaler'):
+            checkpoint_data['scaler_state_dict'] = self.scaler.state_dict()
+            logging.debug(f"💾 GradScaler state saved: scale={self.scaler.get_scale():.0f}")
+        
+        # 保存物理驗證指標
+        if physics_metrics:
+            checkpoint_data['physics_metrics'] = physics_metrics
+            logging.debug(f"💾 Physics metrics saved: validation_passed={physics_metrics.get('validation_passed', False)}")
+        
+        # 保存評估指標
+        if metrics:
+            checkpoint_data['metrics'] = metrics
+        
+        # 保存 learning rate scheduler
+        if self.lr_scheduler:
+            checkpoint_data['lr_scheduler_state_dict'] = self.lr_scheduler.state_dict()
+        
+        return checkpoint_data
+    
     def save_checkpoint(
         self,
         epoch: int,
