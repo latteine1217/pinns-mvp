@@ -273,6 +273,55 @@ class Trainer:
         
         return [f'var_{i}' for i in range(out_dim)]
     
+    def _prepare_model_coords(
+        self,
+        coord_tensor: torch.Tensor,
+        require_grad: bool = False,
+        is_vs_pinn: Optional[bool] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        準備模型輸入坐標（標準化 + 縮放）
+        
+        Args:
+            coord_tensor: 物理坐標 [N, spatial_dim + time_dim]
+            require_grad: 是否啟用梯度追蹤
+            is_vs_pinn: 是否套用 VS-PINN 縮放（None 則自動偵測）
+        
+        Returns:
+            (coords_physical, coords_norm, model_coords):
+            - coords_physical: 物理坐標（用於 PDE 自動微分）
+            - coords_norm: 標準化坐標（若有 InputNormalizer）
+            - model_coords: 最終模型輸入（可能包含 VS-PINN 縮放）
+        """
+        # 1. 物理坐標（可選梯度追蹤）
+        coords_physical = coord_tensor
+        if require_grad and not coords_physical.requires_grad:
+            coords_physical.requires_grad_(True)
+        
+        # 2. 輸入標準化（可選）
+        if self.input_normalizer is not None:
+            coords_norm = self.input_normalizer.transform(coords_physical)
+        else:
+            coords_norm = coords_physical
+        
+        # 3. VS-PINN 坐標縮放（可選）
+        if is_vs_pinn is None:
+            is_vs_pinn = hasattr(self.physics, 'scale_coordinates')
+        
+        if is_vs_pinn and hasattr(self.physics, 'scale_coordinates'):
+            # 時間維度需單獨處理（VS-PINN 僅縮放空間坐標）
+            if coords_norm.shape[1] > 3:  # 包含時間維度
+                coords_spatial = coords_norm[:, :3]
+                coords_time = coords_norm[:, 3:]
+                scaled_spatial = self.physics.scale_coordinates(coords_spatial)
+                model_coords = torch.cat([scaled_spatial, coords_time], dim=1)
+            else:
+                model_coords = self.physics.scale_coordinates(coords_norm)
+        else:
+            model_coords = coords_norm
+        
+        return coords_physical, coords_norm, model_coords
+    
     def _setup_optimizer(self):
         """配置優化器"""
         # 處理 optimizer 配置為字串或字典的情況
@@ -633,36 +682,6 @@ def step(
     # ==================== 0. 前置準備 ====================
     is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
     
-    # 輔助函數：準備模型坐標（標準化 + 縮放）
-    def prepare_model_coords(
-        coord_tensor: torch.Tensor,
-        require_grad: bool = False
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """返回 (coords_physical, coords_norm, model_coords)"""
-        coords_physical = coord_tensor
-        if require_grad and not coords_physical.requires_grad:
-            coords_physical.requires_grad_(True)
-        
-        # 輸入標準化
-        if self.input_normalizer is not None:
-            coords_norm = self.input_normalizer.transform(coords_physical)
-        else:
-            coords_norm = coords_physical
-        
-        # VS-PINN 縮放
-        if is_vs_pinn and hasattr(self.physics, 'scale_coordinates'):
-            if coords_norm.shape[1] > 3:  # 包含時間維度
-                coords_spatial = coords_norm[:, :3]
-                coords_time = coords_norm[:, 3:]
-                scaled_spatial = self.physics.scale_coordinates(coords_spatial)
-                model_coords = torch.cat([scaled_spatial, coords_time], dim=1)
-            else:
-                model_coords = self.physics.scale_coordinates(coords_norm)
-        else:
-            model_coords = coords_norm
-        
-        return coords_physical, coords_norm, model_coords
-    
     # ==================== 1. PDE 點前向傳播 ====================
     # 準備 PDE 點坐標
     x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
@@ -683,8 +702,10 @@ def step(
     else:
         coords_full = coords_spatial
     
-    # 準備模型輸入
-    coords_full_physical, coords_full_norm, model_coords_pde = prepare_model_coords(coords_full, require_grad=True)
+    # 準備模型輸入（使用實例方法）
+    coords_full_physical, coords_full_norm, model_coords_pde = self._prepare_model_coords(
+        coords_full, require_grad=True, is_vs_pinn=is_vs_pinn
+    )
     coords_pde_physical = coords_full_physical
     
     # 模型預測 + 反標準化
@@ -704,7 +725,9 @@ def step(
         t_bc = t_bc.to(self.device)
     
     final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
-    coords_bc_physical, coords_bc_norm, model_coords_bc = prepare_model_coords(final_bc_input, require_grad=False)
+    coords_bc_physical, coords_bc_norm, model_coords_bc = self._prepare_model_coords(
+        final_bc_input, require_grad=False, is_vs_pinn=is_vs_pinn
+    )
     
     u_bc_pred_norm = self.model(model_coords_bc)
     var_order_bc = self._infer_variable_order(u_bc_pred_norm.shape[1], context='bc')
@@ -722,7 +745,9 @@ def step(
         t_sensors = t_sensors.to(self.device)
     
     final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
-    coords_sensors_physical, coords_sensors_norm, model_coords_sensors = prepare_model_coords(final_sensor_input, require_grad=False)
+    coords_sensors_physical, coords_sensors_norm, model_coords_sensors = self._prepare_model_coords(
+        final_sensor_input, require_grad=False, is_vs_pinn=is_vs_pinn
+    )
     
     u_sensors_pred_norm = self.model(model_coords_sensors)
     var_order_sensors = self._infer_variable_order(u_sensors_pred_norm.shape[1], context='sensors', data_batch=data_batch)
@@ -873,13 +898,10 @@ def step(
         self.model.eval()
         
         with torch.no_grad():
-            # ✅ 使用 prepare_model_coords 輔助函數處理座標（需要在 step() 之外定義或改為實例方法）
-            # 簡化處理：直接在此處理座標標準化與縮放
-            coords_for_model = coords
-            if self.input_normalizer is not None:
-                coords_for_model = self.input_normalizer.transform(coords_for_model)
-            if self.physics is not None and hasattr(self.physics, 'scale_coordinates'):
-                coords_for_model = self.physics.scale_coordinates(coords_for_model)
+            # 使用共享的坐標預處理方法
+            _, _, coords_for_model = self._prepare_model_coords(
+                coords, require_grad=False, is_vs_pinn=None
+            )
             
             # 模型預測（標準化空間輸出）
             preds_norm = self.model(coords_for_model)
