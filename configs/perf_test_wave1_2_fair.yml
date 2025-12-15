@@ -1,0 +1,199 @@
+experiment:
+  name: "wave1_2_tensor_preconcat_fair"
+  output_root: "./results"
+  log_dir: "./log"
+  seed: 42
+  device: "mps"
+  precision: "float32"
+  version: "v1.0"
+  description: "Wave 1-2: Fair comparison with same sampling as baseline (4096 PDE, 1024 BC)"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 0
+
+logging:
+  level: "INFO"
+  log_level: "INFO"
+  log_freq: 10
+  save_predictions: false
+  tensorboard: false
+  wandb: false
+
+physics:
+  type: "vs_pinn_channel_flow"
+  nu: 5.0e-5
+  rho: 1.0
+  
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
+    use_gradient_checkpointing: false
+    enable_rans: false
+  
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 39998.0
+    u_tau: 0.04997
+    pressure_gradient: 0.0025
+  
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
+  
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]
+    wall_location: [-1.0, 1.0]
+    periodic_x: true
+    periodic_z: true
+    pressure_driven: true
+    mean_pressure_gradient: 0.0025
+  
+model:
+  type: "fourier_vs_mlp"
+  architecture: "fourier_vs_mlp"
+  in_dim: 3
+  out_dim: 4
+  width: 256
+  depth: 8
+  activation: "sine"
+  hidden_layers: [256, 256, 256, 256, 256, 256, 256, 256]
+  
+  fourier_features:
+    type: "axis_selective"
+    fourier_m: 12
+    fourier_sigma: 4.0
+  
+  use_fourier: true
+  fourier_config: {m: 12, sigma: 4.0}
+  use_rwf: true
+  
+  domain_bounds:
+    x: [0.0, 25.13]
+    y: [-1.0, 1.0]
+    z: [0.0, 9.42]
+  
+  scaling:
+    learnable: true
+    input_norm: "channel_flow"
+    output_norm: "friction_velocity"
+
+data:
+  source: "jhtdb"
+  dataset: "channel"
+  normalize: true
+  cache_dir: "./data/jhtdb/channel_flow_re1000"
+  
+  jhtdb_config:
+    enabled: true
+    dataset_name: "channel"
+    domain:
+      x: [0, 25.13]
+      y: [-1.0, 1.0]
+      z: [0, 9.42]
+    variables: ['u', 'v', 'w', 'p']
+  
+  slice_config:
+    plane: "xy"
+    z_position: 4.71
+    steady_state: true
+
+sensors:
+  K: 100
+  selection_method: "qr_pivot"
+  sensor_file: "sensors_K100_qr_pivot_periodic.npz"
+
+training:
+  sampling:
+    pde_points: 4096  # Match baseline for fair comparison
+    boundary_points: 1024  # Match baseline for fair comparison
+  epochs: 50
+  max_epochs: 50
+  validation_split: 0.0
+  batch_size: 512
+  validation_freq: 25
+  checkpoint_freq: 200
+  log_interval: 5
+  gradient_clip: 1.0
+  
+  optimizer:
+    type: "Adam"
+    lr: 0.001
+    weight_decay: 1.0e-5
+  
+  lr_scheduler:
+    type: "constant"
+  
+  checkpointing:
+    save_interval: 50
+    keep_last_n: 1
+  
+  early_stopping:
+    enabled: false
+  
+  amp:
+    enabled: false
+  
+losses:
+  data_weight: 10.0
+  boundary_weight: 10.0
+  
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
+  
+  wall_constraint_weight: 10.0
+  periodicity_weight: 10.0
+  pressure_gradient_weight: 1.0
+  
+  prior_weight: 0.1
+  source_l1: 1.0e-7
+  gradient_penalty: 1.0e-5
+  
+  adaptive_weighting: false
+  causal_weighting: false
+  
+  normalization:
+    enabled: true
+    warmup_epochs: 5
+  data_loss:
+    weight: 10.0
+    type: "mse"
+    variables: ["u", "v", "w", "p"]
+  pde_loss:
+    weight: 1.0
+    residual_loss:
+      weight: 1.0
+  boundary_loss:
+    weight: 10.0
+
+data_normalizer:
+  type: "training_data_norm"
+  variables: ["u", "v", "w", "p"]
+
+lowfi_prior:
+  enabled: false
+
+curriculum:
+  enable: false
+
+ensemble:
+  enable: false
+
+evaluation:
+  grid_resolution: [64, 32, 32]
+  metrics:
+    - "relative_l2"
+    - "mass_conservation"
+
+physics_validation:
+  enabled: false
+
+output:
+  checkpoint_dir: "./checkpoints/wave1_2"
+  results_dir: "./results/wave1_2"

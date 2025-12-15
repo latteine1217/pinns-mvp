@@ -683,24 +683,39 @@ class Trainer:
         is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
     
         # ==================== 1. PDE 點前向傳播 ====================
-        # 準備 PDE 點坐標
-        x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
-        z_pde = data_batch.get('z_pde')
-        t_pde = data_batch.get('t_pde')
-    
-        if t_pde is not None:
-            t_pde = t_pde.to(self.device).requires_grad_(True)
-    
-        # 構建輸入張量
-        spatial_components = [x_pde, y_pde]
-        if z_pde is not None:
-            spatial_components.append(z_pde)
-        coords_spatial = torch.cat(spatial_components, dim=1)
-    
-        if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
-            coords_full = torch.cat([coords_spatial, t_pde], dim=1)
+        # ==================== 🚀 Wave 1-2 優化：使用預拼接空間座標 ====================
+        # 優先使用預拼接的空間座標（如果可用），否則回退到原始拼接邏輯
+        if 'coords_pde_spatial' in data_batch:
+            # 使用預拼接空間座標（已在數據載入時完成拼接）
+            coords_spatial = data_batch['coords_pde_spatial'].to(self.device).requires_grad_(True)
+            t_pde = data_batch.get('t_pde')
+            if t_pde is not None:
+                t_pde = t_pde.to(self.device).requires_grad_(True)
+            
+            # 如果需要時間維度，加上 t_pde
+            if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
+                coords_full = torch.cat([coords_spatial, t_pde], dim=1)
+            else:
+                coords_full = coords_spatial
         else:
-            coords_full = coords_spatial
+            # 向後相容：回退到原始拼接邏輯
+            x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
+            z_pde = data_batch.get('z_pde')
+            t_pde = data_batch.get('t_pde')
+        
+            if t_pde is not None:
+                t_pde = t_pde.to(self.device).requires_grad_(True)
+        
+            # 構建輸入張量
+            spatial_components = [x_pde, y_pde]
+            if z_pde is not None:
+                spatial_components.append(z_pde)
+            coords_spatial = torch.cat(spatial_components, dim=1)
+        
+            if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
+                coords_full = torch.cat([coords_spatial, t_pde], dim=1)
+            else:
+                coords_full = coords_spatial
     
         # 準備模型輸入（使用實例方法）
         coords_full_physical, coords_full_norm, model_coords_pde = self._prepare_model_coords(
@@ -715,16 +730,26 @@ class Trainer:
         u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)
     
         # ==================== 2. 邊界條件點前向傳播 ====================
-        spatial_bc = [data_batch['x_bc'], data_batch['y_bc']]
-        if 'z_bc' in data_batch:
-            spatial_bc.append(data_batch['z_bc'])
-        coords_bc = torch.cat(spatial_bc, dim=1)
-    
-        t_bc = data_batch.get('t_bc')
-        if t_bc is not None:
-            t_bc = t_bc.to(self.device)
-    
-        final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
+        # 使用預拼接空間座標（如果可用）
+        if 'coords_bc_spatial' in data_batch:
+            coords_bc = data_batch['coords_bc_spatial'].to(self.device)
+            t_bc = data_batch.get('t_bc')
+            if t_bc is not None:
+                t_bc = t_bc.to(self.device)
+            
+            final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
+        else:
+            # 向後相容：原始拼接邏輯
+            spatial_bc = [data_batch['x_bc'], data_batch['y_bc']]
+            if 'z_bc' in data_batch:
+                spatial_bc.append(data_batch['z_bc'])
+            coords_bc = torch.cat(spatial_bc, dim=1)
+        
+            t_bc = data_batch.get('t_bc')
+            if t_bc is not None:
+                t_bc = t_bc.to(self.device)
+        
+            final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
         coords_bc_physical, coords_bc_norm, model_coords_bc = self._prepare_model_coords(
             final_bc_input, require_grad=False, is_vs_pinn=is_vs_pinn
         )
@@ -735,16 +760,26 @@ class Trainer:
         u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)
     
         # ==================== 3. 感測器點前向傳播 ====================
-        spatial_sensors = [data_batch['x_sensors'], data_batch['y_sensors']]
-        if 'z_sensors' in data_batch:
-            spatial_sensors.append(data_batch['z_sensors'])
-        coords_sensors = torch.cat(spatial_sensors, dim=1)
-    
-        t_sensors = data_batch.get('t_sensors')
-        if t_sensors is not None:
-            t_sensors = t_sensors.to(self.device)
-    
-        final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
+        # 使用預拼接空間座標（如果可用）
+        if 'coords_sensors_spatial' in data_batch:
+            coords_sensors = data_batch['coords_sensors_spatial'].to(self.device)
+            t_sensors = data_batch.get('t_sensors')
+            if t_sensors is not None:
+                t_sensors = t_sensors.to(self.device)
+            
+            final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
+        else:
+            # 向後相容：原始拼接邏輯
+            spatial_sensors = [data_batch['x_sensors'], data_batch['y_sensors']]
+            if 'z_sensors' in data_batch:
+                spatial_sensors.append(data_batch['z_sensors'])
+            coords_sensors = torch.cat(spatial_sensors, dim=1)
+        
+            t_sensors = data_batch.get('t_sensors')
+            if t_sensors is not None:
+                t_sensors = t_sensors.to(self.device)
+        
+            final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
         coords_sensors_physical, coords_sensors_norm, model_coords_sensors = self._prepare_model_coords(
             final_sensor_input, require_grad=False, is_vs_pinn=is_vs_pinn
         )

@@ -1516,21 +1516,70 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
         w_ic = torch.empty(0, 1, device=device)  # 🆕 添加 w_ic
         p_ic = torch.empty(0, 1, device=device)
     
+    # ==================== 🚀 Wave 1-2 優化：預拼接座標 ====================
+    # 優化目標：消除 trainer.py::step() 中每步重複的 torch.cat 操作
+    # 預期效益：減少 10-15% 訓練時間（每步節省 3-12ms）
+    
+    # 注意：我們只拼接空間座標，不包含時間維度
+    # 原因：(1) 大多數配置是穩態（時間維度不需要）
+    #      (2) 時間維度是否加入取決於 model_input_dim，應由 trainer 決定
+    #      (3) 保持向後相容性
+    
+    # 構建 PDE 點預拼接座標（僅空間維度）
+    spatial_pde = [x_pde, y_pde]
+    if z_pde is not None and z_pde.numel() > 0 and not torch.all(z_pde == 0):
+        spatial_pde.append(z_pde)
+    coords_pde_spatial = torch.cat(spatial_pde, dim=1)  # [N_pde, 2/3]
+    
+    # 構建邊界點預拼接座標（僅空間維度）
+    spatial_bc = [x_bc, y_bc]
+    if z_bc is not None and z_bc.numel() > 0 and not torch.all(z_bc == 0):
+        spatial_bc.append(z_bc)
+    coords_bc_spatial = torch.cat(spatial_bc, dim=1)  # [N_bc, 2/3]
+    
+    # 構建感測器點預拼接座標（僅空間維度）
+    spatial_sensors = [x_sensors, y_sensors]
+    if z_sensors is not None and z_sensors.numel() > 0 and not torch.all(z_sensors == 0):
+        spatial_sensors.append(z_sensors)
+    coords_sensors_spatial = torch.cat(spatial_sensors, dim=1)  # [N_sensors, 2/3]
+    
+    # 構建初始條件點預拼接座標（如果有，僅空間維度）
+    if x_ic.numel() > 0:
+        spatial_ic = [x_ic, y_ic]
+        if z_ic is not None and z_ic.numel() > 0 and not torch.all(z_ic == 0):
+            spatial_ic.append(z_ic)
+        coords_ic_spatial = torch.cat(spatial_ic, dim=1)  # [N_ic, 2/3]
+    else:
+        coords_ic_spatial = torch.empty(0, 2 if not is_vs_pinn else 3, device=device)
+    
     # 提取低保真先驗資料 (如果有)
     # ⚠️ 重要：變量順序必須與物理模組輸出順序一致 ['u', 'v', 'w', 'p']
     training_dict = {
+        # 🆕 預拼接座標（優先使用）- 僅空間維度
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
+        'coords_ic_spatial': coords_ic_spatial,
+        
+        # 原始分量座標（向後相容）
         'x_pde': x_pde, 'y_pde': y_pde, 'z_pde': z_pde, 't_pde': t_pde,  # 🆕 添加 z_pde
         'x_bc': x_bc, 'y_bc': y_bc, 'z_bc': z_bc, 't_bc': t_bc,  # 🆕 添加 z_bc
         'x_sensors': x_sensors, 'y_sensors': y_sensors, 'z_sensors': z_sensors, 't_sensors': t_sensors,  # 🆕 添加 z_sensors
+        'x_ic': x_ic, 'y_ic': y_ic, 'z_ic': z_ic, 't_ic': t_ic,  # 🆕 添加 z_ic
+        
+        # 感測器數據
         'u_sensors': u_sensors,
         'v_sensors': v_sensors,
         'w_sensors': w_sensors if (is_vs_pinn and w_sensors is not None) else torch.empty(0, 1, device=device),
         'p_sensors': p_sensors,
-        'x_ic': x_ic, 'y_ic': y_ic, 'z_ic': z_ic, 't_ic': t_ic,  # 🆕 添加 z_ic
+        
+        # 初始條件數據
         'u_ic': u_ic,
         'v_ic': v_ic,
         'w_ic': w_ic if is_vs_pinn else torch.empty(0, 1, device=device),
         'p_ic': p_ic,
+        
+        # 元數據
         'metadata': training_data.get('metadata', {}),
         'statistics': training_data.get('statistics', {})
     }
