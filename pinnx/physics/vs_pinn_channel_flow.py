@@ -425,7 +425,8 @@ class VSPINNChannelFlow(nn.Module):
         self, 
         coords: torch.Tensor, 
         predictions: torch.Tensor,
-        scaled_coords: Optional[torch.Tensor] = None
+        scaled_coords: Optional[torch.Tensor] = None,
+        gradients: Optional[Dict[str, torch.Tensor]] = None
     ) -> Dict[str, torch.Tensor]:
         """
         计算 3D 不可压缩 NS 方程的动量残差（稳态版本）
@@ -439,6 +440,11 @@ class VSPINNChannelFlow(nn.Module):
             coords: [batch, 3] = [x, y, z] 物理坐标
             predictions: [batch, 4] = [u, v, w, p] 预测值（模型輸出，自動追蹤梯度）
             scaled_coords: 模型輸入使用的縮放座標 (X, Y, Z)，若為 None 則視為未縮放
+            gradients: 可選的預計算梯度快取（Wave 2 優化）。
+                      若提供，應包含鍵: 'u_x', 'u_y', 'u_z', 'u_xx', 'u_yy', 'u_zz',
+                      'v_x', 'v_y', 'v_z', 'v_xx', 'v_yy', 'v_zz',
+                      'w_x', 'w_y', 'w_z', 'w_xx', 'w_yy', 'w_zz',
+                      'p_x', 'p_y', 'p_z'
             
         Returns:
             残差字典 {'momentum_x', 'momentum_y', 'momentum_z'}
@@ -449,11 +455,43 @@ class VSPINNChannelFlow(nn.Module):
         p = predictions[:, 3:4]
         
         # === 计算一阶导数（对流项 + 压力项） ===
-        # 注意：只有當 predictions 是基於 scaled_coords 計算時，才應該傳入 scaled_coords
-        u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
-        v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
-        w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
-        p_grads = self.compute_gradients(p, coords, order=1, scaled_coords=scaled_coords)
+        if gradients is not None:
+            # Wave 2 優化：從快取讀取梯度
+            # 注意：gradients 已經是對物理座標的梯度，若使用 scaled_coords 需要手動應用縮放
+            if scaled_coords is not None:
+                # 應用 VS-PINN 縮放係數
+                u_grads = {
+                    'x': gradients['u_x'] * self.N_x,  # type: ignore[operator]
+                    'y': gradients['u_y'] * self.N_y,  # type: ignore[operator]
+                    'z': gradients['u_z'] * self.N_z   # type: ignore[operator]
+                }
+                v_grads = {
+                    'x': gradients['v_x'] * self.N_x,  # type: ignore[operator]
+                    'y': gradients['v_y'] * self.N_y,  # type: ignore[operator]
+                    'z': gradients['v_z'] * self.N_z   # type: ignore[operator]
+                }
+                w_grads = {
+                    'x': gradients['w_x'] * self.N_x,  # type: ignore[operator]
+                    'y': gradients['w_y'] * self.N_y,  # type: ignore[operator]
+                    'z': gradients['w_z'] * self.N_z   # type: ignore[operator]
+                }
+                p_grads = {
+                    'x': gradients['p_x'] * self.N_x,  # type: ignore[operator]
+                    'y': gradients['p_y'] * self.N_y,  # type: ignore[operator]
+                    'z': gradients['p_z'] * self.N_z   # type: ignore[operator]
+                }
+            else:
+                # 無縮放，直接使用快取梯度
+                u_grads = {'x': gradients['u_x'], 'y': gradients['u_y'], 'z': gradients['u_z']}
+                v_grads = {'x': gradients['v_x'], 'y': gradients['v_y'], 'z': gradients['v_z']}
+                w_grads = {'x': gradients['w_x'], 'y': gradients['w_y'], 'z': gradients['w_z']}
+                p_grads = {'x': gradients['p_x'], 'y': gradients['p_y'], 'z': gradients['p_z']}
+        else:
+            # 原始路徑：逐一計算梯度（向後相容）
+            u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
+            v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
+            w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
+            p_grads = self.compute_gradients(p, coords, order=1, scaled_coords=scaled_coords)
         
         # 对流项
         conv_u = u * u_grads['x'] + v * u_grads['y'] + w * u_grads['z']
@@ -466,9 +504,29 @@ class VSPINNChannelFlow(nn.Module):
         pressure_z = p_grads['z'] / self.rho  # type: ignore[operator]
         
         # === 计算二阶导数（黏性项） ===
-        laplacian_u = self.compute_laplacian(u, coords, scaled_coords=scaled_coords)
-        laplacian_v = self.compute_laplacian(v, coords, scaled_coords=scaled_coords)
-        laplacian_w = self.compute_laplacian(w, coords, scaled_coords=scaled_coords)
+        if gradients is not None:
+            # Wave 2 優化：從快取讀取二階梯度並計算 Laplacian
+            if scaled_coords is not None:
+                # 應用 VS-PINN 縮放係數（二階導數需平方）
+                laplacian_u = (gradients['u_xx'] * (self.N_x ** 2) +  # type: ignore[operator]
+                              gradients['u_yy'] * (self.N_y ** 2) +  # type: ignore[operator]
+                              gradients['u_zz'] * (self.N_z ** 2))  # type: ignore[operator]
+                laplacian_v = (gradients['v_xx'] * (self.N_x ** 2) +  # type: ignore[operator]
+                              gradients['v_yy'] * (self.N_y ** 2) +  # type: ignore[operator]
+                              gradients['v_zz'] * (self.N_z ** 2))  # type: ignore[operator]
+                laplacian_w = (gradients['w_xx'] * (self.N_x ** 2) +  # type: ignore[operator]
+                              gradients['w_yy'] * (self.N_y ** 2) +  # type: ignore[operator]
+                              gradients['w_zz'] * (self.N_z ** 2))  # type: ignore[operator]
+            else:
+                # 無縮放，直接從快取計算 Laplacian
+                laplacian_u = gradients['u_xx'] + gradients['u_yy'] + gradients['u_zz']
+                laplacian_v = gradients['v_xx'] + gradients['v_yy'] + gradients['v_zz']
+                laplacian_w = gradients['w_xx'] + gradients['w_yy'] + gradients['w_zz']
+        else:
+            # 原始路徑：逐一計算 Laplacian（向後相容）
+            laplacian_u = self.compute_laplacian(u, coords, scaled_coords=scaled_coords)
+            laplacian_v = self.compute_laplacian(v, coords, scaled_coords=scaled_coords)
+            laplacian_w = self.compute_laplacian(w, coords, scaled_coords=scaled_coords)
         
         viscous_u = self.nu * laplacian_u  # type: ignore[operator]
         viscous_v = self.nu * laplacian_v  # type: ignore[operator]
@@ -494,7 +552,8 @@ class VSPINNChannelFlow(nn.Module):
         self, 
         coords: torch.Tensor, 
         predictions: torch.Tensor,
-        scaled_coords: Optional[torch.Tensor] = None
+        scaled_coords: Optional[torch.Tensor] = None,
+        gradients: Optional[Dict[str, torch.Tensor]] = None
     ) -> torch.Tensor:
         """
         计算连续方程残差（不可压缩条件）
@@ -506,6 +565,8 @@ class VSPINNChannelFlow(nn.Module):
             coords: [batch, 3] = [x, y, z] 物理座標
             predictions: [batch, 4] = [u, v, w, p]（模型輸出，自動追蹤梯度）
             scaled_coords: 模型輸入使用的縮放座標 (X, Y, Z)，若為 None 則視為未縮放
+            gradients: 可選的預計算梯度快取（Wave 2 優化）。
+                      若提供，應包含鍵: 'u_x', 'v_y', 'w_z'
             
         Returns:
             continuity_residual: [batch, 1]
@@ -515,13 +576,27 @@ class VSPINNChannelFlow(nn.Module):
         w = predictions[:, 2:3]
         
         # 计算散度
-        # 注意：只有當 predictions 是基於 scaled_coords 計算時，才應該傳入 scaled_coords
-        # 否則會導致計算圖斷開（predictions 基於 coords，但梯度計算對 scaled_coords）
-        u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
-        v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
-        w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
-        
-        divergence = u_grads['x'] + v_grads['y'] + w_grads['z']
+        if gradients is not None:
+            # Wave 2 優化：從快取讀取梯度
+            if scaled_coords is not None:
+                # 應用 VS-PINN 縮放係數
+                u_x = gradients['u_x'] * self.N_x  # type: ignore[operator]
+                v_y = gradients['v_y'] * self.N_y  # type: ignore[operator]
+                w_z = gradients['w_z'] * self.N_z  # type: ignore[operator]
+            else:
+                # 無縮放，直接使用快取梯度
+                u_x = gradients['u_x']
+                v_y = gradients['v_y']
+                w_z = gradients['w_z']
+            
+            divergence = u_x + v_y + w_z
+        else:
+            # 原始路徑：逐一計算梯度（向後相容）
+            u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
+            v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
+            w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
+            
+            divergence = u_grads['x'] + v_grads['y'] + w_grads['z']
         
         return divergence
     
