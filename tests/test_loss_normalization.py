@@ -8,11 +8,34 @@
 4. 歸一化不改變損失的相對大小關係
 """
 
+import pytest
 import torch
 import sys
 sys.path.insert(0, '/Users/latteine/Documents/coding/pinns-mvp')
 
 from pinnx.physics.vs_pinn_channel_flow import VSPINNChannelFlow
+
+
+@pytest.fixture
+def physics_after_warmup():
+    """創建已完成 warmup 的 physics 對象"""
+    physics = VSPINNChannelFlow()
+    
+    # 模擬 warmup 過程
+    loss_dict = {
+        'data': torch.tensor(1.51),
+        'momentum_y': torch.tensor(31841.96),
+        'momentum_x': torch.tensor(479.14),
+        'wall_constraint': torch.tensor(102.68),
+        'prior': torch.tensor(99.99),
+    }
+    
+    # 執行 warmup (5 epochs)
+    for epoch in range(5):
+        physics.normalize_loss_dict(loss_dict, epoch=epoch)
+    
+    return physics
+
 
 def test_normalization_warmup():
     """測試 Warmup 階段"""
@@ -50,12 +73,12 @@ def test_normalization_warmup():
     
     print(f"\n--- Epoch 4 (Warmup 結束) ---")
     print(f"最終 Normalizers: {physics.loss_normalizers}")
-    
-    return physics
 
 
-def test_normalization_training(physics):
+def test_normalization_training(physics_after_warmup):
     """測試訓練階段歸一化"""
+    physics = physics_after_warmup
+    
     print("\n" + "=" * 80)
     print("測試 2: 訓練階段（歸一化生效）")
     print("=" * 80)
@@ -85,12 +108,12 @@ def test_normalization_training(physics):
         assert 0.99 <= v.item() <= 1.01, f"{k} 未被正確歸一化: {v.item()}"
     
     print("\n✅ 所有損失都被歸一化到 1.0 數量級")
-    
-    return normalized
 
 
-def test_normalization_preserves_relative_order(physics):
+def test_normalization_preserves_relative_order(physics_after_warmup):
     """測試歸一化不改變相對大小關係"""
+    physics = physics_after_warmup
+    
     print("\n" + "=" * 80)
     print("測試 3: 相對大小關係保持不變")
     print("=" * 80)

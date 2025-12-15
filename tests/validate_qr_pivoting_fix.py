@@ -10,12 +10,13 @@ QR Pivoting 修正驗證測試
 
 使用方式：
     # 快速測試（使用mock資料）
-    python tests/test_qr_pivoting_fix.py --mode mock
+    python tests/validate_qr_pivoting_fix.py --mode mock
 
     # 完整測試（需要JHTDB資料）
-    python tests/test_qr_pivoting_fix.py --mode full --data-path data/jhtdb/channel_flow_re1000/
+    python tests/validate_qr_pivoting_fix.py --mode full --data-path data/jhtdb/channel_flow_re1000/
 """
 
+import pytest
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -24,6 +25,9 @@ import argparse
 import logging
 from typing import Dict, Any, List
 import json
+
+# 標記所有測試為 skip（這是獨立驗證腳本，不應由 pytest 收集）
+pytestmark = pytest.mark.skip(reason="Standalone validation script, run directly with python")
 
 # 添加專案路徑
 project_root = Path(__file__).parent.parent
