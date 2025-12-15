@@ -120,7 +120,8 @@ def ns_residual_2d(coords: torch.Tensor,
                   nu: float = 1e-3,
                   nu_t: Optional[torch.Tensor] = None,
                   time_coords: Optional[torch.Tensor] = None,
-                  density: float = 1.0) -> Dict[str, torch.Tensor]:
+                  density: float = 1.0,
+                  merge_momentum: bool = False) -> Dict[str, torch.Tensor]:
     """
     2D 不可壓縮 Navier-Stokes 方程殘差計算
     
@@ -139,9 +140,25 @@ def ns_residual_2d(coords: torch.Tensor,
         nu_t: 湍流黏性係數 [batch_size] (可選，來自 RANS prior)
         time_coords: 時間座標 [batch_size] (非定常問題)
         density: 密度 (預設 1.0)
+        merge_momentum: 是否合併動量項 (預設 False)
+            - True: 返回 {'momentum': [batch, 2], 'continuity': [batch]}
+              適用於各向同性問題（如 Kolmogorov Flow），強制 X/Y 方向同步優化
+            - False: 返回 {'momentum_x': [batch], 'momentum_y': [batch], 'continuity': [batch]}
+              適用於各向異性問題（如 Channel Flow），允許方向性權重控制
     
     Returns:
         residuals: 包含各方程殘差的字典
+            - merge_momentum=False: {'momentum_x', 'momentum_y', 'continuity'}
+            - merge_momentum=True:  {'momentum', 'continuity'}
+    
+    Examples:
+        >>> # Kolmogorov Flow (各向同性)
+        >>> residuals = ns_residual_2d(coords, velocity, pressure, nu=1e-3, merge_momentum=True)
+        >>> # 返回: {'momentum': [N, 2], 'continuity': [N]}
+        
+        >>> # Channel Flow (各向異性)
+        >>> residuals = ns_residual_2d(coords, velocity, pressure, nu=1e-3, merge_momentum=False)
+        >>> # 返回: {'momentum_x': [N], 'momentum_y': [N], 'continuity': [N]}
     """
     batch_size = coords.shape[0]
     
@@ -195,12 +212,22 @@ def ns_residual_2d(coords: torch.Tensor,
     # 連續性方程殘差 (不可壓縮)
     continuity = ux + vy
     
-    residuals = {
-        'momentum_x': momentum_x,
-        'momentum_y': momentum_y, 
-        'continuity': continuity,
-        'velocity_div': continuity  # 等價於散度
-    }
+    # 根據 merge_momentum 參數決定返回格式
+    if merge_momentum:
+        # 合併動量項（適用於各向同性問題，如 Kolmogorov Flow）
+        # 使用向量化 L2 範數，強制 X/Y 方向同步優化
+        momentum_vector = torch.stack([momentum_x, momentum_y], dim=-1)  # [batch, 2]
+        residuals = {
+            'momentum': momentum_vector,
+            'continuity': continuity
+        }
+    else:
+        # 分離動量項（標準模式，適用於各向異性問題，如 Channel Flow）
+        residuals = {
+            'momentum_x': momentum_x,
+            'momentum_y': momentum_y, 
+            'continuity': continuity
+        }
     
     return residuals
 
@@ -316,7 +343,8 @@ class NSResidualLoss(nn.Module):
                  density: float = 1.0,
                  spatial_dim: int = 2,
                  unsteady: bool = False,
-                 source_regularization: float = 0.0):
+                 source_regularization: float = 0.0,
+                 merge_momentum: bool = False):
         """
         Args:
             nu: 動力黏性係數
@@ -324,10 +352,12 @@ class NSResidualLoss(nn.Module):
             spatial_dim: 空間維度 (2 或 3)
             unsteady: 是否為非定常問題
             source_regularization: 源項稀疏化權重
+            merge_momentum: 是否合併動量項 (僅 2D 有效，3D 忽略)
         """
         super().__init__()
         
         self.nu = nu
+        self.merge_momentum = merge_momentum
         self.density = density  
         self.spatial_dim = spatial_dim
         self.unsteady = unsteady
@@ -374,23 +404,37 @@ class NSResidualLoss(nn.Module):
         else:
             source = None
         
-        # 計算殘差 (傳遞 nu_t)
-        residuals = self.residual_fn(
-            coords=coords,
-            velocity=velocity,
-            pressure=pressure,
-            source=source,
-            nu=self.nu,
-            nu_t=nu_t,
-            time_coords=time_coords,
-            density=self.density
-        )
+        # 計算殘差 (2D 時傳遞 merge_momentum)
+        if self.spatial_dim == 2:
+            residuals = self.residual_fn(
+                coords=coords,
+                velocity=velocity,
+                pressure=pressure,
+                source=source,
+                nu=self.nu,
+                nu_t=nu_t,
+                time_coords=time_coords,
+                density=self.density,
+                merge_momentum=self.merge_momentum
+            )
+        else:
+            residuals = self.residual_fn(
+                coords=coords,
+                velocity=velocity,
+                pressure=pressure,
+                source=source,
+                nu=self.nu,
+                nu_t=nu_t,
+                time_coords=time_coords,
+                density=self.density
+            )
         
         # 損失權重 (預設值)
         default_weights = {
             'momentum_x': 1.0,
             'momentum_y': 1.0,
             'momentum_z': 1.0,
+            'momentum': 1.0,      # 合併動量項權重
             'continuity': 1.0,
             'source_reg': self.source_reg
         }
@@ -403,7 +447,15 @@ class NSResidualLoss(nn.Module):
         # PDE 殘差損失 (MSE)
         for key, residual in residuals.items():
             if key in default_weights:
-                losses[f'pde_{key}'] = default_weights[key] * torch.mean(residual ** 2)
+                # 檢查是否為合併動量項（向量形式）
+                if key == 'momentum' and residual.dim() == 2:
+                    # 向量化動量殘差：先計算每個點的 L2 範數，再平均
+                    # ||[momentum_x, momentum_y]||_2^2 = momentum_x^2 + momentum_y^2
+                    momentum_norm_sq = torch.sum(residual ** 2, dim=-1)  # [batch]
+                    losses[f'pde_{key}'] = default_weights[key] * torch.mean(momentum_norm_sq)
+                else:
+                    # 標量殘差：直接平方
+                    losses[f'pde_{key}'] = default_weights[key] * torch.mean(residual ** 2)
         
         # 源項正則化 (L1 稀疏化)
         if source is not None and self.source_reg > 0:

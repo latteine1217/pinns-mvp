@@ -90,14 +90,20 @@ def plot_loss_curves(arrays, output_dir):
     plt.close()
     
     # ====================================================================
-    # 圖 2: PDE 子項 (Momentum X/Y, Continuity)
+    # 圖 2: PDE 子項 (Momentum X/Y or Merged, Continuity)
     # ====================================================================
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    if 'momentum_x_loss' in arrays:
-        ax.semilogy(epochs, arrays['momentum_x_loss'], label='Momentum X', linewidth=1.5, alpha=0.8)
-    if 'momentum_y_loss' in arrays:
-        ax.semilogy(epochs, arrays['momentum_y_loss'], label='Momentum Y', linewidth=1.5, alpha=0.8)
+    # 🔥 支援合併動量模式 (merge_momentum=True)
+    if 'momentum_loss' in arrays:
+        ax.semilogy(epochs, arrays['momentum_loss'], label='Momentum (Merged)', linewidth=2, alpha=0.9, color='blue')
+    else:
+        # 標準模式：分別顯示 X/Y
+        if 'momentum_x_loss' in arrays:
+            ax.semilogy(epochs, arrays['momentum_x_loss'], label='Momentum X', linewidth=1.5, alpha=0.8)
+        if 'momentum_y_loss' in arrays:
+            ax.semilogy(epochs, arrays['momentum_y_loss'], label='Momentum Y', linewidth=1.5, alpha=0.8)
+    
     if 'continuity_loss' in arrays:
         ax.semilogy(epochs, arrays['continuity_loss'], label='Continuity (∇·u)', linewidth=2, alpha=0.9, color='red')
     

@@ -146,6 +146,7 @@ losses:
   causal_weighting: true
   causal_eps: 0.5
   causal_n_bins: 10
+  merge_momentum: true  # 🔥 合併 X/Y 動量項為單一向量損失 (Kolmogorov Flow)
 training:
   optimizer:
     type: soap

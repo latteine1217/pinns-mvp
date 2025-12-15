@@ -108,6 +108,7 @@ losses:
   normalize_losses: false
   adaptive_weighting: false
   causal_weighting: false
+  merge_momentum: true  # 🔥 合併 X/Y 動量項為單一向量損失 (Kolmogorov Flow)
 training:
   optimizer:
     type: adam

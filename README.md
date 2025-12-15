@@ -184,14 +184,32 @@ graph TD
 
 ## 📈 最近更新
 
+### ✅ Momentum Merging 功能上線 (2025-12-15)
+- **損失項簡化**：針對各向同性流動（如 Kolmogorov Flow）新增 `merge_momentum` 參數
+  - **損失項減少**：PDE 損失從 3 項 → 2 項（-33%）
+  - **物理動機**：合併 X/Y 動量方程為單一向量範數，強制各向同性約束
+  - **配置支援**：所有 17 個 Kolmogorov Flow 實驗配置已啟用 `losses.merge_momentum: true`
+  - **測試驗證**：100% 測試覆蓋率，包含集成測試與單元測試
+- **使用方式**：
+  ```yaml
+  losses:
+    merge_momentum: true  # Kolmogorov Flow (各向同性)
+    # merge_momentum: false  # Channel Flow (各向異性)
+  ```
+- **效益**：
+  - 簡化 GradNorm 權重調整（2 項 vs 3 項）
+  - 強制 X/Y 動量同步收斂，符合物理對稱性
+  - 訓練穩定性提升（減少權重失衡風險）
+- **文檔**：詳見 `docs/MOMENTUM_MERGING_GUIDE.md` 與 `MOMENTUM_MERGING_TEST_REPORT.md`
+
 ### ✅ Trainer 重構完成 (2025-12-14)
 - **代碼質量提升**：`Trainer` 類別完成 Phase 1-4 全面重構
   - **74% 行數減少**：4 個核心方法從 971 行 → 251 行
   - **模組化設計**：新增 `TrainingLoopManager` 類別 + 17 個 helper methods
   - **零回歸**：所有測試通過，功能完全保留
   - **可維護性**：單一職責原則，每個方法聚焦單一任務
-- **重構細節**：詳見 `REFACTORING_REPORT_PHASE*.md` 完整文檔
-  - Phase 1: `step()` (371 → 92 lines, -75%)
+- **重構細節**：詳見 `REFACTORING_COMPLETE_GUIDE.md` 完整文檔
+  - Phase 1: `step()` (785 → 92 lines, -88%)
   - Phase 2: `train()` (371 → 92 lines, -75%)
   - Phase 3: `validate()` (71 → 21 lines, -70%)
   - Phase 4: `save_checkpoint()` (158 → 46 lines, -71%)

@@ -5,9 +5,15 @@ Channel Flow Re1000 JHTDB 資料擷取腳本
 從約翰霍普金斯湍流資料庫 (JHTDB) 擷取 Channel Flow Re_tau=1000 資料，
 並進行預處理以支援 PINNs 逆重建實驗。
 
+⚠️  重要說明：資料類型為「瞬時流場快照」(Instantaneous Snapshot)
+    - 本腳本擷取的是某一時刻的完整 3D 湍流場（timestep=0）
+    - 並非統計平均場或時間平均場
+    - 適合用於瞬時流場重建、湍流結構識別等研究
+    - 如需時間平均場，需手動對多個 timesteps 進行後處理
+
 主要功能：
 1. JHTDB Channel Flow cutout 批量資料下載
-2. 2D 切片提取與時間平均處理  
+2. 2D 切片提取與預處理 (瞬時流場快照)  
 3. QR-pivot 感測點選擇與噪聲模擬
 4. 低保真 RANS 資料生成作為軟先驗
 5. 資料格式標準化與快取管理
@@ -69,7 +75,7 @@ class ChannelFlowConfig:
     # 時間參數
     time_range: Optional[List[float]] = None  # [0.0, 26.0]
     dt: float = 0.0065
-    time_average_window: Optional[List[float]] = None  # [20.0, 26.0]
+    time_average_window: Optional[List[float]] = None  # DEPRECATED: 未實作時間平均 [20.0, 26.0]
     
     # 2D 切片設定
     slice_plane: str = "xy"  # xy, xz, yz
@@ -85,8 +91,9 @@ class ChannelFlowConfig:
             self.domain_z = [0.0, 3 * np.pi]
         if self.time_range is None:
             self.time_range = [0.0, 26.0]
+        # ⚠️  time_average_window 目前未使用（保留為未來擴展）
         if self.time_average_window is None:
-            self.time_average_window = [20.0, 26.0]
+            self.time_average_window = [20.0, 26.0]  # 未實作時間平均功能
 
 
 class ChannelFlowDataFetcher:
@@ -299,7 +306,7 @@ class ChannelFlowDataFetcher:
             end=cutout_end,
             resolution=cutout_resolution,
             variables=variables,
-            timestep=0  # 使用瞬時資料，後續進行時間平均
+            timestep=0  # 擷取瞬時流場快照 (instantaneous snapshot at t=0)
         )
         
         # 取出實際 3D 資料陣列

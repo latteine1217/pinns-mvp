@@ -764,7 +764,8 @@ def create_loss_functions(config: Dict[str, Any], device: torch.device) -> Dict[
     losses = {
         'residual': NSResidualLoss(
             nu=loss_cfg.get('nu', 1e-3),
-            density=loss_cfg.get('rho', 1.0)
+            density=loss_cfg.get('rho', 1.0),
+            merge_momentum=loss_cfg.get('merge_momentum', False)  # 🔥 合併動量項（Kolmogorov Flow）
         ),
         'boundary': BoundaryConditionLoss(),  # 🆕 邊界條件損失（含 inlet）
         'prior': PriorLossManager(
