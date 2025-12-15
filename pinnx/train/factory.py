@@ -862,8 +862,9 @@ def create_physics(config: Dict[str, Any], device: torch.device):
             'y': (domain_cfg.get('y_min', 0.0), domain_cfg.get('y_max', 2*3.14159)),
         }
 
-        # 損失配置（用於歸一化）
-        loss_cfg = config.get('loss', {})
+        # 損失配置（用於歸一化與 momentum merging）
+        # 注意：配置文件使用 'losses' (複數)
+        loss_cfg = config.get('losses', config.get('loss', {}))
 
         physics = KolmogorovFlow2D(
             forcing_params=forcing_params,

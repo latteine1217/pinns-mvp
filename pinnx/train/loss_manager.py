@@ -225,19 +225,49 @@ class LossManager:
                 if pde_point_weights is not None:
                     final_weights = final_weights * pde_point_weights
                 
-                momentum_x_loss = torch.mean(final_weights * residuals['momentum_x']**2)
-                momentum_y_loss = torch.mean(final_weights * residuals['momentum_y']**2)
+                # 檢查是否使用 momentum merging
+                if 'momentum' in residuals:
+                    # 合併模式：momentum 是 [N, 1, 2] 向量
+                    momentum_vec = residuals['momentum']  # [N, 1, 2]
+                    momentum_loss = torch.mean(final_weights * torch.sum(momentum_vec**2, dim=-1))
+                    momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
+                    momentum_y_loss = torch.tensor(0.0, device=self.device)
+                else:
+                    # 標準模式：分開的 momentum_x 和 momentum_y
+                    momentum_x_loss = torch.mean(final_weights * residuals['momentum_x']**2)
+                    momentum_y_loss = torch.mean(final_weights * residuals['momentum_y']**2)
+                
                 momentum_z_loss = torch.mean(final_weights * residuals['momentum_z']**2) if is_vs_pinn else torch.tensor(0.0, device=self.device)
                 continuity_loss = torch.mean(final_weights * residuals['continuity']**2)
             
             elif pde_point_weights is not None:
-                momentum_x_loss = apply_point_weights_to_loss(residuals['momentum_x']**2, pde_point_weights)
-                momentum_y_loss = apply_point_weights_to_loss(residuals['momentum_y']**2, pde_point_weights)
+                # 檢查是否使用 momentum merging
+                if 'momentum' in residuals:
+                    # 合併模式：momentum 是 [N, 1, 2] 向量
+                    momentum_vec = residuals['momentum']  # [N, 1, 2]
+                    momentum_loss = apply_point_weights_to_loss(torch.sum(momentum_vec**2, dim=-1), pde_point_weights)
+                    momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
+                    momentum_y_loss = torch.tensor(0.0, device=self.device)
+                else:
+                    # 標準模式：分開的 momentum_x 和 momentum_y
+                    momentum_x_loss = apply_point_weights_to_loss(residuals['momentum_x']**2, pde_point_weights)
+                    momentum_y_loss = apply_point_weights_to_loss(residuals['momentum_y']**2, pde_point_weights)
+                
                 momentum_z_loss = apply_point_weights_to_loss(residuals['momentum_z']**2, pde_point_weights) if is_vs_pinn else torch.tensor(0.0, device=self.device)
                 continuity_loss = apply_point_weights_to_loss(residuals['continuity']**2, pde_point_weights)
             else:
-                momentum_x_loss = torch.mean(residuals['momentum_x']**2)
-                momentum_y_loss = torch.mean(residuals['momentum_y']**2)
+                # 檢查是否使用 momentum merging
+                if 'momentum' in residuals:
+                    # 合併模式：momentum 是 [N, 1, 2] 向量
+                    momentum_vec = residuals['momentum']  # [N, 1, 2]
+                    momentum_loss = torch.mean(torch.sum(momentum_vec**2, dim=-1))
+                    momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
+                    momentum_y_loss = torch.tensor(0.0, device=self.device)
+                else:
+                    # 標準模式：分開的 momentum_x 和 momentum_y
+                    momentum_x_loss = torch.mean(residuals['momentum_x']**2)
+                    momentum_y_loss = torch.mean(residuals['momentum_y']**2)
+                
                 momentum_z_loss = torch.mean(residuals['momentum_z']**2) if is_vs_pinn else torch.tensor(0.0, device=self.device)
                 continuity_loss = torch.mean(residuals['continuity']**2)
         

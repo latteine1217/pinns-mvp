@@ -823,7 +823,8 @@ def create_ns_loss(config: Dict) -> NSResidualLoss:
         density=config.get('density', 1.0),
         spatial_dim=config.get('spatial_dim', 2),
         unsteady=config.get('unsteady', False),
-        source_regularization=config.get('source_reg', 0.0)
+        source_regularization=config.get('source_reg', 0.0),
+        merge_momentum=config.get('merge_momentum', False)
     )
 
 

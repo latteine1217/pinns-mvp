@@ -131,6 +131,9 @@ class KolmogorovFlow2D(NavierStokesBase):
         self.normalize_losses = True
         self.warmup_epochs = (loss_config or {}).get('warmup_epochs', 5)
         self.normalizer_momentum = 0.9
+        
+        # === Momentum Merging 參數 ===
+        self.merge_momentum = (loss_config or {}).get('merge_momentum', False)
 
         # 驗證配置
         self._verify_configuration()
@@ -302,8 +305,19 @@ class KolmogorovFlow2D(NavierStokesBase):
         time_deriv_v = torch.zeros_like(v)
 
         if time is not None and time.requires_grad:
-            time_deriv_u = self.compute_gradient(u, time, component=0)
-            time_deriv_v = self.compute_gradient(v, time, component=0)
+            # 使用 torch.autograd.grad 直接對時間求導
+            time_deriv_u = torch.autograd.grad(
+                u, time, 
+                grad_outputs=torch.ones_like(u),
+                create_graph=True, 
+                retain_graph=True
+            )[0]
+            time_deriv_v = torch.autograd.grad(
+                v, time, 
+                grad_outputs=torch.ones_like(v),
+                create_graph=True, 
+                retain_graph=True
+            )[0]
 
         # === 組裝動量方程殘差 ===
         # x 方向動量方程（含正弦強迫項）
@@ -312,11 +326,21 @@ class KolmogorovFlow2D(NavierStokesBase):
         # y 方向動量方程
         residual_y = time_deriv_v + conv_v + pressure_y - viscous_v
 
-        return {
-            'momentum_x': residual_x,
-            'momentum_y': residual_y,
-            'continuity': continuity
-        }
+        # === Momentum Merging（若啟用） ===
+        if self.merge_momentum:
+            # 將 X/Y 動量合併為向量範數：||[residual_x, residual_y]||
+            momentum_vector = torch.stack([residual_x, residual_y], dim=-1)  # [N, 2]
+            return {
+                'momentum': momentum_vector,
+                'continuity': continuity
+            }
+        else:
+            # 標準模式：分開返回
+            return {
+                'momentum_x': residual_x,
+                'momentum_y': residual_y,
+                'continuity': continuity
+            }
 
     def residual_unified(
         self,
