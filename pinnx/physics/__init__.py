@@ -16,7 +16,9 @@ from .ns_2d import (
     incompressible_ns_2d,
     compute_vorticity,
     compute_q_criterion,
-    check_conservation_laws
+    check_conservation_laws,
+    NSEquations2D,           # New class name
+    NavierStokes2D           # Backward compatibility alias (deprecated)
 )
 
 try:
@@ -33,7 +35,8 @@ except ImportError as e:
 # 3D Thin-Slab NS方程模組 (用於通道流等薄片配置)
 try:
     from .ns_3d_thin_slab import (
-        NSEquations3DThinSlab,
+        NSEquations3DThinSlab,          # New class name
+        NavierStokes3DThinSlab,         # Backward compatibility alias (deprecated)
         ns_residual_3d_thin_slab,
         compute_derivatives_3d,
         apply_periodic_bc_3d,
@@ -44,6 +47,7 @@ except ImportError as e:
     import warnings
     warnings.warn(f"Cannot import ns_3d_thin_slab module: {e}")
     NSEquations3DThinSlab = None
+    NavierStokes3DThinSlab = None
     ns_residual_3d_thin_slab = None
     compute_derivatives_3d = None
     apply_periodic_bc_3d = None
@@ -111,15 +115,17 @@ def check_cfl_condition(velocity, grid_spacing, time_step):
     return torch.max(cfl)
 
 __all__ = [
-    # NS方程相關
+    # NS方程相關 (2D)
     'ns_residual_2d', 'incompressible_ns_2d', 'compute_vorticity', 
     'compute_q_criterion', 'check_conservation_laws',
+    'NSEquations2D', 'NavierStokes2D',  # New + deprecated alias
     
     # 3D時間依賴NS方程
     'NSEquations3DTemporal', 'compute_derivatives_3d_temporal',
     
     # 3D Thin-Slab NS方程
-    'NSEquations3DThinSlab', 'ns_residual_3d_thin_slab', 
+    'NSEquations3DThinSlab', 'NavierStokes3DThinSlab',  # New + deprecated alias
+    'ns_residual_3d_thin_slab', 
     'compute_derivatives_3d', 'apply_periodic_bc_3d', 
     'apply_wall_bc_3d', 'check_conservation_3d',
     
