@@ -28,6 +28,7 @@ from pinnx.train.loss_manager import LossManager  # type: ignore
 from pinnx.utils.normalization import InputNormalizer, NormalizationConfig, DataNormalizer
 from pinnx.evals.metrics import relative_L2
 from pinnx.physics.turbulence_utils import preprocess_rans_prior, preprocess_rans_prior_from_config  # type: ignore
+from pinnx.physics.gradient_cache import GradientCache  # type: ignore
 
 
 class Trainer:
@@ -680,7 +681,9 @@ class Trainer:
         self.optimizer.zero_grad()
     
         # ==================== 0. 前置準備 ====================
-        is_vs_pinn = 'z_pde' in data_batch and hasattr(self.physics, 'compute_momentum_residuals')
+        # 檢查是否為 VS-PINN（支持預拼接座標和原始座標兩種格式）
+        has_3d_coords = ('z_pde' in data_batch) or ('coords_pde_spatial' in data_batch and data_batch['coords_pde_spatial'].shape[1] >= 3)
+        is_vs_pinn = has_3d_coords and hasattr(self.physics, 'compute_momentum_residuals')
     
         # ==================== 1. PDE 點前向傳播 ====================
         # ==================== 🚀 Wave 1-2 優化：使用預拼接空間座標 ====================
@@ -790,6 +793,42 @@ class Trainer:
         u_sensors_pred_phys: torch.Tensor = u_sensors_pred_phys_raw if isinstance(u_sensors_pred_phys_raw, torch.Tensor) else torch.tensor(u_sensors_pred_phys_raw, device=self.device)
     
         # ==================== 4. 使用 LossManager 計算所有損失 ====================
+        # ==================== 🚀 Wave 2 優化：預計算所有梯度並緩存（針對 VS-PINN）====================
+        gradients = None
+        if is_vs_pinn and hasattr(self.physics, 'compute_momentum_residuals'):
+            # 🔍 Debug: 確認 gradient cache 啟用
+            if epoch <= 1:
+                print(f"[Wave 2 Debug] Epoch {epoch}: Gradient Cache ENABLED")
+            
+            # 建立梯度緩存
+            grad_cache = GradientCache(device=self.device)
+            
+            # 構建預測字典（物理空間）
+            if u_pred_pde_physical.shape[1] == 3:
+                # [u, v, p] → 添加 w=0
+                predictions_dict = {
+                    'u': u_pred_pde_physical[:, 0:1],
+                    'v': u_pred_pde_physical[:, 1:2],
+                    'w': torch.zeros_like(u_pred_pde_physical[:, 2:3]),
+                    'p': u_pred_pde_physical[:, 2:3]
+                }
+            elif u_pred_pde_physical.shape[1] == 4:
+                # [u, v, w, p]
+                predictions_dict = {
+                    'u': u_pred_pde_physical[:, 0:1],
+                    'v': u_pred_pde_physical[:, 1:2],
+                    'w': u_pred_pde_physical[:, 2:3],
+                    'p': u_pred_pde_physical[:, 3:4]
+                }
+            else:
+                raise ValueError(f"VS-PINN 預測維度錯誤: {u_pred_pde_physical.shape[1]}，期望 3 或 4")
+            
+            # 計算所有梯度（一次計算，多次使用）
+            gradients = grad_cache.compute_all_gradients(predictions_dict, coords_pde_physical)
+            
+            # 注意：不在這裡清除 cache，因為下面的 loss 計算需要使用 gradients
+            # cache 會在 backward() 後自動被 PyTorch 清理
+        
         # 4.1 PDE 損失
         pde_losses = self.loss_manager.compute_pde_loss(
             coords_pde_physical=coords_pde_physical,
@@ -797,7 +836,8 @@ class Trainer:
             u_pred_pde_physical=u_pred_pde_physical,
             data_batch=data_batch,
             epoch=epoch,
-            is_vs_pinn=is_vs_pinn
+            is_vs_pinn=is_vs_pinn,
+            gradients=gradients  # 🚀 Wave 2: 傳遞預計算的梯度
         )
     
         # 4.2 邊界條件損失

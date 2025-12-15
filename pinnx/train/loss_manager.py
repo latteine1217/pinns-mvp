@@ -90,7 +90,8 @@ class LossManager:
         u_pred_pde_physical: torch.Tensor,
         data_batch: Dict[str, Any],
         epoch: int,
-        is_vs_pinn: bool = False
+        is_vs_pinn: bool = False,
+        gradients: Optional[Dict[str, torch.Tensor]] = None
     ) -> Dict[str, torch.Tensor]:
         """
         計算 PDE 殘差損失（動量方程 + 連續方程）
@@ -102,6 +103,7 @@ class LossManager:
             data_batch: 資料批次字典
             epoch: 當前訓練輪次
             is_vs_pinn: 是否為 VS-PINN 模式
+            gradients: 🚀 Wave 2 - 預計算的梯度字典（可選，None 則自動計算）
             
         Returns:
             損失字典，包含：
@@ -143,16 +145,18 @@ class LossManager:
         # 計算物理殘差
         try:
             if is_vs_pinn and hasattr(self.physics, 'compute_momentum_residuals'):
-                # VS-PINN 3D
+                # VS-PINN 3D（🚀 Wave 2: 傳遞預計算的梯度）
                 residuals_mom = self.physics.compute_momentum_residuals(
                     coords_pde_physical,
                     predictions_phys,
-                    scaled_coords=model_coords_pde
+                    scaled_coords=model_coords_pde,
+                    gradients=gradients  # 🚀 Wave 2: 如果 None，physics 會自動計算
                 )
                 continuity_residual = self.physics.compute_continuity_residual(
                     coords_pde_physical,
                     predictions_phys,
-                    scaled_coords=model_coords_pde
+                    scaled_coords=model_coords_pde,
+                    gradients=gradients  # 🚀 Wave 2: 如果 None，physics 會自動計算
                 )
                 residuals = {
                     'momentum_x': residuals_mom['momentum_x'],
