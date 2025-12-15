@@ -1,0 +1,196 @@
+........s.............F..F..sss.....................................ssss [ 11%]
+ssssssss...s......ssss.s.......ss..s..........EEEEEEF.........F......... [ 23%]
+.......................FFFFFF.F......s..s...FFF......................... [ 35%]
+.......................................EE................F.F............ [ 47%]
+...............................s...............................FF....... [ 59%]
+F.................ss.F.................................................. [ 71%]
+.......F......F................EEEEE.................................... [ 83%]
+....................................F.F................................. [ 95%]
+...............F....FFs.....                                             [100%]
+=============================== warnings summary ===============================
+external/pyJHTDB/pyJHTDB/interpolator.py:44
+  /Users/latteine/Documents/coding/pinns-mvp/external/pyJHTDB/pyJHTDB/interpolator.py:44: DeprecationWarning: Please import `correlate1d` from the `scipy.ndimage` namespace; the `scipy.ndimage.filters` namespace is deprecated and will be removed in SciPy 2.0.0.
+    from scipy.ndimage.filters import correlate1d
+
+tests/test_adaptive_integration.py::test_point_weights
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_adaptive_integration.py::test_point_weights returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validate_physics_before_save_enabled
+tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validate_physics_before_save_disabled
+tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validate_physics_3d_model
+tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_physics_metrics_in_checkpoint
+tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validation_with_custom_thresholds
+tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validation_error_handling
+  /Users/latteine/Documents/coding/pinns-mvp/tests/test_checkpoint_physics_validation.py:28: DeprecationWarning: FourierMLP is deprecated and will be removed in a future version. Use PINNNet instead.
+    self.model = FourierMLP(
+
+tests/test_checkpoint_physics_validation.py::TestTrainerPhysicsValidationIntegration::test_checkpoint_rejection_on_validation_failure
+  /Users/latteine/Documents/coding/pinns-mvp/tests/test_checkpoint_physics_validation.py:188: DeprecationWarning: FourierMLP is deprecated and will be removed in a future version. Use PINNNet instead.
+    model = FourierMLP(
+
+tests/test_inlet_integration.py::test_inlet_loss_computation
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_inlet_integration.py::test_inlet_loss_computation returned <class 'list'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_inlet_integration.py::test_config_reading
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_inlet_integration.py::test_config_reading returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_kolmogorov_flow.py::TestKolmogorovFlowInitialization::test_invalid_parameters
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/kolmogorov_flow_2d.py:169: RuntimeWarning: invalid value encountered in sqrt
+    Re = np.sqrt(f0) * (L ** 1.5) / nu
+
+tests/test_loss_normalization.py::test_normalization_warmup
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_loss_normalization.py::test_normalization_warmup returned <class 'pinnx.physics.vs_pinn_channel_flow.VSPINNChannelFlow'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_lr_schedulers.py::test_warmup_cosine_scheduler_cosine_phase
+tests/test_lr_schedulers.py::test_warmup_cosine_scheduler_state_dict
+tests/test_lr_schedulers.py::test_scheduler_checkpoint_integration
+tests/test_lr_schedulers.py::test_exponential_lr
+tests/test_lr_schedulers.py::test_step_lr
+tests/test_lr_schedulers.py::test_scheduler_step_updates_lr
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/torch/optim/lr_scheduler.py:192: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+    warnings.warn(
+
+tests/test_metrics.py::TestPhysicsMetrics::test_conservation_error
+tests/test_metrics.py::TestComprehensiveEvaluation::test_comprehensive_evaluation
+tests/test_metrics_gradient_fix.py::TestGradientCalculation::test_conservation_error_with_grad
+tests/test_metrics_gradient_fix.py::TestEdgeCases::test_empty_tensor
+tests/test_metrics_gradient_fix.py::TestEdgeCases::test_single_point
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/evals/metrics.py:155: UserWarning: u or v not connected to coords in computation graph, conservation error may be inaccurate
+    warnings.warn("u or v not connected to coords in computation graph, conservation error may be inaccurate")
+
+tests/test_metrics.py::TestPhysicsMetrics::test_conservation_error
+tests/test_metrics_gradient_fix.py::TestGradientCalculation::test_conservation_error_with_grad
+tests/test_metrics_gradient_fix.py::TestEdgeCases::test_single_point
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/evals/metrics.py:163: UserWarning: Cannot compute gradients: u/v not connected to coords
+    warnings.warn("Cannot compute gradients: u/v not connected to coords")
+
+tests/test_metrics.py::TestComprehensiveEvaluation::test_comprehensive_evaluation
+tests/test_metrics_gradient_fix.py::TestEdgeCases::test_empty_tensor
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/evals/metrics.py:182: UserWarning: Conservation calculation failed: element 0 of tensors does not require grad and does not have a grad_fn
+    warnings.warn(f"Conservation calculation failed: {e}")
+
+tests/test_nondimensionalizer_integration.py::test_error_reduction_potential
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_nondimensionalizer_integration.py::test_error_reduction_potential returned <class 'tuple'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_physics_base.py::TestGradientOps::test_compute_gradient_safe
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/base/gradient_ops.py:254: UserWarning: 梯度為 None，返回零梯度
+    warnings.warn("梯度為 None，返回零梯度")
+
+tests/test_physics_validation.py::test_float_comparison_fix
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_physics_validation.py::test_float_comparison_fix returned <class 'dict'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_physics_validation.py::test_poiseuille_solution
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_physics_validation.py::test_poiseuille_solution returned <class 'dict'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_physics_validation.py::test_continuity_residual
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_physics_validation.py::test_continuity_residual returned <class 'dict'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_physics_validators.py::TestPhysicsValidators::test_validate_mass_conservation_pass
+tests/test_physics_validators.py::TestPhysicsValidators::test_compute_physics_metrics_2d
+tests/test_physics_validators.py::TestPhysicsValidators::test_compute_physics_metrics_3d
+tests/test_physics_validators.py::TestPhysicsValidators::test_compute_physics_metrics_with_custom_thresholds
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/validators.py:108: UserWarning: 質量守恆驗證失敗：element 0 of tensors does not require grad and does not have a grad_fn
+    warnings.warn(f"質量守恆驗證失敗：{str(e)}")
+
+tests/test_physics_validators.py::TestPhysicsValidators::test_validate_momentum_conservation
+tests/test_physics_validators.py::TestPhysicsValidators::test_compute_physics_metrics_2d
+tests/test_physics_validators.py::TestPhysicsValidators::test_compute_physics_metrics_3d
+tests/test_physics_validators.py::TestPhysicsValidators::test_compute_physics_metrics_with_custom_thresholds
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/validators.py:189: UserWarning: 動量守恆驗證失敗：element 0 of tensors does not require grad and does not have a grad_fn
+    warnings.warn(f"動量守恆驗證失敗：{str(e)}")
+
+tests/test_physics_validators.py: 3 warnings
+tests/test_trainer.py: 9 warnings
+tests/test_validator_nonetype_fix.py: 1 warning
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/validators.py:228: UserWarning: 未找到壁面點，無法驗證邊界條件
+    warnings.warn("未找到壁面點，無法驗證邊界條件")
+
+tests/test_rans_nu_t_integration.py::test_all
+  /Users/latteine/.pyenv/versions/3.10.12/lib/python3.10/site-packages/_pytest/python.py:161: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_rans_nu_t_integration.py::test_all returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_turbulence_utils.py::TestPreprocessRANSPrior::test_full_pipeline
+tests/test_turbulence_utils.py::test_all
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/turbulence_utils.py:270: UserWarning: 發現 36 (36.0%) 個點超出 ν_t/ν > 1000.0，已裁剪。考慮增加 max_ratio 或檢查 RANS 數據。
+    warnings.warn(
+
+tests/test_validator_nonetype_fix.py::TestValidatorNoneTypeFix::test_2d_coords_with_none_w
+tests/test_validator_nonetype_fix.py::TestValidatorNoneTypeFix::test_3d_coords_with_none_w
+tests/test_validator_nonetype_fix.py::TestValidatorNoneTypeFix::test_3d_coords_with_w
+tests/test_validator_nonetype_fix.py::TestValidatorNoneTypeFix::test_compute_physics_metrics_with_none_w
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/validators.py:189: UserWarning: 動量守恆驗證失敗：One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+    warnings.warn(f"動量守恆驗證失敗：{str(e)}")
+
+tests/test_validator_nonetype_fix.py::TestValidatorNoneTypeFix::test_compute_physics_metrics_with_none_w
+  /Users/latteine/Documents/coding/pinns-mvp/pinnx/physics/validators.py:108: UserWarning: 質量守恆驗證失敗：One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+    warnings.warn(f"質量守恆驗證失敗：{str(e)}")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_adaptive_integration.py::test_training_loop_manager_initialization
+FAILED tests/test_amp_integration.py::test_amp_scaler_initialization - Assert...
+FAILED tests/test_checkpoint_physics_validation.py::TestTrainerPhysicsValidationIntegration::test_checkpoint_rejection_on_validation_failure
+FAILED tests/test_checkpointing.py::TestLoadCheckpoint::test_load_checkpoint_missing_metadata_raises
+FAILED tests/test_factory.py::TestCreateModel::test_basic_model - ValueError:...
+FAILED tests/test_factory.py::TestCreateModel::test_fourier_model - ValueErro...
+FAILED tests/test_factory.py::TestCreateModel::test_manual_normalization_with_statistics
+FAILED tests/test_factory.py::TestCreateModel::test_vs_pinn_model - ValueErro...
+FAILED tests/test_factory.py::TestCreateModel::test_factory_siren_initialization
+FAILED tests/test_factory.py::TestCreateModel::test_model_device_placement - ...
+FAILED tests/test_factory.py::TestCreateModel::test_normalization_without_statistics
+FAILED tests/test_factory.py::TestFactoryIntegration::test_full_pipeline_basic
+FAILED tests/test_factory.py::TestFactoryIntegration::test_full_pipeline_vs_pinn
+FAILED tests/test_factory.py::TestFactoryIntegration::test_scheduler_step_progression
+FAILED tests/test_losses.py::TestWeightingStrategies::test_adaptive_weighting
+FAILED tests/test_losses.py::TestWeightingStrategies::test_multiobjective_weighting
+FAILED tests/test_models.py::TestPINNNet::test_fourier_inverse_normalizer_standard
+FAILED tests/test_models.py::TestPINNNet::test_fourier_inverse_normalizer_minmax
+FAILED tests/test_nondimensionalizer_integration.py::test_integration_with_physics
+FAILED tests/test_performance_optimizations.py::TestConfigurationLoading::test_gradient_checkpoint_config_parsing
+FAILED tests/test_physics_validators.py::TestPhysicsValidators::test_validate_mass_conservation_pass
+FAILED tests/test_physics_validators.py::TestPhysicsValidators::test_compute_physics_metrics_with_custom_thresholds
+FAILED tests/test_trainer.py::TestTrainerTraining::test_train_with_lr_scheduler
+FAILED tests/test_trainer.py::TestTrainerTraining::test_train_fast_convergence
+FAILED tests/test_vs_pinn_channel_flow.py::TestVSPINNChannelFlow::test_wall_shear_stress_computation
+FAILED tests/test_vs_pinn_channel_flow.py::TestVSPINNChannelFlow::test_gradient_computation_stability
+FAILED tests/test_vs_pinn_channel_flow.py::TestVSPINNChannelFlow::test_extreme_scaling_factors
+ERROR tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validate_physics_before_save_enabled
+ERROR tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validate_physics_before_save_disabled
+ERROR tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validate_physics_3d_model
+ERROR tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_physics_metrics_in_checkpoint
+ERROR tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validation_with_custom_thresholds
+ERROR tests/test_checkpoint_physics_validation.py::TestCheckpointPhysicsValidation::test_validation_error_handling
+ERROR tests/test_loss_normalization.py::test_normalization_training
+ERROR tests/test_loss_normalization.py::test_normalization_preserves_relative_order
+ERROR tests/test_qr_pivoting_fix.py::test_feature_standardization
+ERROR tests/test_qr_pivoting_fix.py::test_circular_shift
+ERROR tests/test_qr_pivoting_fix.py::test_pod_deim_comparison
+ERROR tests/test_qr_pivoting_fix.py::test_fluctuation_features
+ERROR tests/test_qr_pivoting_fix.py::test_min_distance_constraint
+27 failed, 533 passed, 31 skipped, 63 warnings, 13 errors in 35.13s
