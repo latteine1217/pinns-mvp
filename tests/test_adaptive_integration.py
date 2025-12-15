@@ -23,15 +23,43 @@ logging.basicConfig(
 def test_training_loop_manager_initialization():
     """測試訓練循環管理器初始化"""
     
-    # 載入配置
-    config_path = Path(__file__).parent.parent / 'configs' / 'inverse_reconstruction_main.yml'
+    # 使用動態配置（不依賴外部配置檔案）
+    config = {
+        'training': {
+            'sampling': {
+                'pde_points': 1000,
+                'adaptive_sampling': True,
+                'adaptive_collocation': {
+                    'enabled': True,
+                    'trigger': {
+                        'method': 'epoch_interval',
+                        'epoch_interval': 100
+                    },
+                    'resampling_strategy': 'incremental_replace',
+                    'incremental_replace': {
+                        'keep_ratio': 0.7,
+                        'replace_ratio': 0.3,
+                        'removal_criterion': 'leverage_score'
+                    },
+                    'residual_qr': {
+                        'enabled': True,
+                        'candidate_pool_size': 500
+                    }
+                }
+            }
+        },
+        'physics': {
+            'type': 'ns_2d',
+            'nu': 0.01,
+            'domain': {
+                'x': [0.0, 1.0],
+                'y': [0.0, 1.0]
+            }
+        }
+    }
     
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    
-    # 🔧 強制啟用自適應採樣（用於測試）
-    if 'adaptive_collocation' not in config:
-        config['adaptive_collocation'] = {}
+    # 🔧 確保自適應採樣已啟用
+    config['adaptive_collocation'] = config['training']['sampling']['adaptive_collocation']
     config['adaptive_collocation']['enabled'] = True
     
     # 檢查配置

@@ -641,3 +641,35 @@ class NSEquations2D(NavierStokesBase):
             'kinematic_viscosity': self.nu,
             'reynolds_number': self.Re
         }
+
+
+# ============================================================================
+# Backward Compatibility Aliases
+# ============================================================================
+
+def _deprecation_warning(old_name: str, new_name: str):
+    """發出棄用警告"""
+    warnings.warn(
+        f"{old_name} is deprecated and will be removed in v2.0. "
+        f"Please use {new_name} instead.",
+        DeprecationWarning,
+        stacklevel=3
+    )
+
+# 向後相容別名：NavierStokes2D → NSEquations2D
+class NavierStokes2D(NSEquations2D):
+    """
+    [DEPRECATED] Backward compatibility wrapper for NSEquations2D.
+    
+    This class will be removed in v2.0. Please update your code to use
+    NSEquations2D instead:
+    
+        # Old (deprecated)
+        from pinnx.physics.ns_2d import NavierStokes2D
+        
+        # New (recommended)
+        from pinnx.physics.ns_2d import NSEquations2D
+    """
+    def __init__(self, *args, **kwargs):
+        _deprecation_warning('NavierStokes2D', 'NSEquations2D')
+        super().__init__(*args, **kwargs)

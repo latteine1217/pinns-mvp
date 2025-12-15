@@ -694,3 +694,35 @@ class NSEquations3DThinSlab(NavierStokesBase):
     def density(self) -> float:
         """向後兼容: 返回 self.rho"""
         return self.rho
+
+
+# ============================================================================
+# Backward Compatibility Aliases
+# ============================================================================
+
+def _deprecation_warning(old_name: str, new_name: str):
+    """發出棄用警告"""
+    warnings.warn(
+        f"{old_name} is deprecated and will be removed in v2.0. "
+        f"Please use {new_name} instead.",
+        DeprecationWarning,
+        stacklevel=3
+    )
+
+# 向後相容別名：NavierStokes3DThinSlab → NSEquations3DThinSlab
+class NavierStokes3DThinSlab(NSEquations3DThinSlab):
+    """
+    [DEPRECATED] Backward compatibility wrapper for NSEquations3DThinSlab.
+    
+    This class will be removed in v2.0. Please update your code to use
+    NSEquations3DThinSlab instead:
+    
+        # Old (deprecated)
+        from pinnx.physics.ns_3d_thin_slab import NavierStokes3DThinSlab
+        
+        # New (recommended)
+        from pinnx.physics.ns_3d_thin_slab import NSEquations3DThinSlab
+    """
+    def __init__(self, *args, **kwargs):
+        _deprecation_warning('NavierStokes3DThinSlab', 'NSEquations3DThinSlab')
+        super().__init__(*args, **kwargs)

@@ -10,7 +10,8 @@ import tempfile
 import os
 from pathlib import Path
 import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.train.checkpointing import validate_physics_before_save
 from pinnx.models.fourier_mlp import FourierMLP
@@ -31,7 +32,7 @@ class TestCheckpointPhysicsValidation:
             width=32,
             depth=2,
             activation='tanh',
-            fourier_features=False
+            use_fourier=False  # Updated parameter name
         ).to(self.device)
 
         # 基本配置
@@ -94,7 +95,7 @@ class TestCheckpointPhysicsValidation:
             width=32,
             depth=2,
             activation='tanh',
-            fourier_features=False
+            use_fourier=False  # Updated parameter name
         ).to(self.device)
 
         coords = torch.randn(50, 3, device=self.device)
@@ -187,7 +188,7 @@ class TestTrainerPhysicsValidationIntegration:
 
         model = FourierMLP(
             in_dim=2, out_dim=3, width=16, depth=2,
-            activation='tanh', fourier_features=False
+            activation='tanh', use_fourier=False  # Updated parameter name
         ).to(self.device)
 
         # 設置非常嚴格的閾值，確保驗證失敗
