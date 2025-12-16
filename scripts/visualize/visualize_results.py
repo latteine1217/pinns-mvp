@@ -175,59 +175,20 @@ class EnhancedVisualizer:
                                  coords: torch.Tensor,
                                  save_name: str = "flow_field_overview") -> str:
         """
-        創建流場總覽圖：u, v, p 場的綜合展示
+        [Updated] 創建流場總覽：不再生成單一大圖，而是為每個場生成單獨的對比圖
+        以符合論文圖片規範（避免過多子圖）
         """
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-        fig.suptitle('Flow Field Overview: PINNs vs JHTDB', fontsize=16)
+        generated_files = []
+        for field in ['u', 'v', 'p']:
+            if field in pred_data and field in ref_data:
+                # Reuse the high-quality 3-panel comparison
+                path = self.create_three_panel_comparison(
+                    pred_data, ref_data, coords, field, f"{save_name}"
+                )
+                generated_files.append(path)
         
-        fields = ['u', 'v', 'p']
-        field_names = ['Velocity U', 'Velocity V', 'Pressure']
-        
-        # 座標處理
-        if coords.shape[1] == 3:
-            x_coords = coords[:, 1].detach().cpu().numpy()
-            y_coords = coords[:, 2].detach().cpu().numpy()
-        else:
-            x_coords = coords[:, 0].detach().cpu().numpy()
-            y_coords = coords[:, 1].detach().cpu().numpy()
-        
-        for i, (field, field_name) in enumerate(zip(fields, field_names)):
-            pred_field = pred_data[field].detach().cpu().numpy()
-            ref_field = ref_data[field].detach().cpu().numpy()
-            
-            # 統一色階
-            vmin = min(pred_field.min(), ref_field.min())
-            vmax = max(pred_field.max(), ref_field.max())
-            
-            # PINNs預測 (上排)
-            im1 = axes[0, i].scatter(x_coords, y_coords, c=pred_field, 
-                                   vmin=vmin, vmax=vmax, cmap='RdBu_r', s=15)
-            axes[0, i].set_title(f'PINNs: {field_name}')
-            axes[0, i].grid(True, alpha=0.3)
-            plt.colorbar(im1, ax=axes[0, i])
-            
-            # JHTDB參考 (下排)
-            im2 = axes[1, i].scatter(x_coords, y_coords, c=ref_field, 
-                                   vmin=vmin, vmax=vmax, cmap='RdBu_r', s=15)
-            axes[1, i].set_title(f'JHTDB: {field_name}')
-            axes[1, i].grid(True, alpha=0.3)
-            plt.colorbar(im2, ax=axes[1, i])
-            
-            # 設定軸標籤
-            if i == 0:
-                axes[0, i].set_ylabel('y (PINNs)')
-                axes[1, i].set_ylabel('y (JHTDB)')
-            axes[1, i].set_xlabel('x')
-        
-        plt.tight_layout()
-        
-        # 儲存
-        save_path = self.output_dir / f"{save_name}.png"
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        logger.info(f"流場總覽圖已儲存: {save_path}")
-        return str(save_path)
+        # Return the path of the first generated file as a representative
+        return generated_files[0] if generated_files else ""
     
     def create_error_analysis_plot(self, 
                                  pred_data: Dict[str, torch.Tensor],

@@ -58,6 +58,9 @@ python scripts/visualize/visualize_qr_sensors.py --input <sensors.npz> --output 
 # DNS 視覺化
 python scripts/visualize/visualize_kolmogorov_dns.py --input <dns.h5> --output <dir>
 
+# JHTDB Channel 2D slice（可重現圖）
+python scripts/visualize/plot_jhtdb_channel_2d_slice.py --field u --outdir thesis/result_figures
+
 # 通道流 3D
 python scripts/visualize/visualize_channel_3d.py --input <channel.h5> --output <dir>
 

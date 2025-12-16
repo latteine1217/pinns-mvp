@@ -502,13 +502,25 @@ class Trainer:
             logging.info("✅ 使用 Cosine 學習率調度器")
         
         elif scheduler_type == 'exponential':
-            # 指數衰減調度器
+            # 指數/步進衰減調度器
             gamma = scheduler_cfg.get('gamma', 0.999)
-            self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                self.optimizer,
-                gamma=gamma
-            )
-            logging.info(f"✅ 使用 Exponential 調度器 (gamma={gamma})")
+            step_size = scheduler_cfg.get('step_size', None)
+
+            if step_size is not None:
+                # 有 step_size：每 step_size epochs 衰減一次（使用 StepLR）
+                self.lr_scheduler = torch.optim.lr_scheduler.StepLR(
+                    self.optimizer,
+                    step_size=step_size,
+                    gamma=gamma
+                )
+                logging.info(f"✅ 使用 Step 調度器 (gamma={gamma}, step_size={step_size} epochs)")
+            else:
+                # 無 step_size：每個 epoch 都衰減（原始 ExponentialLR）
+                self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                    self.optimizer,
+                    gamma=gamma
+                )
+                logging.info(f"✅ 使用 Exponential 調度器 (gamma={gamma}, 每 epoch 衰減)")
         
         elif scheduler_type == 'step':
             # StepLR 調度器
