@@ -141,6 +141,32 @@ class LossManager:
         t_pde = data_batch.get('t_pde')
         if t_pde is not None:
             t_pde = t_pde.to(self.device).requires_grad_(True)
+            
+            # ========== 驗證: 時間維度處理 ==========
+            if epoch == 0:
+                # 檢查 coords_pde_physical 是否包含時間維度
+                if coords_pde_physical.shape[1] == 2:
+                    logging.warning(
+                        "⚠️  coords_pde_physical 僅包含 [x, y] 空間座標 (2D)\n"
+                        "    時間維度將透過 kwargs['time'] 傳遞給 physics 模組"
+                    )
+                elif coords_pde_physical.shape[1] == 3:
+                    logging.info("✅ coords_pde_physical 包含完整 [x, y, t] 座標 (3D)")
+                else:
+                    logging.info(f"ℹ️  coords_pde_physical 維度: {coords_pde_physical.shape[1]}")
+                
+                # 檢查 physics 模組是否支援時間參數
+                if hasattr(self.physics, 'residual_unified'):
+                    residual_fn = self.physics.residual_unified
+                    sig = inspect.signature(residual_fn)
+                    if 'time' in sig.parameters:
+                        logging.info("✅ Physics 模組支援 'time' 參數（透過 kwargs 傳遞）")
+                    else:
+                        logging.error(
+                            "❌ Physics 模組不支援 'time' 參數！\n"
+                            "   但資料批次包含 t_pde，可能導致穩態方程錯誤"
+                        )
+            # =========================================
         
         # 計算物理殘差
         try:

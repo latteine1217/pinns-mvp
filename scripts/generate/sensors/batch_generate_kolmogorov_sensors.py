@@ -21,21 +21,32 @@ logger = logging.getLogger(__name__)
 
 def load_rans_data(rans_file: str, time_range: tuple = (15.0, 35.0)):
     """
-    載入 RANS 數據 (穩態平均場)
+    載入 RANS/Leith 數據 (穩態平均場)
     
-    Note: time_range 參數保留作為介面相容性，但 RANS 是穩態場，無時間維度
+    Note: time_range 參數保留作為介面相容性，但 RANS/Leith 是穩態場，無時間維度
     """
-    logger.info(f"📂 載入 RANS 數據: {rans_file}")
+    logger.info(f"📂 載入低保真數據: {rans_file}")
     
     with h5py.File(rans_file, 'r') as f:
-        # RANS 是穩態平均場，存在 mean_field 群組中
+        # 低保真場存在 mean_field 群組中
         mean_field = f['mean_field']
         
-        # 載入網格座標 (已經是 meshgrid 形式)
-        X = mean_field['X'][:]  # Shape: (nx, ny)
-        Y = mean_field['Y'][:]
-        nx, ny = X.shape
-        logger.info(f"   RANS 解析度: {nx} × {ny}")
+        # 載入網格座標（可能是 X/Y meshgrid 或 x/y 1D arrays）
+        if 'X' in mean_field and 'Y' in mean_field:
+            # k-ε RANS 格式：X, Y 是 meshgrid
+            X = mean_field['X'][:]  # Shape: (nx, ny)
+            Y = mean_field['Y'][:]
+            nx, ny = X.shape
+        elif 'x' in mean_field and 'y' in mean_field:
+            # Leith 格式：x, y 是 1D arrays
+            x = mean_field['x'][:]  # Shape: (nx,)
+            y = mean_field['y'][:]  # Shape: (ny,)
+            nx, ny = len(x), len(y)
+            X, Y = np.meshgrid(x, y, indexing='ij')
+        else:
+            raise ValueError("無法找到座標數據（需要 X/Y 或 x/y）")
+        
+        logger.info(f"   解析度: {nx} × {ny}")
         
         # 攤平成座標矩陣
         coords = np.stack([X.ravel(), Y.ravel()], axis=1)  # Shape: (nx*ny, 2)
@@ -43,21 +54,36 @@ def load_rans_data(rans_file: str, time_range: tuple = (15.0, 35.0)):
         # 載入速度場與湍流量
         u = mean_field['u'][:]  # Shape: (nx, ny)
         v = mean_field['v'][:]
-        k = mean_field['k'][:]  # 湍流動能
-        epsilon = mean_field['epsilon'][:]  # 耗散率
         nu_t = mean_field['nu_t'][:]  # 渦流黏度
         
-        # 組合成特徵矩陣: (nx*ny, n_features)
-        # 使用 u, v, k, epsilon, nu_t 作為特徵
-        features = np.stack([
-            u.ravel(),
-            v.ravel(),
-            k.ravel(),
-            epsilon.ravel(),
-            nu_t.ravel()
-        ], axis=1)  # Shape: (nx*ny, 5)
-        
-        logger.info(f"   特徵矩陣形狀: {features.shape} (u, v, k, epsilon, nu_t)")
+        # 檢查是否有 k 和 epsilon（k-ε RANS）或只有 nu_t（Leith）
+        if 'k' in mean_field and 'epsilon' in mean_field:
+            k = mean_field['k'][:]
+            epsilon = mean_field['epsilon'][:]
+            features = np.stack([
+                u.ravel(),
+                v.ravel(),
+                k.ravel(),
+                epsilon.ravel(),
+                nu_t.ravel()
+            ], axis=1)
+            logger.info(f"   特徵矩陣形狀: {features.shape} (u, v, k, epsilon, nu_t)")
+        else:
+            # Leith 模型：只有 u, v, nu_t
+            # 計算渦度作為額外特徵
+            dx = X[1, 0] - X[0, 0]
+            dy = Y[0, 1] - Y[0, 0]
+            dvdx = np.gradient(v, dx, axis=0)
+            dudy = np.gradient(u, dy, axis=1)
+            vorticity = dvdx - dudy
+            
+            features = np.stack([
+                u.ravel(),
+                v.ravel(),
+                nu_t.ravel(),
+                vorticity.ravel()
+            ], axis=1)
+            logger.info(f"   特徵矩陣形狀: {features.shape} (u, v, nu_t, vorticity) [Leith model]")
         
     return coords, features, (nx, ny)
 
@@ -149,30 +175,31 @@ def generate_sensors_for_K(
 
 
 def main():
-    """批次生成 K=30, 50, 80, 100 的感測器"""
+    """批次生成 K=30, 50, 80, 100 的感測器（基於 Leith 模型）"""
     
     # 配置
-    rans_file = "./data/lowfi/kolmogorov_rans/rans_re50_kf4.h5"
+    lowfi_file = "./data/lowfi/kolmogorov_rans/rans_re50_kf4_leith.h5"  # 改用 Leith 數據
     K_values = [30, 50, 80, 100]
     dns_resolution = (256, 256)
-    time_range = (15.0, 35.0)  # 穩定態區間
+    time_range = (15.0, 35.0)  # 穩定態區間（保留介面相容性）
     output_dir = "./data/sensors/kolmogorov"
     
-    logger.info("🚀 開始批次生成 Kolmogorov Flow 感測器\n")
-    logger.info(f"RANS 數據: {rans_file}")
+    logger.info("🚀 開始批次生成 Kolmogorov Flow 感測器（基於 Leith 模型）\n")
+    logger.info(f"低保真數據: {lowfi_file}")
     logger.info(f"DNS 解析度: {dns_resolution[0]}×{dns_resolution[1]}")
     logger.info(f"K 值: {K_values}\n")
     
-    # 檢查 RANS 檔案
-    if not Path(rans_file).exists():
-        logger.error(f"❌ RANS 檔案不存在: {rans_file}")
+    # 檢查低保真檔案
+    if not Path(lowfi_file).exists():
+        logger.error(f"❌ 低保真檔案不存在: {lowfi_file}")
+        logger.error(f"   請確認 Leith 模型數據已生成")
         sys.exit(1)
     
     # 批次生成
     for K in K_values:
         try:
             generate_sensors_for_K(
-                rans_file=rans_file,
+                rans_file=lowfi_file,  # 參數名保留但傳入 Leith 文件
                 K=K,
                 dns_resolution=dns_resolution,
                 time_range=time_range,

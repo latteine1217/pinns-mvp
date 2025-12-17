@@ -1079,6 +1079,156 @@ class QRPivotSelector(BaseSensorSelector):
 
         return result
 
+    def select_sensors_per_feature(self,
+                                   data_matrix: np.ndarray,
+                                   n_sensors_per_feature: int,
+                                   coords: Optional[np.ndarray] = None,
+                                   feature_names: Optional[List[str]] = None,
+                                   return_details: bool = False) -> Union[Tuple[np.ndarray, Dict], Tuple[np.ndarray, Dict, Dict]]:
+        """
+        Per-feature QR-Pivot 選點策略：每個特徵獨立選擇感測點
+        
+        這種策略確保每個物理量（u, v, w, p, k, ...）都有專屬的代表性感測點，
+        避免某些特徵被主導特徵淹沒。
+        
+        策略：
+        1. 對每個特徵列 data_matrix[:, i] 單獨執行 QR-Pivot
+        2. 為每個特徵選擇 n_sensors_per_feature 個最重要的空間點
+        3. 合併所有特徵的感測點（去重）
+        4. 總感測點數 ≤ n_features * n_sensors_per_feature
+        
+        Args:
+            data_matrix: [n_locations, n_features]
+            n_sensors_per_feature: 每個特徵選擇的感測點數（例如 5）
+            coords: [n_locations, n_dims]（可選，用於空間分析）
+            feature_names: 特徵名稱列表（可選，用於診斷）
+            return_details: 是否返回詳細的 per-feature 選點資訊
+        
+        Returns:
+            (selected_indices, metrics, [details])
+            - selected_indices: 合併後的感測點索引 [≤ n_features * n_sensors_per_feature]
+            - metrics: 整體品質指標
+            - details (可選): 每個特徵的詳細選點資訊
+        
+        Example:
+            >>> # 18 個特徵，每個特徵選 5 個點
+            >>> indices, metrics, details = selector.select_sensors_per_feature(
+            ...     data_matrix, n_sensors_per_feature=5, return_details=True
+            ... )
+            >>> print(f"Total sensors: {len(indices)}")  # 最多 18*5=90 個（去重後可能更少）
+            >>> print(f"Feature 'u' sensors: {details['u']['indices']}")
+        """
+        # 確保數據為 numpy 數組
+        if isinstance(data_matrix, torch.Tensor):
+            data_matrix = data_matrix.detach().cpu().numpy()
+        if coords is not None and isinstance(coords, torch.Tensor):
+            coords = coords.detach().cpu().numpy()
+        
+        n_locations, n_features = data_matrix.shape
+        
+        if feature_names is None:
+            feature_names = [f"feature_{i}" for i in range(n_features)]
+        
+        logger.info(f"\n🔍 Per-Feature QR-Pivot Selection:")
+        logger.info(f"   Features: {n_features}")
+        logger.info(f"   Sensors per feature: {n_sensors_per_feature}")
+        logger.info(f"   Max total sensors: {n_features * n_sensors_per_feature}")
+        
+        # 標準化整個資料矩陣（跨特徵一致性）
+        X_mean = data_matrix.mean(axis=0, keepdims=True)
+        X_std = data_matrix.std(axis=0, keepdims=True) + 1e-8
+        data_normalized = (data_matrix - X_mean) / X_std
+        
+        # 儲存每個特徵的選點結果
+        per_feature_indices = {}
+        per_feature_details = {}
+        all_indices_list = []
+        
+        # 對每個特徵單獨執行 QR-Pivot
+        for i, fname in enumerate(feature_names):
+            # 提取單一特徵列作為 [n_locations, 1] 矩陣
+            feature_col = data_normalized[:, i:i+1]
+            
+            try:
+                # 對單一特徵執行 QR 分解
+                # feature_col.T: [1, n_locations]
+                Q, R, piv = qr(feature_col.T, mode='economic', pivoting=True)
+                
+                # 選擇前 n_sensors_per_feature 個主元
+                n_select = min(n_sensors_per_feature, n_locations)
+                feature_indices = piv[:n_select]
+                
+                # 計算該特徵的 R 對角線（重要性指標）
+                r_diag = np.abs(np.diag(R)[:n_select])
+                
+                per_feature_indices[fname] = feature_indices
+                per_feature_details[fname] = {
+                    'indices': feature_indices,
+                    'importance': r_diag,
+                    'feature_index': i,
+                    'n_selected': len(feature_indices)
+                }
+                
+                all_indices_list.append(feature_indices)
+                
+                logger.info(f"   ✓ {fname:12s}: selected {len(feature_indices):2d} points, "
+                          f"importance range [{r_diag.min():.2e}, {r_diag.max():.2e}]")
+            
+            except Exception as e:
+                logger.warning(f"   ✗ {fname:12s}: QR failed ({e}), skipping")
+                per_feature_indices[fname] = np.array([], dtype=int)
+                per_feature_details[fname] = {
+                    'indices': np.array([], dtype=int),
+                    'importance': np.array([]),
+                    'feature_index': i,
+                    'n_selected': 0,
+                    'error': str(e)
+                }
+        
+        # 合併所有索引（去重）
+        all_indices = np.concatenate(all_indices_list) if all_indices_list else np.array([], dtype=int)
+        unique_indices, unique_counts = np.unique(all_indices, return_counts=True)
+        
+        # 按照出現次數排序（多個特徵都選中的點更重要）
+        sort_by_importance = np.argsort(unique_counts)[::-1]
+        selected_indices_final = unique_indices[sort_by_importance]
+        
+        logger.info(f"\n📊 Merging Results:")
+        logger.info(f"   Total indices collected: {len(all_indices)}")
+        logger.info(f"   Unique sensors after deduplication: {len(unique_indices)}")
+        logger.info(f"   Reduction: {len(all_indices) - len(unique_indices)} duplicates removed "
+                   f"({(1 - len(unique_indices)/max(len(all_indices), 1))*100:.1f}%)")
+        
+        # 統計哪些點被多個特徵選中
+        multi_feature_sensors = unique_counts > 1
+        if multi_feature_sensors.any():
+            logger.info(f"   Multi-feature sensors: {multi_feature_sensors.sum()} points selected by ≥2 features")
+            max_count = unique_counts.max()
+            logger.info(f"   Most important sensor: selected by {max_count} features")
+        
+        # 計算整體指標
+        metrics = self._compute_metrics(data_matrix, selected_indices_final)
+        metrics['n_features'] = n_features
+        metrics['n_sensors_per_feature'] = n_sensors_per_feature
+        metrics['n_total_selected'] = len(selected_indices_final)
+        metrics['deduplication_rate'] = float(1 - len(unique_indices) / max(len(all_indices), 1))
+        metrics['multi_feature_sensors'] = int(multi_feature_sensors.sum())
+        metrics['max_feature_count'] = int(unique_counts.max())
+        
+        # 空間分佈分析（如果提供了座標）
+        if coords is not None:
+            selected_coords = coords[selected_indices_final]
+            for dim in range(coords.shape[1]):
+                coord_name = ['x', 'y', 'z'][dim] if dim < 3 else f'dim{dim}'
+                metrics[f'{coord_name}_mean'] = float(selected_coords[:, dim].mean())
+                metrics[f'{coord_name}_std'] = float(selected_coords[:, dim].std())
+                metrics[f'{coord_name}_range'] = float(selected_coords[:, dim].ptp())
+        
+        if return_details:
+            return selected_indices_final, metrics, per_feature_details
+        else:
+            return selected_indices_final, metrics
+    
     def _select_far_from_seam(self,
                               candidate_indices: np.ndarray,
                               count: int,
