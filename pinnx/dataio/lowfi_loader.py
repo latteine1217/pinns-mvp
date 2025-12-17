@@ -1,14 +1,23 @@
 """
-低保真資料載入器
+低保真資料載入器 (Simplified)
 
-提供統一介面載入 RANS、粗LES、下採樣DNS 等低保真資料，
-並支援插值到 PINN 訓練網格，作為軟先驗使用。
+提供統一介面載入 RANS、粗LES、下採樣DNS 等低保真資料,
+並支援插值到 PINN 訓練網格,作為軟先驗使用。
 
-主要功能：
-1. 多格式讀取 (NetCDF, HDF5, NPZ)
-2. 空間插值與時間對齊
-3. 物理量驗證與單位轉換
-4. 軟先驗資料預處理
+=== 支援的功能 (SUPPORTED) ===
+✅ HDF5Reader: 讀取 .h5/.hdf5 檔案
+✅ RANSReader: 3D Channel Flow RANS k-ε 模型專用
+✅ SpatialInterpolator: 空間插值到 PINN 網格
+
+=== 已棄用 (DEPRECATED - Retained for backward compatibility) ===
+⚠️ NetCDFReader: 專案僅支援 HDF5 格式
+⚠️ LESReader: LES 模型不在專案範圍內
+⚠️ DownsampledDNSProcessor: DNS 下採樣不使用
+
+注意: 實際訓練管道使用 scripts/train/train.py::load_rans_prior_data()
+      直接用 h5py 載入,而非使用此模組的 LowFiLoader 類別。
+
+參考文檔: docs/LOWFI_PRIOR_GUIDE.md
 """
 
 import numpy as np
@@ -180,74 +189,6 @@ class DataReader(ABC):
         return metadata
 
 
-class NetCDFReader(DataReader):
-    """NetCDF 檔案讀取器"""
-    
-    def __init__(self, coord_mapping: Optional[Dict[str, str]] = None,
-                 field_mapping: Optional[Dict[str, str]] = None):
-        """
-        初始化 NetCDF 讀取器
-        
-        Args:
-            coord_mapping: 座標變數名稱映射 {'x': 'X', 'y': 'Y', 't': 'time'}
-            field_mapping: 物理場變數名稱映射 {'u': 'velocity_x', 'v': 'velocity_y'}
-        """
-        if not HAS_NETCDF:
-            logging.warning("NetCDF4 not available. NetCDF file support will be disabled.")
-            # 創建一個佔位符，但不會被使用
-            return
-            
-        self.coord_mapping = coord_mapping or {
-            'x': ['x', 'X', 'lon', 'longitude'],
-            'y': ['y', 'Y', 'lat', 'latitude'],
-            't': ['t', 'time', 'Time']
-        }
-        self.field_mapping = field_mapping or {
-            'u': ['u', 'U', 'velocity_x', 'vel_x'],
-            'v': ['v', 'V', 'velocity_y', 'vel_y'],
-            'w': ['w', 'W', 'velocity_z', 'vel_z'],
-            'p': ['p', 'P', 'pressure']
-        }
-    
-    def supports_format(self, filepath: Union[str, Path]) -> bool:
-        """檢查是否為 NetCDF 檔案"""
-        return str(filepath).lower().endswith(('.nc', '.nc4', '.netcdf'))
-    
-    def read(self, filepath: Union[str, Path]) -> LowFiData:
-        """讀取 NetCDF 檔案"""
-        with nc.Dataset(filepath, 'r') as ds:
-            # 提取座標 (使用基類的 find_by_names)
-            coordinates = {}
-            for std_name, possible_names in self.coord_mapping.items():
-                coord_data = self.find_by_names(
-                    ds.variables, 
-                    possible_names,
-                    lambda vars_dict, name: np.array(vars_dict[name][:]) if name in vars_dict else None
-                )
-                if coord_data is not None:
-                    coordinates[std_name] = coord_data
-            
-            # 提取物理場 (使用基類的 find_by_names)
-            fields = {}
-            for std_name, possible_names in self.field_mapping.items():
-                field_data = self.find_by_names(
-                    ds.variables,
-                    possible_names,
-                    lambda vars_dict, name: np.array(vars_dict[name][:]) if name in vars_dict else None
-                )
-                if field_data is not None:
-                    fields[std_name] = field_data
-            
-            # 提取元數據 (使用基類的 build_metadata)
-            metadata = self.build_metadata(
-                filepath, 'NetCDF',
-                global_attrs={attr: ds.getncattr(attr) for attr in ds.ncattrs()},
-                variables=list(ds.variables.keys())
-            )
-            
-        return LowFiData(coordinates=coordinates, fields=fields, metadata=metadata)
-
-
 class HDF5Reader(DataReader):
     """HDF5 檔案讀取器"""
     
@@ -356,177 +297,6 @@ class NPZReader(DataReader):
         
         return LowFiData(coordinates=coordinates, fields=fields, metadata=metadata)
 
-
-class DownsampledDNSProcessor:
-    """下採樣 DNS 處理器 - 優化版本"""
-    
-    def __init__(self, downsample_factor: Union[int, Tuple[int, ...]] = 4,
-                 filter_type: str = 'box', filter_width: Optional[float] = None,
-                 preserve_energy: bool = True, adaptive_filter: bool = False):
-        """
-        初始化下採樣處理器
-        
-        Args:
-            downsample_factor: 下採樣倍數
-            filter_type: 濾波器類型 ('box', 'gaussian', 'spectral', 'none')
-            filter_width: 濾波器寬度
-            preserve_energy: 是否保持能量守恆
-            adaptive_filter: 是否使用自適應濾波
-        """
-        self.downsample_factor = downsample_factor
-        self.filter_type = filter_type
-        self.filter_width = filter_width
-        self.preserve_energy = preserve_energy
-        self.adaptive_filter = adaptive_filter
-    
-    def process(self, hifi_data: LowFiData) -> LowFiData:
-        """將高保真 DNS 資料下採樣為低保真"""
-        if isinstance(self.downsample_factor, int):
-            factor = (self.downsample_factor,) * len(hifi_data.get_spatial_dims())
-        else:
-            factor = self.downsample_factor
-        
-        # 下採樣座標
-        new_coords = {}
-        for coord_name, coord_vals in hifi_data.coordinates.items():
-            if coord_name == 't':
-                new_coords[coord_name] = coord_vals  # 時間不下採樣
-            else:
-                axis_idx = ['x', 'y', 'z'].index(coord_name)
-                if axis_idx < len(factor):
-                    step = factor[axis_idx]
-                    new_coords[coord_name] = coord_vals[::step]
-                else:
-                    new_coords[coord_name] = coord_vals
-        
-        # 下採樣場
-        new_fields = {}
-        original_energy = {}
-        
-        for field_name, field_data in hifi_data.fields.items():
-            # 計算原始能量（如果需要）
-            if self.preserve_energy and field_name in ['u', 'v', 'w']:
-                original_energy[field_name] = np.mean(field_data**2)
-            
-            # 先應用濾波器
-            filtered_data = self._apply_filter(field_data, factor)
-            
-            # 下採樣
-            slices = []
-            for i, dim_size in enumerate(field_data.shape):
-                if i < len(factor):
-                    step = factor[i]
-                    slices.append(slice(None, None, step))
-                else:
-                    slices.append(slice(None))
-            
-            downsampled = filtered_data[tuple(slices)]
-            
-            # 能量校正（如果需要）
-            if (self.preserve_energy and field_name in ['u', 'v', 'w'] 
-                and field_name in original_energy):
-                new_energy = np.mean(downsampled**2)
-                if new_energy > 0:
-                    correction_factor = np.sqrt(original_energy[field_name] / new_energy)
-                    downsampled *= correction_factor
-            
-            new_fields[field_name] = downsampled
-        
-        # 更新元數據
-        new_metadata = hifi_data.metadata.copy()
-        new_metadata.update({
-            'downsample_factor': factor,
-            'filter_type': self.filter_type,
-            'preserve_energy': self.preserve_energy,
-            'adaptive_filter': self.adaptive_filter,
-            'original_resolution': hifi_data.get_spatial_dims(),
-            'downsampled_resolution': tuple(new_fields[list(new_fields.keys())[0]].shape[:len(factor)]),
-            'energy_ratio': {k: np.mean(v**2)/original_energy.get(k, 1.0) 
-                           for k, v in new_fields.items() 
-                           if k in original_energy}
-        })
-        
-        return LowFiData(coordinates=new_coords, fields=new_fields, metadata=new_metadata)
-    
-    def _apply_filter(self, data: np.ndarray, factor: Tuple[int, ...]) -> np.ndarray:
-        """應用濾波器 - 優化版本"""
-        if self.filter_type == 'none':
-            return data
-        elif self.filter_type == 'box':
-            return self._box_filter(data, factor)
-        elif self.filter_type == 'gaussian':
-            return self._gaussian_filter(data, factor)
-        elif self.filter_type == 'spectral':
-            return self._spectral_filter(data, factor)
-        else:
-            raise ValueError(f"Unknown filter type: {self.filter_type}")
-    
-    def _box_filter(self, data: np.ndarray, factor: Tuple[int, ...]) -> np.ndarray:
-        """優化的箱型濾波器"""
-        from scipy import ndimage
-        
-        # 自適應核大小
-        if self.adaptive_filter:
-            kernel_sizes = [min(f, data.shape[i]) for i, f in enumerate(factor)]
-        else:
-            if isinstance(self.downsample_factor, int):
-                kernel_sizes = [self.downsample_factor] * data.ndim
-            else:
-                kernel_sizes = list(factor) + [1] * (data.ndim - len(factor))
-        
-        # 分離式卷積提高效率
-        filtered = data.copy()
-        for axis, ksize in enumerate(kernel_sizes[:data.ndim]):
-            if ksize > 1:
-                kernel = np.ones(ksize) / ksize
-                filtered = ndimage.convolve1d(filtered, kernel, axis=axis, mode='reflect')
-        
-        return filtered
-    
-    def _gaussian_filter(self, data: np.ndarray, factor: Tuple[int, ...]) -> np.ndarray:
-        """優化的高斯濾波器"""
-        from scipy import ndimage
-        
-        # 計算各軸的 sigma
-        if self.filter_width:
-            sigmas = [self.filter_width] * data.ndim
-        else:
-            sigmas = [max(factor) / 3.0] * len(factor)
-            sigmas += [0.0] * (data.ndim - len(factor))  # 其他維度不濾波
-        
-        return ndimage.gaussian_filter(data, sigma=sigmas, mode='reflect')
-    
-    def _spectral_filter(self, data: np.ndarray, factor: Tuple[int, ...]) -> np.ndarray:
-        """頻譜域銳截止濾波器"""
-        # 使用 FFT 進行頻譜濾波
-        fft_data = np.fft.fftn(data)
-        
-        # 計算截止頻率
-        cutoff_freqs = []
-        for i, (size, f) in enumerate(zip(data.shape, factor)):
-            if i < len(factor):
-                cutoff = size // (2 * f)  # Nyquist criterion
-                cutoff_freqs.append(cutoff)
-            else:
-                cutoff_freqs.append(size // 2)
-        
-        # 創建濾波器
-        filter_mask = np.ones_like(fft_data)
-        for axis, cutoff in enumerate(cutoff_freqs):
-            if cutoff < data.shape[axis] // 2:
-                # 創建低通濾波器
-                freqs = np.fft.fftfreq(data.shape[axis])
-                mask = np.abs(freqs) <= cutoff / data.shape[axis]
-                
-                # 廣播到對應軸
-                shape = [1] * data.ndim
-                shape[axis] = len(mask)
-                mask = mask.reshape(shape)
-                filter_mask *= mask
-        
-        # 應用濾波器並逆變換
-        filtered_fft = fft_data * filter_mask
-        return np.real(np.fft.ifftn(filtered_fft))
 
 
 class SpatialInterpolator:
@@ -1059,114 +829,12 @@ class RANSReader(DataReader):
         return fields
 
 
-class LESReader(DataReader):
-    """LES 特定讀取器，處理過濾場和亞格度模型"""
-    
-    def __init__(self, base_reader: DataReader, 
-                 filter_width: Optional[float] = None,
-                 sgs_model: str = 'smagorinsky'):
-        """
-        基於已有讀取器創建 LES 讀取器
-        
-        Args:
-            base_reader: 基礎讀取器
-            filter_width: LES 濾波寬度
-            sgs_model: 亞格度模型類型
-        """
-        self.base_reader = base_reader
-        self.filter_width = filter_width
-        self.sgs_model = sgs_model
-        self.les_field_mapping = {
-            # 過濾場
-            'u_filtered': ['u_filt', 'u_filtered', 'u_f', 'vel_x_filtered'],
-            'v_filtered': ['v_filt', 'v_filtered', 'v_f', 'vel_y_filtered'],
-            'p_filtered': ['p_filt', 'p_filtered', 'p_f', 'pressure_filtered'],
-            # SGS 應力
-            'tau11': ['tau11', 'sgs_stress_11', 'tau_xx'],
-            'tau12': ['tau12', 'sgs_stress_12', 'tau_xy'],
-            'tau22': ['tau22', 'sgs_stress_22', 'tau_yy'],
-            # SGS 動能和黏度
-            'k_sgs': ['k_sgs', 'sgs_ke', 'subgrid_ke'],
-            'nu_sgs': ['nu_sgs', 'nut_sgs', 'sgs_viscosity']
-        }
-    
-    def supports_format(self, filepath: Union[str, Path]) -> bool:
-        """委託給基礎讀取器"""
-        return self.base_reader.supports_format(filepath)
-    
-    def read(self, filepath: Union[str, Path]) -> LowFiData:
-        """讀取 LES 資料並添加特定處理"""
-        # 先用基礎讀取器讀取
-        data = self.base_reader.read(filepath)
-        
-        # 重新映射 LES 特定場
-        les_fields = {}
-        for std_name, possible_names in self.les_field_mapping.items():
-            for name in possible_names:
-                if name in data.fields:
-                    les_fields[std_name] = data.fields[name]
-                    break
-        
-        # 合併原始場和 LES 場
-        combined_fields = {**data.fields, **les_fields}
-        
-        # 計算缺失的 SGS 模型量
-        combined_fields = self._compute_sgs_quantities(combined_fields, data.coordinates)
-        
-        # 添加 LES 特定元數據
-        les_metadata = data.metadata.copy()
-        les_metadata.update({
-            'data_type': 'LES',
-            'filter_width': self.filter_width,
-            'sgs_model': self.sgs_model,
-            'has_sgs_stress': any(k in les_fields for k in ['tau11', 'tau12', 'tau22']),
-            'available_les_fields': list(les_fields.keys())
-        })
-        
-        return LowFiData(
-            coordinates=data.coordinates,
-            fields=combined_fields,
-            metadata=les_metadata
-        )
-    
-    def _compute_sgs_quantities(self, fields: Dict[str, np.ndarray], 
-                               coordinates: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        """計算 SGS 模型量"""
-        # 如果有速度場但沒有 SGS 黏度，用 Smagorinsky 模型估算
-        if (all(k in fields for k in ['u', 'v']) and 'nu_sgs' not in fields 
-            and self.sgs_model == 'smagorinsky'):
-            
-            # 簡化的 Smagorinsky 模型實現
-            if 'x' in coordinates and 'y' in coordinates:
-                dx = coordinates['x'][1] - coordinates['x'][0] if len(coordinates['x']) > 1 else 1.0
-                dy = coordinates['y'][1] - coordinates['y'][0] if len(coordinates['y']) > 1 else 1.0
-                filter_width = self.filter_width or (dx * dy) ** 0.5
-                
-                # 計算應變率張量模 (簡化為2D)
-                u, v = fields['u'], fields['v']
-                # 這裡需要實際的梯度計算，暫時用簡化版本
-                S_mag = np.sqrt(2.0) * np.sqrt(
-                    np.gradient(u, dx, axis=0)**2 + 
-                    np.gradient(v, dy, axis=1)**2
-                )
-                
-                # Smagorinsky 常數
-                Cs = 0.1
-                fields['nu_sgs'] = (Cs * filter_width)**2 * S_mag
-        
-        return fields
-
-
 class LowFiLoader:
     """低保真資料載入器主類"""
     
     def __init__(self):
         """初始化載入器"""
         self.base_readers = []
-        
-        # 只有在NetCDF4可用時才添加NetCDFReader
-        if HAS_NETCDF:
-            self.base_readers.append(NetCDFReader())
         
         # 條件式添加 HDF5 讀取器
         if HAS_HDF5:
@@ -1177,7 +845,6 @@ class LowFiLoader:
         # NPZ 讀取器總是可用
         self.base_readers.append(NPZReader())
         self.interpolator = SpatialInterpolator()
-        self.dns_processor = DownsampledDNSProcessor()
     
     def load(self, filepath: Union[str, Path], 
              data_type: str = 'auto') -> LowFiData:
@@ -1199,8 +866,6 @@ class LowFiLoader:
         # 根據資料類型選擇讀取器
         if data_type == 'rans':
             reader = self._get_rans_reader(filepath)
-        elif data_type == 'les':
-            reader = self._get_les_reader(filepath)
         else:
             # 自動選擇基礎讀取器
             reader = self._get_base_reader(filepath)
@@ -1237,13 +902,6 @@ class LowFiLoader:
         base_reader = self._get_base_reader(filepath)
         if base_reader:
             return RANSReader(base_reader)
-        return None
-    
-    def _get_les_reader(self, filepath: Path) -> Optional[DataReader]:
-        """獲取 LES 讀取器"""
-        base_reader = self._get_base_reader(filepath)
-        if base_reader:
-            return LESReader(base_reader)
         return None
     
     def _infer_data_type(self, data: LowFiData) -> str:
@@ -1295,23 +953,6 @@ class LowFiLoader:
             k: v for k, v in interpolated.items()
             if k in fields and not k.startswith('_')
         }
-    
-    def downsample_dns(self, hifi_data: LowFiData, 
-                      factor: Union[int, Tuple[int, ...]] = 4,
-                      filter_type: str = 'box') -> LowFiData:
-        """
-        將高保真 DNS 下採樣為低保真
-        
-        Args:
-            hifi_data: 高保真 DNS 資料
-            factor: 下採樣倍數
-            filter_type: 濾波器類型
-            
-        Returns:
-            下採樣後的低保真資料
-        """
-        processor = DownsampledDNSProcessor(factor, filter_type)
-        return processor.process(hifi_data)
     
     def get_statistics(self, lowfi_data: LowFiData) -> Dict[str, Dict[str, float]]:
         """

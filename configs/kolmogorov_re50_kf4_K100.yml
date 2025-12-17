@@ -1,24 +1,28 @@
 # ====================================================================
 # Kolmogorov Flow Re=50 kf=4 K=100 RANS Prior Training Config
 # ====================================================================
-# Strategy: "Final Consensus" - Strict Control Mode
-# 1. Disable conflicting automated mechanisms (GradNorm, Causal, Scheduler).
-# 2. Use Curriculum Stages to explicitly control LR and Weights.
-# 3. Validation: Verify "Effective LR" and "Effective Weights" in logs.
+# Strategy: "Enhanced Convergence - Phase 1 (SOAP)"
+# 1. Disable conflicting automated mechanisms (GradNorm, Causal).
+# 2. Use Curriculum Stages to explicitly control Weights.
+# 3. Strengthen continuity constraints progressively.
+# 4. Phase 2 (L-BFGS fine-tuning) 將使用獨立配置從 checkpoint 恢復
 #
 # Stages:
-# - Stage 1 (0-2000):   LR=1e-3, Prior=10.0 (Strong), Continuity=1.0 (Mild)
-# - Stage 2 (2000-6000): LR=3e-4, Prior=1.0 (Decay), Continuity=3.0 (Ramp)
-# - Stage 3 (6000-10000): LR=1e-4, Prior=0.1 (Minimal), Continuity=8.0 (Final)
+# - Stage 1 (0-2000):   Prior=10.0 (Strong), Continuity=2.0 (Moderate)
+# - Stage 2 (2000-6000): Prior=1.0 (Decay), Continuity=5.0 (Ramped)
+# - Stage 3 (6000-10000): Prior=0.1 (Minimal), Continuity=10.0 (Strong)
+#
+# After 10000 epochs:
+#   Use kolmogorov_re50_kf4_K100_lbfgs.yml to continue with L-BFGS
 # ====================================================================
 
 experiment:
   name: kolmogorov_re50_kf4_K100_rans_prior
-  version: v2.0_strict_control
+  version: v3.0_lbfgs_enhanced
   seed: 42
   device: auto
   precision: float32
-  description: "Re=50 with RANS prior. Strict curriculum control for LR and weights."
+  description: "Re=50 with RANS prior. Enhanced with L-BFGS fine-tuning (last 2000 epochs)."
 
 reproducibility:
   deterministic: true
@@ -55,34 +59,40 @@ data:
   cache_dir: ./data/kolmogorov_dns_cache
 
 # ====================================================================
-# Low-Fi Prior Configuration
+# Low-Fi Prior Configuration (Leith Turbulence Model)
 # ====================================================================
+# ✅ 已修復：使用 Leith 模型代替 k-ε RANS
+# - Leith 模型更適合 2D 湍流（捕捉逆級串）
+# - 使用 1D 座標格式：x[N], y[N]
+# - 無壓力場（診斷模型），loss 計算時自動跳過
 lowfi_prior:
   enabled: true
-  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4.h5
-  data_type: rans
+  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4_leith.h5  # ✅ 修正：Leith 模型
+  data_type: leith  # ✅ 修正：標記為 Leith 模型
   rans_structure:
     group_path: /mean_field
+    # ✅ Leith 模型場映射（簡化，無 k/epsilon）
     field_mapping:
       u: u
       v: v
-      k: k
       nu_t: nu_t
-      epsilon: epsilon
+    # ✅ 修正：Leith 使用 1D 座標
     coord_mapping:
-      X: X
-      Y: Y
+      x: x
+      y: y
   
   interpolation:
     method: linear
     extrapolation_mode: nearest
   
   # Initial/Default weights (will be overridden by curriculum)
-  consistency_weight: 10.0
+  # ✅ 修正：降低初始權重（Leith 品質較高，不需過強約束）
+  consistency_weight: 2.0  # 原 10.0 → 2.0
   variable_weights:
     u: 1.0
     v: 1.0
-    p: 0.5
+    # ✅ 註記：Leith 無壓力場，此權重不會被使用
+    p: 0.0  # 不使用壓力（Leith 模型無壓力）
 
 # ====================================================================
 # Normalization
@@ -158,7 +168,7 @@ losses:
   data_weight: 10.0
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0
-  continuity_weight: 1.0
+  continuity_weight: 2.0  # 提高初始 continuity 權重
   prior_weight: 10.0
   periodicity_weight: 10.0
 
@@ -176,15 +186,21 @@ losses:
 training:
   optimizer:
     type: soap
-    lr: 1.0e-3  # Initial LR with exponential decay
+    lr: 1.0e-3  # Initial LR (SOAP phase)
     betas: [0.9, 0.999]
     weight_decay: 1.0e-5
 
-  # Exponential decay scheduler (same as vanilla for fair comparison)
+  # Step decay scheduler
   lr_scheduler:
-    type: exponential
-    gamma: 0.7943  # Decay factor: 1e-3 → 1e-5 over 10k epochs (20 steps)
-    step_size: 500  # Apply decay every 500 epochs
+    type: step
+    gamma: 0.5      # LR *= 0.5 每次衰減
+    step_size: 2000 # 每 2000 epochs 衰減一次
+    # 時程表：
+    # 0-2000: 1e-3
+    # 2000-4000: 5e-4
+    # 4000-6000: 2.5e-4
+    # 6000-8000: 1.25e-4
+    # 8000-10000: 6.25e-5
 
   epochs: 10000
   max_epochs: 10000
@@ -213,24 +229,24 @@ curriculum:
   
   stages:
     # --------------------------------------------------------
-    # Stage 1: Warmup & Strong Prior (0 - 2000)
-    # LR: Controlled by exponential scheduler
-    # Prior: 10.0 (Guide early training)
-    # Continuity: 1.0 (Avoid stiffness)
+    # Stage 1: Warmup & Moderate Prior (0 - 2000)
+    # Optimizer: SOAP, LR: 1e-3
+    # ✅ 修正：Prior: 2.0 (Leith 品質較高，使用中等引導)
+    # Continuity: 2.0 (Moderate enforcement)
     # --------------------------------------------------------
-    - name: "Stage1_Warmup_StrongPrior"
+    - name: "Stage1_Warmup_ModeratePrior"
       epoch_range: [0, 2000]
 
       weights:
         data: 10.0
         momentum_x: 1.0
         momentum_y: 1.0
-        continuity: 1.0
+        continuity: 2.0
         periodicity: 10.0
-        prior: 10.0
+        prior: 2.0  # ✅ 修正：10.0 → 2.0（適配 Leith 模型）
       
       lowfi_prior:
-        consistency_weight: 10.0
+        consistency_weight: 2.0  # ✅ 修正：10.0 → 2.0
 
       sampling:
         pde_points: 15000
@@ -238,9 +254,9 @@ curriculum:
 
     # --------------------------------------------------------
     # Stage 2: Physics Ramp & Prior Decay (2000 - 6000)
-    # LR: Controlled by exponential scheduler
+    # Optimizer: SOAP, LR: 5e-4 → 2.5e-4
     # Prior: 1.0 (Reduce guidance)
-    # Continuity: 3.0 (Increase physics enforcement)
+    # Continuity: 5.0 (Ramped enforcement)
     # --------------------------------------------------------
     - name: "Stage2_PhysicsRamp"
       epoch_range: [2000, 6000]
@@ -249,7 +265,7 @@ curriculum:
         data: 10.0
         momentum_x: 2.0
         momentum_y: 2.0
-        continuity: 3.0
+        continuity: 5.0  # ⬆️ 從 3.0 提升到 5.0
         periodicity: 10.0
         prior: 1.0
       
@@ -261,19 +277,19 @@ curriculum:
         boundary_points: 1000
 
     # --------------------------------------------------------
-    # Stage 3: Final Balance & Strict Physics (6000 - 10000)
-    # LR: Controlled by exponential scheduler
+    # Stage 3: Strong Physics & Prior Fade (6000 - 10000)
+    # Optimizer: SOAP, LR: 1.25e-4 → 6.25e-5
     # Prior: 0.1 (Minimal influence)
-    # Continuity: 8.0 (Strict divergence check)
+    # Continuity: 10.0 (Strong divergence check)
     # --------------------------------------------------------
-    - name: "Stage3_FinalBalance"
+    - name: "Stage3_StrongPhysics"
       epoch_range: [6000, 10000]
 
       weights:
         data: 10.0
         momentum_x: 5.0
         momentum_y: 5.0
-        continuity: 8.0
+        continuity: 10.0  # ⬆️ 從 8.0 提升到 10.0
         periodicity: 10.0
         prior: 0.1
       
@@ -283,6 +299,8 @@ curriculum:
       sampling:
         pde_points: 18000
         boundary_points: 1000
+
+
 
 # ====================================================================
 # Evaluation

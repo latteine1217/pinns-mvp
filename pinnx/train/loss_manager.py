@@ -455,38 +455,68 @@ class LossManager:
         if self.prior_loss_manager is not None and data_batch.get('has_prior', False):
             lowfi_prior = data_batch.get('lowfi_prior', {})
             
-            if 'u_pde' in lowfi_prior and 'v_pde' in lowfi_prior and 'p_pde' in lowfi_prior:
-                # 組合低保真資料 [N, 3] (u, v, p)
-                lowfi_data = torch.cat([
-                    lowfi_prior['u_pde'],
-                    lowfi_prior['v_pde'],
-                    lowfi_prior['p_pde']
-                ], dim=1)
-                
-                # 提取 PINN 預測的對應變數
-                if u_pred_pde_physical.shape[1] == 3:
-                    high_fi_pred = u_pred_pde_physical
-                elif u_pred_pde_physical.shape[1] == 4:
-                    # 忽略 w 分量
+            # ========================================================
+            # ✅ FIX: 檢查壓力有效性（Leith 模型無壓力）
+            # ========================================================
+            lowfi_metadata = lowfi_prior.get('metadata', {})
+            pressure_valid = lowfi_metadata.get('pressure_valid', True)
+            
+            if 'u_pde' in lowfi_prior and 'v_pde' in lowfi_prior:
+                # 根據壓力有效性決定變數列表
+                if pressure_valid and 'p_pde' in lowfi_prior:
+                    # 完整三變數 (u, v, p) - 用於 3D RANS 或其他有壓力的模型
+                    lowfi_data = torch.cat([
+                        lowfi_prior['u_pde'],
+                        lowfi_prior['v_pde'],
+                        lowfi_prior['p_pde']
+                    ], dim=1)
+                    variable_names = ['u', 'v', 'p']
+                    
+                    # 提取對應的 PINN 預測
+                    if u_pred_pde_physical.shape[1] == 3:
+                        high_fi_pred = u_pred_pde_physical
+                    elif u_pred_pde_physical.shape[1] == 4:
+                        # 忽略 w 分量
+                        high_fi_pred = torch.cat([
+                            u_pred_pde_physical[:, 0:1],  # u
+                            u_pred_pde_physical[:, 1:2],  # v
+                            u_pred_pde_physical[:, 3:4]   # p
+                        ], dim=1)
+                    else:
+                        raise ValueError(f"不支援的模型輸出維度: {u_pred_pde_physical.shape[1]}")
+                    
+                else:
+                    # ✅ Leith 模型：僅兩變數 (u, v)，跳過壓力
+                    lowfi_data = torch.cat([
+                        lowfi_prior['u_pde'],
+                        lowfi_prior['v_pde']
+                    ], dim=1)
+                    variable_names = ['u', 'v']
+                    
+                    # 提取對應的 PINN 預測（僅 u, v）
                     high_fi_pred = torch.cat([
                         u_pred_pde_physical[:, 0:1],  # u
-                        u_pred_pde_physical[:, 1:2],  # v
-                        u_pred_pde_physical[:, 3:4]   # p
+                        u_pred_pde_physical[:, 1:2]   # v
                     ], dim=1)
-                else:
-                    raise ValueError(f"不支援的模型輸出維度: {u_pred_pde_physical.shape[1]}")
+                    
+                    if epoch == 0:
+                        logging.info("⚠️  Leith 模型：跳過壓力項，僅使用 u, v 計算先驗損失")
                 
                 # 計算先驗一致性損失
                 prior_losses = self.prior_loss_manager.low_fidelity_loss(
                     high_fidelity_pred=high_fi_pred,
                     low_fidelity_data=lowfi_data,
                     coords=coords_pde_physical,
-                    variable_names=['u', 'v', 'p']
+                    variable_names=variable_names
                 )
                 
                 prior_loss_u = prior_losses.get('prior_consistency_u', prior_loss_u)
                 prior_loss_v = prior_losses.get('prior_consistency_v', prior_loss_v)
-                prior_loss_p = prior_losses.get('prior_consistency_p', prior_loss_p)
+                
+                # 壓力損失僅在有效時讀取
+                if pressure_valid:
+                    prior_loss_p = prior_losses.get('prior_consistency_p', prior_loss_p)
+                
                 prior_consistency_loss = prior_losses['prior_consistency_total']
                 
                 # 記錄（低頻率）
@@ -494,7 +524,8 @@ class LossManager:
                     logging.info(f"📊 先驗一致性損失 @ Epoch {epoch}: {prior_consistency_loss.item():.6f}")
                     logging.info(f"   - u: {prior_loss_u.item():.6f}")
                     logging.info(f"   - v: {prior_loss_v.item():.6f}")
-                    logging.info(f"   - p: {prior_loss_p.item():.6f}")
+                    if pressure_valid:
+                        logging.info(f"   - p: {prior_loss_p.item():.6f}")
         
         return {
             'prior_consistency_loss': prior_consistency_loss,

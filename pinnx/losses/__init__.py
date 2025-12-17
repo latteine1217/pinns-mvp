@@ -39,9 +39,6 @@ from .residuals import (
 
 from .priors import (
     LowFidelityConsistencyLoss,
-    StatisticalConsistencyLoss,
-    ConservationLoss,
-    SymmetryConsistencyLoss,
     PriorLossManager
 )
 
@@ -104,13 +101,10 @@ class CompleteLossManager:
         else:
             self.weight_manager = None
         
-        # 初始化先驗損失管理器
+        # 初始化先驗損失管理器 (Simplified)
         if self.prior_config.get('enabled', False):
             self.prior_manager = PriorLossManager(
-                consistency_weight=self.prior_config.get('consistency_weight', 1.0),
-                statistical_weight=self.prior_config.get('statistical_weight', 0.5),
-                conservation_weight=self.prior_config.get('conservation_weight', 0.3),
-                symmetry_weight=self.prior_config.get('symmetry_weight', 0.2)
+                consistency_weight=self.prior_config.get('consistency_weight', 1.0)
             )
         else:
             self.prior_manager = None
@@ -561,9 +555,6 @@ __all__ = [
     
     # 先驗損失
     'LowFidelityConsistencyLoss',
-    'StatisticalConsistencyLoss',
-    'ConservationLoss',
-    'SymmetryConsistencyLoss',
     'PriorLossManager',
     
     # 均值約束

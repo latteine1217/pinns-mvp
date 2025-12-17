@@ -238,56 +238,53 @@ def load_rans_prior_data(
         logging.warning("⚠️  lowfi_prior.enabled=True 但未指定 data_path")
         return {}
     
-    logging.info(f"📂 載入 RANS 先驗資料: {rans_path}")
+    logging.info(f"📂 載入 Leith 先驗資料: {rans_path}")
     
-    # 讀取 RANS 資料
+    # 讀取 Leith 資料
     with h5py.File(rans_path, 'r') as f:
         rans_structure = lowfi_cfg.get('rans_structure', {})
         group_path = rans_structure.get('group_path', '/mean_field')
-        
-        # 讀取座標網格
         group = f[group_path]
-        X_rans = np.array(group['X'])  # [N_rans, N_rans]
-        Y_rans = np.array(group['Y'])
         
-        # 提取 1D 座標（假設規則網格）
-        x_rans_1d = X_rans[:, 0]  # 第一列
-        y_rans_1d = Y_rans[0, :]  # 第一行
+        # ========================================================
+        # ✅ FIX #1: 讀取 Leith 1D 座標格式
+        # ========================================================
+        # Leith 模型使用 1D 陣列: x[N], y[N]
+        if 'x' not in group or 'y' not in group:
+            raise KeyError(
+                f"Leith 資料格式錯誤！需要 1D 座標 'x' 和 'y'，但找到: {list(group.keys())}"
+            )
         
-        # 讀取場數據
-        u_rans = np.array(group['u'])  # [N_rans, N_rans]
+        x_rans_1d = np.array(group['x'])
+        y_rans_1d = np.array(group['y'])
+        logging.info(f"   ✅ 讀取 Leith 1D 座標: x[{len(x_rans_1d)}], y[{len(y_rans_1d)}]")
+        
+        # 讀取速度場
+        u_rans = np.array(group['u'])  # [N, N]
         v_rans = np.array(group['v'])
         
-        # RANS 通常沒有壓力，設為零或從 DNS 估計
-        if 'p' in group:
-            p_rans = np.array(group['p'])
-        else:
-            p_rans = np.zeros_like(u_rans)
-            logging.info("   RANS 資料無壓力場，設為零")
+        # ========================================================
+        # ✅ FIX #2: Leith 無壓力場，設置無效標記
+        # ========================================================
+        # Leith 是診斷模型，不求解壓力場
+        # 建立零壓力陣列（用於插值器，但不用於 loss）
+        p_rans = np.zeros_like(u_rans)
+        p_valid = False
+        logging.warning("   ⚠️  Leith 模型無壓力場，將在 loss 計算中跳過壓力項")
         
-        # ⭐ 讀取 RANS 湍流黏度 (nu_t / eddy viscosity)
-        nu_t_rans = None
-        for nu_t_key in ['nu_t', 'nut', 'eddy_viscosity', 'turbulent_viscosity']:
-            if nu_t_key in group:
-                nu_t_rans = np.array(group[nu_t_key])
-                logging.info(f"   ✅ 讀取 RANS 湍流黏度: {nu_t_key}")
-                break
+        # ========================================================
+        # ✅ 讀取 Leith 渦流黏度 (nu_t)
+        # ========================================================
+        if 'nu_t' not in group:
+            raise KeyError(
+                f"Leith 資料缺少 'nu_t' 場！找到: {list(group.keys())}"
+            )
         
-        # 如果找不到 nu_t，嘗試從 k-epsilon 模型計算
-        if nu_t_rans is None:
-            if 'k' in group and 'epsilon' in group:
-                k_rans = np.array(group['k'])
-                eps_rans = np.array(group['epsilon'])
-                C_mu = 0.09  # k-epsilon 模型常數
-                nu_t_rans = C_mu * k_rans**2 / (eps_rans + 1e-10)
-                logging.info(f"   ✅ 從 k-epsilon 計算 nu_t: C_μ={C_mu}")
-            else:
-                # Fallback: 設為零（僅使用分子黏度）
-                nu_t_rans = np.zeros_like(u_rans)
-                logging.warning("   ⚠️  RANS 資料無湍流黏度 (nu_t/k/epsilon)，設為零")
+        nu_t_rans = np.array(group['nu_t'])
+        logging.info(f"   ✅ 讀取 Leith 渦流黏度: nu_t 範圍=[{nu_t_rans.min():.2e}, {nu_t_rans.max():.2e}]")
     
-    logging.info(f"   RANS 解析度: {u_rans.shape}")
-    logging.info(f"   RANS 座標範圍: x=[{x_rans_1d.min():.3f}, {x_rans_1d.max():.3f}], "
+    logging.info(f"   Leith 解析度: {u_rans.shape}")
+    logging.info(f"   Leith 座標範圍: x=[{x_rans_1d.min():.3f}, {x_rans_1d.max():.3f}], "
                  f"y=[{y_rans_1d.min():.3f}, {y_rans_1d.max():.3f}]")
     
     # 建立插值器
@@ -296,14 +293,11 @@ def load_rans_prior_data(
     v_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), v_rans, method=interp_method, bounds_error=False, fill_value=None)
     p_interp = RegularGridInterpolator((x_rans_1d, y_rans_1d), p_rans, method=interp_method, bounds_error=False, fill_value=None)
     
-    # ⭐ 建立 nu_t 插值器（如果存在）
-    if nu_t_rans is not None:
-        nu_t_interp = RegularGridInterpolator(
-            (x_rans_1d, y_rans_1d), nu_t_rans, 
-            method=interp_method, bounds_error=False, fill_value=None
-        )
-    else:
-        nu_t_interp = None
+    # 建立 nu_t 插值器
+    nu_t_interp = RegularGridInterpolator(
+        (x_rans_1d, y_rans_1d), nu_t_rans, 
+        method=interp_method, bounds_error=False, fill_value=None
+    )
     
     # 提取訓練點座標（只需空間座標，忽略時間）
     # 假設使用 PDE 配點作為插值目標
@@ -312,16 +306,39 @@ def load_rans_prior_data(
     
     coords_pde = np.column_stack([x_pde_np, y_pde_np])
     
+    # ========================================================
+    # ✅ FIX #3: 外插偵測與警告
+    # ========================================================
+    # 檢查訓練點是否在先驗資料範圍內
+    x_min, x_max = x_rans_1d.min(), x_rans_1d.max()
+    y_min, y_max = y_rans_1d.min(), y_rans_1d.max()
+    
+    extrap_mask = (
+        (coords_pde[:, 0] < x_min) | (coords_pde[:, 0] > x_max) |
+        (coords_pde[:, 1] < y_min) | (coords_pde[:, 1] > y_max)
+    )
+    
+    n_extrap = extrap_mask.sum()
+    if n_extrap > 0:
+        ratio = n_extrap / len(coords_pde)
+        logging.warning(
+            f"   ⚠️  {n_extrap}/{len(coords_pde)} ({ratio:.1%}) PDE 配點位於外插區域"
+        )
+        if ratio > 0.05:
+            raise ValueError(
+                f"過多外插點 ({ratio:.1%} > 5%)！請檢查座標對齊：\n"
+                f"  先驗資料範圍: x=[{x_min:.4f}, {x_max:.4f}], y=[{y_min:.4f}, {y_max:.4f}]\n"
+                f"  訓練點範圍: x=[{coords_pde[:, 0].min():.4f}, {coords_pde[:, 0].max():.4f}], "
+                f"y=[{coords_pde[:, 1].min():.4f}, {coords_pde[:, 1].max():.4f}]"
+            )
+    
     # 插值到 PDE 配點
     u_prior_pde = u_interp(coords_pde)
     v_prior_pde = v_interp(coords_pde)
     p_prior_pde = p_interp(coords_pde)
     
-    # ⭐ 插值 nu_t 到 PDE 配點
-    if nu_t_interp is not None:
-        nu_t_prior_pde = nu_t_interp(coords_pde)
-    else:
-        nu_t_prior_pde = None
+    # 插值 nu_t 到 PDE 配點
+    nu_t_prior_pde = nu_t_interp(coords_pde)
     
     # 同樣插值到感測點（用於驗證）
     x_sensors_np = training_data['x_sensors'].cpu().numpy().flatten()
@@ -332,13 +349,12 @@ def load_rans_prior_data(
     v_prior_sensors = v_interp(coords_sensors)
     p_prior_sensors = p_interp(coords_sensors)
     
-    # ⭐ 插值 nu_t 到感測點（目前不用於訓練，僅用於診斷）
-    if nu_t_interp is not None:
-        nu_t_prior_sensors = nu_t_interp(coords_sensors)
-    else:
-        nu_t_prior_sensors = None
+    # 插值 nu_t 到感測點
+    nu_t_prior_sensors = nu_t_interp(coords_sensors)
     
-    # 轉換為 Tensor
+    # ========================================================
+    # ✅ 轉換為 Tensor 並添加 metadata
+    # ========================================================
     rans_prior = {
         'u_pde': torch.tensor(u_prior_pde, dtype=torch.float32, device=device).unsqueeze(1),
         'v_pde': torch.tensor(v_prior_pde, dtype=torch.float32, device=device).unsqueeze(1),
@@ -346,19 +362,24 @@ def load_rans_prior_data(
         'u_sensors': torch.tensor(u_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
         'v_sensors': torch.tensor(v_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
         'p_sensors': torch.tensor(p_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
+        'nu_t_pde': torch.tensor(nu_t_prior_pde, dtype=torch.float32, device=device).unsqueeze(1),
+        'nu_t_sensors': torch.tensor(nu_t_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
+        # ✅ FIX #4: 添加 metadata 標記壓力無效
+        'metadata': {
+            'pressure_valid': p_valid,
+            'model_type': 'leith',
+            'n_extrapolated': int(n_extrap),
+            'extrapolation_ratio': float(n_extrap / len(coords_pde))
+        }
     }
     
-    # ⭐ 添加 nu_t 到返回字典（如果存在）
-    if nu_t_prior_pde is not None:
-        rans_prior['nu_t_pde'] = torch.tensor(nu_t_prior_pde, dtype=torch.float32, device=device).unsqueeze(1)
-    if nu_t_prior_sensors is not None:
-        rans_prior['nu_t_sensors'] = torch.tensor(nu_t_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1)
-    
-    logging.info(f"✅ RANS 先驗插值完成:")
+    logging.info(f"✅ Leith 先驗插值完成:")
     logging.info(f"   PDE 配點: {len(u_prior_pde)} 個")
     logging.info(f"   感測點: {len(u_prior_sensors)} 個")
     logging.info(f"   u 統計: min={u_prior_pde.min():.4f}, max={u_prior_pde.max():.4f}, mean={u_prior_pde.mean():.4f}")
     logging.info(f"   v 統計: min={v_prior_pde.min():.4f}, max={v_prior_pde.max():.4f}, mean={v_prior_pde.mean():.4f}")
+    logging.info(f"   nu_t 統計: min={nu_t_prior_pde.min():.2e}, max={nu_t_prior_pde.max():.2e}")
+    logging.info(f"   壓力有效: {p_valid}")
     
     return rans_prior
 

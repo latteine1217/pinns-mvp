@@ -10,6 +10,55 @@
 
 > **使命**：從極度稀疏的感測器觀測中，重建高保真 2D/3D 湍流場；第一階段以自建 **Kolmogorov Flow DNS** 作為設計與收斂驗證基準，第二階段擴展至 **JHTDB 通道流 ($Re_\tau \approx 1000$)**，並結合 RANS 低保真場作為物理軟先驗。
 
+---
+
+## 🔄 最新重大更新 (v1.1.0 - 2025-12-17)
+
+**✅ Phase 2 程式碼清理完成** - 移除已棄用的低保真功能 (-774 行)
+
+### 📌 專案聚焦策略
+本專案現聚焦於 **2 個核心場景**，確保程式碼簡潔且可維護：
+
+#### ✅ 支援場景
+1. **2D Kolmogorov Flow** + Leith 湍流模型
+   - 變數：u, v, nu_t（無壓力場）
+   - 格式：HDF5 (.h5)
+   
+2. **3D Channel Flow (Re_tau=1000)** + RANS k-ε 湍流模型
+   - 變數：u, v, w, p, k, epsilon, nu_t
+   - 格式：HDF5 (.h5)
+
+#### ❌ 已移除功能（v1.1.0）
+- LES 模型支援
+- DNS 降採樣處理
+- NetCDF 格式 (.nc) 支援
+- 統計一致性損失（Statistical Consistency Loss）
+- 守恆定律損失（Conservation Loss）
+- 對稱性一致性損失（Symmetry Consistency Loss）
+
+### 📝 變更詳情
+- **移除類別**：6 個已棄用類別（-774 行代碼）
+- **簡化 API**：`create_lowfi_loader()` 移除 `filter_type` 參數
+- **損失管理器簡化**：`PriorLossManager` 現僅管理 `LowFidelityConsistencyLoss`
+- **測試結果**：核心模組 100% 測試通過，零回歸
+
+### 🔗 完整文檔
+- 📖 [CHANGELOG.md](CHANGELOG.md) - 詳細變更紀錄與遷移指南
+- 📚 [docs/PROJECT_SCOPE.md](docs/PROJECT_SCOPE.md) - 完整專案範圍說明
+- 📊 [docs/PHASE2_COMPLETION_REPORT.md](docs/PHASE2_COMPLETION_REPORT.md) - Phase 2 完整報告
+
+### ⚠️ 向後不相容變更
+若您從 v1.0.0 升級，以下導入將產生 `ImportError`：
+```python
+# ❌ 已移除
+from pinnx.losses.priors import StatisticalConsistencyLoss
+from pinnx.dataio import NetCDFReader, LESReader, DownsampledDNSProcessor
+```
+
+詳見 [CHANGELOG.md](CHANGELOG.md) 的遷移指南。
+
+---
+
 ## 🌊 Phase 1: Kolmogorov Flow DNS Datasets (2D Benchmark)
 
 We have generated and validated a comprehensive suite of Direct Numerical Simulation (DNS) datasets for 2D Kolmogorov Flow, serving as the sandbox and "Ground Truth" for PINNs reconstruction and training-stability studies.
@@ -182,7 +231,14 @@ graph TD
 
 詳見 `configs/templates/README.md` 獲取完整模板說明。
 
-## 📈 最近更新
+## 📈 更新歷程
+
+### ✅ Phase 2: 程式碼清理與專案聚焦 (2025-12-17)
+- **移除已棄用功能**：6 個類別 (-774 行)，聚焦 2D Kolmogorov + 3D Channel Flow
+- **簡化 API**：移除 `filter_type`、`statistical_weight`、`conservation_weight` 等參數
+- **文檔完善**：新增 `CHANGELOG.md`、`PROJECT_SCOPE.md`、`PHASE2_COMPLETION_REPORT.md`
+- **測試驗證**：核心模組 100% 測試通過，零回歸
+- **詳細內容**：見上方「最新重大更新」區塊
 
 ### ✅ Momentum Merging 功能上線 (2025-12-15)
 - **損失項簡化**：針對各向同性流動（如 Kolmogorov Flow）新增 `merge_momentum` 參數

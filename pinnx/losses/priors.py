@@ -1,21 +1,23 @@
 """
-先驗一致性損失函數模組
+先驗一致性損失函數模組 (Simplified)
 
-實現各種先驗資訊的一致性損失，支援低保真資料作為軟先驗約束。
-這是實現「少量資料 × 物理先驗」框架的關鍵組件，用於整合：
+實現各種先驗資訊的一致性損失,支援低保真資料作為軟先驗約束。
+這是實現「少量資料 × 物理先驗」框架的關鍵組件。
 
-- RANS/LES 低保真場作為軟約束
-- 歷史統計資料作為先驗知識
-- 物理守恆定律約束
-- 對稱性與不變性約束
-- 多尺度一致性約束
+=== 支援的模型 (SUPPORTED MODELS) ===
+✅ 2D Kolmogorov Flow → Leith turbulence model (no pressure field)
+✅ 3D Channel Flow → RANS k-ε turbulence model (full fields including pressure)
 
-主要功能：
-- 低保真場一致性損失
-- 統計矩一致性損失
-- 能量/渦量守恆損失
-- 對稱邊界一致性
-- 多解析度一致性
+主要功能:
+- LowFidelityConsistencyLoss: 核心低保真場一致性損失 (ACTIVE)
+
+=== 已棄用 (DEPRECATED - Retained for backward compatibility) ===
+以下類別保留用於向後相容,但不在當前專案範圍內:
+- StatisticalConsistencyLoss: 統計矩約束由 PDE residuals 處理
+- ConservationLoss: 守恆定律由 PDE residuals 處理
+- SymmetryConsistencyLoss: 對稱性由 boundary conditions 處理
+
+參考文檔: docs/LOWFI_PRIOR_GUIDE.md
 """
 
 import torch
@@ -147,292 +149,43 @@ class LowFidelityConsistencyLoss(nn.Module):
         return weights
 
 
-class StatisticalConsistencyLoss(nn.Module):
-    """
-    統計矩一致性損失
-    
-    確保 PINN 預測的統計性質（均值、方差、高階矩）與
-    參考資料或理論值一致。適用於湍流統計特性約束。
-    """
-    
-    def __init__(self, 
-                 moments: List[int] = [1, 2],
-                 spatial_averaging: bool = True,
-                 temporal_averaging: bool = False):
-        """
-        Args:
-            moments: 要約束的統計矩階數 [1, 2, 3, 4]
-            spatial_averaging: 是否進行空間平均
-            temporal_averaging: 是否進行時間平均
-        """
-        super().__init__()
-        
-        self.moments = moments
-        self.spatial_averaging = spatial_averaging
-        self.temporal_averaging = temporal_averaging
-    
-    def forward(self, 
-                predictions: torch.Tensor,
-                reference_stats: Dict[str, torch.Tensor],
-                variable_names: List[str]) -> Dict[str, torch.Tensor]:
-        """
-        計算統計一致性損失
-        
-        Args:
-            predictions: PINN 預測 [batch_size, n_vars]
-            reference_stats: 參考統計量字典
-            variable_names: 變數名稱列表
-        
-        Returns:
-            losses: 統計一致性損失
-        """
-        losses = {}
-        
-        for i, var_name in enumerate(variable_names):
-            if i >= predictions.shape[-1]:
-                break
-                
-            pred_var = predictions[:, i]
-            
-            # 計算各階矩
-            for moment in self.moments:
-                pred_moment = torch.mean(pred_var ** moment)
-                
-                ref_key = f'{var_name}_moment_{moment}'
-                if ref_key in reference_stats:
-                    ref_moment = reference_stats[ref_key]
-                    moment_loss = torch.mean((pred_moment - ref_moment) ** 2)
-                    losses[f'stat_{var_name}_moment_{moment}'] = moment_loss
-        
-        # 總統計損失
-        total_stat_loss = sum(losses.values())
-        losses['statistical_consistency_total'] = total_stat_loss
-        
-        return losses
 
-
-class ConservationLoss(nn.Module):
-    """
-    守恆定律一致性損失
-    
-    強制 PINN 滿足物理守恆定律：
-    - 質量守恆 (連續性方程)
-    - 動量守恆
-    - 能量守恆
-    - 渦量守恆
-    """
-    
-    def __init__(self, 
-                 conservation_laws: List[str] = ['mass', 'momentum'],
-                 domain_integration: bool = True):
-        """
-        Args:
-            conservation_laws: 要約束的守恆定律列表
-            domain_integration: 是否在整個計算域上積分檢查
-        """
-        super().__init__()
-        
-        self.conservation_laws = conservation_laws
-        self.domain_integration = domain_integration
-    
-    def mass_conservation_loss(self, 
-                              velocity: torch.Tensor,
-                              coords: torch.Tensor) -> torch.Tensor:
-        """質量守恆損失：∫∇·u dΩ = 0"""
-        # 計算散度 ∇·u
-        div_u = 0.0
-        for i in range(velocity.shape[-1]):
-            u_i = velocity[:, i]
-            # 計算 ∂u_i/∂x_i
-            grad = torch.autograd.grad(
-                u_i.sum(), coords,
-                create_graph=True, retain_graph=True, allow_unused=True
-            )[0]
-            if grad is not None:
-                div_u += grad[:, i]
-        
-        if self.domain_integration:
-            # 域積分應為零
-            integrated_div = torch.mean(div_u)
-            loss = integrated_div ** 2
-        else:
-            # 點wise 散度應為零
-            loss = torch.mean(div_u ** 2)
-        
-        return loss
-    
-    def momentum_conservation_loss(self,
-                                  velocity: torch.Tensor,
-                                  pressure: torch.Tensor,
-                                  coords: torch.Tensor,
-                                  boundary_coords: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """動量守恆損失：檢查邊界動量通量平衡"""
-        # 簡化實現：檢查總動量變化
-        total_momentum = torch.mean(velocity, dim=0)  # [spatial_dim]
-        
-        # 理想情況下應為常數或已知值
-        # 這裡簡單假設應為零 (穩態無外力)
-        loss = torch.sum(total_momentum ** 2)
-        
-        return loss
-    
-    def energy_conservation_loss(self,
-                                velocity: torch.Tensor,
-                                coords: torch.Tensor) -> torch.Tensor:
-        """能量守恆損失：檢查動能變化"""
-        kinetic_energy = 0.5 * torch.sum(velocity ** 2, dim=-1)  # [batch_size]
-        
-        # 對於穩態問題，能量變化應平衡
-        # 這裡檢查能量分佈的均勻性（簡化）
-        mean_energy = torch.mean(kinetic_energy)
-        energy_variance = torch.var(kinetic_energy)
-        
-        # 過大的能量變化可能不合理
-        loss = energy_variance / (mean_energy + 1e-8)
-        
-        return loss
-    
-    def forward(self,
-                velocity: torch.Tensor,
-                pressure: torch.Tensor,
-                coords: torch.Tensor,
-                **kwargs) -> Dict[str, torch.Tensor]:
-        """
-        計算守恆定律損失
-        """
-        losses = {}
-        
-        if 'mass' in self.conservation_laws:
-            mass_loss = self.mass_conservation_loss(velocity, coords)
-            losses['conservation_mass'] = mass_loss
-        
-        if 'momentum' in self.conservation_laws:
-            momentum_loss = self.momentum_conservation_loss(velocity, pressure, coords)
-            losses['conservation_momentum'] = momentum_loss
-        
-        if 'energy' in self.conservation_laws:
-            energy_loss = self.energy_conservation_loss(velocity, coords)
-            losses['conservation_energy'] = energy_loss
-        
-        # 總守恆損失
-        total_conservation = sum(losses.values())
-        losses['conservation_total'] = total_conservation
-        
-        return losses
-
-
-class SymmetryConsistencyLoss(nn.Module):
-    """
-    對稱性一致性損失
-    
-    強制 PINN 滿足問題的對稱性約束，例如：
-    - 幾何對稱性
-    - 週期性
-    - 旋轉不變性
-    """
-    
-    def __init__(self, 
-                 symmetry_type: str = 'reflection',
-                 symmetry_axis: Union[int, List[int]] = 0):
-        """
-        Args:
-            symmetry_type: 對稱類型 ('reflection', 'rotation', 'periodic')
-            symmetry_axis: 對稱軸 (座標軸索引)
-        """
-        super().__init__()
-        
-        self.symmetry_type = symmetry_type
-        self.symmetry_axis = symmetry_axis if isinstance(symmetry_axis, list) else [symmetry_axis]
-    
-    def reflection_loss(self,
-                       coords: torch.Tensor,
-                       predictions: torch.Tensor,
-                       axis: int = 0) -> torch.Tensor:
-        """反射對稱損失：u(x) = u(-x)"""
-        # 生成反射座標
-        reflected_coords = coords.clone()
-        reflected_coords[:, axis] = -reflected_coords[:, axis]
-        
-        # 這裡需要模型重新預測反射點
-        # 簡化實現：假設預測具有反射對稱性
-        # 實際使用時需要重新調用模型
-        reflected_preds = predictions  # 占位符
-        
-        # 對稱性損失
-        loss = torch.mean((predictions - reflected_preds) ** 2)
-        
-        return loss
-    
-    def forward(self,
-                coords: torch.Tensor,
-                predictions: torch.Tensor,
-                **kwargs) -> Dict[str, torch.Tensor]:
-        """
-        計算對稱性損失
-        """
-        losses = {}
-        
-        if self.symmetry_type == 'reflection':
-            for axis in self.symmetry_axis:
-                refl_loss = self.reflection_loss(coords, predictions, axis)
-                losses[f'symmetry_reflection_axis_{axis}'] = refl_loss
-        
-        # 總對稱性損失
-        total_symmetry = sum(losses.values())
-        losses['symmetry_total'] = total_symmetry
-        
-        return losses
 
 
 # 綜合先驗損失管理器
 class PriorLossManager(nn.Module):
     """
-    先驗損失管理器：統一管理多種先驗約束
+    先驗損失管理器 (Simplified)
+    
+    僅管理低保真一致性損失。
+    其他損失類型（統計、守恆、對稱）已移除，由 PDE residuals 和 BC 處理。
     """
     
     def __init__(self, 
                  consistency_weight: float = 1.0,
-                 statistical_weight: float = 0.5,
-                 conservation_weight: float = 0.3,
-                 symmetry_weight: float = 0.2,
                  loss_config: Optional[Dict] = None):
         """
         Args:
             consistency_weight: 低保真一致性權重
-            statistical_weight: 統計一致性權重  
-            conservation_weight: 守恆定律權重
-            symmetry_weight: 對稱性權重
             loss_config: 詳細損失配置字典（可選）
         """
         super().__init__()
         
         self.consistency_weight = consistency_weight
-        self.statistical_weight = statistical_weight
-        self.conservation_weight = conservation_weight
-        self.symmetry_weight = symmetry_weight
         
         # 初始化損失組件
         self.low_fidelity_loss = LowFidelityConsistencyLoss()
-        self.statistical_loss = StatisticalConsistencyLoss()
-        self.conservation_loss = ConservationLoss()
-        self.symmetry_loss = SymmetryConsistencyLoss()
         
         # 如果提供了詳細配置，則覆蓋預設組件
         if loss_config:
             if 'low_fidelity' in loss_config:
                 self.low_fidelity_loss = LowFidelityConsistencyLoss(**loss_config['low_fidelity'])
-            if 'statistical' in loss_config:
-                self.statistical_loss = StatisticalConsistencyLoss(**loss_config['statistical'])
-            if 'conservation' in loss_config:
-                self.conservation_loss = ConservationLoss(**loss_config['conservation'])
-            if 'symmetry' in loss_config:
-                self.symmetry_loss = SymmetryConsistencyLoss(**loss_config['symmetry'])
     
     def compute_total_loss(self, 
                           model: nn.Module, 
                           batch_data: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        計算總先驗損失
+        計算總先驗損失（僅低保真一致性）
         
         Args:
             model: PINN 模型
@@ -453,38 +206,12 @@ class PriorLossManager(nn.Module):
             )
             total_loss += self.consistency_weight * consistency_losses['prior_consistency_total']
         
-        # 統計一致性損失
-        if 'predictions' in batch_data and 'reference_stats' in batch_data:
-            stat_losses = self.statistical_loss(
-                predictions=batch_data['predictions'],
-                reference_stats=batch_data['reference_stats'],
-                variable_names=batch_data.get('variable_names', ['u', 'v', 'p'])
-            )
-            total_loss += self.statistical_weight * stat_losses['statistical_consistency_total']
-        
-        # 守恆定律損失
-        if 'velocity' in batch_data and 'pressure' in batch_data and 'coords' in batch_data:
-            conservation_losses = self.conservation_loss(
-                velocity=batch_data['velocity'],
-                pressure=batch_data['pressure'],
-                coords=batch_data['coords']
-            )
-            total_loss += self.conservation_weight * conservation_losses['conservation_total']
-        
-        # 對稱性損失
-        if 'coords' in batch_data and 'predictions' in batch_data:
-            symmetry_losses = self.symmetry_loss(
-                coords=batch_data['coords'],
-                predictions=batch_data['predictions']
-            )
-            total_loss += self.symmetry_weight * symmetry_losses['symmetry_total']
-        
         return total_loss
     
     def forward(self, 
                 **inputs) -> Dict[str, torch.Tensor]:
         """
-        計算所有先驗損失（保持原有接口）
+        計算先驗損失（僅低保真一致性）
         """
         all_losses = {}
         
@@ -499,35 +226,6 @@ class PriorLossManager(nn.Module):
             for key, value in consistency_losses.items():
                 all_losses[f'consistency_{key}'] = self.consistency_weight * value
         
-        # 統計一致性
-        if 'predictions' in inputs and 'reference_stats' in inputs:
-            stat_losses = self.statistical_loss(
-                predictions=inputs['predictions'],
-                reference_stats=inputs['reference_stats'],
-                variable_names=inputs.get('variable_names', ['u', 'v', 'p'])
-            )
-            for key, value in stat_losses.items():
-                all_losses[f'statistical_{key}'] = self.statistical_weight * value
-        
-        # 守恆定律
-        if 'velocity' in inputs and 'pressure' in inputs and 'coords' in inputs:
-            conservation_losses = self.conservation_loss(
-                velocity=inputs['velocity'],
-                pressure=inputs['pressure'],
-                coords=inputs['coords']
-            )
-            for key, value in conservation_losses.items():
-                all_losses[f'conservation_{key}'] = self.conservation_weight * value
-        
-        # 對稱性
-        if 'coords' in inputs and 'predictions' in inputs:
-            symmetry_losses = self.symmetry_loss(
-                coords=inputs['coords'],
-                predictions=inputs['predictions']
-            )
-            for key, value in symmetry_losses.items():
-                all_losses[f'symmetry_{key}'] = self.symmetry_weight * value
-        
         # 計算總先驗損失
         total_prior = sum(v for k, v in all_losses.items() if k.endswith('_total'))
         all_losses['prior_total'] = total_prior
@@ -537,10 +235,10 @@ class PriorLossManager(nn.Module):
 
 # 便捷建構函數
 def create_prior_loss(config: Dict) -> PriorLossManager:
-    """根據配置建立先驗損失管理器"""
+    """根據配置建立先驗損失管理器 (Simplified)"""
     return PriorLossManager(
-        loss_config=config.get('components', {}),
-        global_weight=config.get('global_weight', 1.0)
+        consistency_weight=config.get('consistency_weight', 1.0),
+        loss_config=config.get('components', {})
     )
 
 
@@ -711,7 +409,7 @@ def energy_conservation_loss(total_energy: torch.Tensor,
 
 if __name__ == "__main__":
     # 測試程式碼
-    print("=== 先驗一致性損失測試 ===")
+    print("=== 先驗一致性損失測試 (Simplified) ===")
     
     # 建立測試資料
     batch_size = 100
@@ -738,34 +436,6 @@ if __name__ == "__main__":
     for key, value in losses.items():
         print(f"  {key}: {value.item():.6f}")
     
-    # 測試統計一致性
-    print("\n--- 統計一致性測試 ---")
-    stat_loss = StatisticalConsistencyLoss(moments=[1, 2])
-    
-    ref_stats = {
-        'u_moment_1': torch.tensor(0.0),  # 均值
-        'u_moment_2': torch.tensor(1.0),  # 二階矩
-        'v_moment_1': torch.tensor(0.0),
-        'v_moment_2': torch.tensor(1.0)
-    }
-    
-    stat_losses = stat_loss(high_fi_pred, ref_stats, ['u', 'v', 'p'])
-    print("統計一致性損失：")
-    for key, value in stat_losses.items():
-        print(f"  {key}: {value.item():.6f}")
-    
-    # 測試守恆定律
-    print("\n--- 守恆定律測試 ---")
-    conservation_loss = ConservationLoss(conservation_laws=['mass', 'energy'])
-    
-    velocity = high_fi_pred[:, :2]  # [u, v]
-    pressure = high_fi_pred[:, 2]   # p
-    
-    conservation_losses = conservation_loss(velocity, pressure, coords)
-    print("守恆定律損失：")
-    for key, value in conservation_losses.items():
-        print(f"  {key}: {value.item():.6f}")
-    
     # 測試相容性函數
     print("\n--- 相容性函數測試 ---")
     
@@ -778,6 +448,7 @@ if __name__ == "__main__":
     print(f"統計先驗損失: {stat_prior_loss.item():.6f}")
     
     # 物理約束
+    velocity = high_fi_pred[:, :2]  # [u, v]
     physics_loss = physics_constraint_loss(
         velocity, constraint_type='energy_bound',
         constraint_params={'max_energy': 5.0}, strength=0.05
@@ -785,6 +456,7 @@ if __name__ == "__main__":
     print(f"物理約束損失: {physics_loss.item():.6f}")
     
     # 能量守恆
+    pressure = high_fi_pred[:, 2]   # p
     total_energy = 0.5 * torch.sum(velocity**2, dim=1, keepdim=True) + pressure.unsqueeze(-1)
     energy_loss = energy_conservation_loss(total_energy, conservation_type='steady', strength=0.02)
     print(f"能量守恆損失: {energy_loss.item():.6f}")

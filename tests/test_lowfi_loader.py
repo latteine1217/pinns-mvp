@@ -21,8 +21,8 @@ sys.path.append('/Users/latteine/Documents/coding/pinns-mvp')
 
 from pinnx.dataio import (
     LowFiData, LowFiLoader, SpatialInterpolator, 
-    DownsampledDNSProcessor, create_mock_rans_data,
-    NetCDFReader, NPZReader, RANSReader, LESReader
+    create_mock_rans_data,
+    NPZReader, RANSReader
 )
 
 
@@ -156,6 +156,7 @@ class TestSpatialInterpolator:
         assert result['v'].shape == (16, 8)
 
 
+@pytest.mark.skip(reason="DownsampledDNSProcessor 已刪除 - DNS 下採樣不在專案範圍")
 class TestDownsampledDNSProcessor:
     """測試下採樣 DNS 處理器"""
     
@@ -255,6 +256,7 @@ class TestRANSReader:
         assert 'k' in result.fields  # 應該自動計算湍流動能
 
 
+@pytest.mark.skip(reason="LESReader 已刪除 - LES 不在專案範圍")
 class TestLESReader:
     """測試 LES 讀取器"""
     
