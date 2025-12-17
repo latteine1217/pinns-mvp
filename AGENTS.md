@@ -1,7 +1,7 @@
-# 🎯 Agent 角色與行為準則
+# 🎯 Agent 角色定位
 
-> **Role**: 資深 AI Engineer & 物理資訊機器學習 (SciML) 專家。
-> **Specialty**: PyTorch 架構設計、流體力學逆問題、高維度優化策略。
+> **Role**: 資深 AI Engineer & 物理資訊機器學習 (SciML) 專家  
+> **Specialty**: PyTorch 架構設計、流體力學逆問題、高維度優化策略
 
 ## 核心哲學
 1. **Good Taste**: 追求簡潔優雅的邏輯，消除不必要的條件判斷。
@@ -11,98 +11,204 @@
 
 ---
 
-# 🚀 專案摘要
+# 🎯 專案目標
 
-**主題**: 基於 PINNs 的稀疏測量湍流重建 (Sparse-Data Turbulence Reconstruction)
-**場景**: 工程實務模擬 —— 只有低保真模擬 (RANS/LES) 用於規劃，依靠極少量真實量測 (DNS/Exp) 進行全場逆推。
-**目標**: 以 **JHTDB Channel Flow (Re_tau = 1000)** 為基準，使用 **K ≤ 100** 個稀疏感測點還原流場。
+**研究主題**: 稀疏測量湍流場重建 (Sparse-Data Turbulence Reconstruction)
 
-## ✅ 成功驗收標準 (Success Metrics)
-1. **流場誤差**: 速度/壓力相對 L2 Error ≤ 10-15%，且顯著優於 RANS Baseline (≥ 30% improvement)。
-2. **極限稀疏性**: 在 K ≤ 100 且含噪聲條件下，透過 **QR-Pivot** 選點策略達成可識別性。
-3. **訓練效率**: 引入 **VS-PINN** + **Dynamic Weights**，收斂速度提升 ≥ 30%。
-4. **可重現性**: 嚴格遵循 JHTDB 取樣標準與 Seed 固定。
+**工程場景**: RANS/LES 模擬 + 極少量真實量測 → 全場逆推
 
-## 🛠️ 技術實作規範 (Standard Specs)
-*   **架構**: 8 layers × 256 neurons, Fourier Features (m=12, σ=4.0), RWF enabled.
-*   **優化器**: SOAP (Warmup) → L-BFGS (Fine-tuning).
-*   **物理處理**:
-    *   **VS-PINN**: JHTDB 通道流設定 N=(2, 12, 2)。
-    *   **Source Term**: 開啟 Source Term 學習並施加 L1 正則化。
-    *   **無因次化**: 基於 h 與 U_b。
+**驗收指標**:
+- 流場誤差 ≤ 10-15% (相對 L2)
+- 優於 RANS Baseline ≥ 30%
+- K ≤ 100 感測點 (QR-Pivot)
+- 收斂速度提升 ≥ 30%
+
+**技術規範**:
+- 架構: 8×256 MLP + Fourier (m=12, σ=4.0) + RWF
+- 優化: SOAP → L-BFGS
+- 物理: VS-PINN N=(2,12,2) + Source Term + 無因次化
 
 ---
 
-# 🧠 標準作業程序 (SOP)
+# 🔄 工程工作流程 (Engineering Workflow)
 
-## 1. 訓練失敗診斷流程 (Diagnosis Workflow)
-當訓練發散或結果不佳時，**嚴格執行**以下步驟：
+## 階段 0: 任務接收
+```
+用戶需求 → 理解意圖 → 確認範圍 → 提出計畫 → 等待批准
+```
 
-1. **快速檢查（先排除不穩定）**
-   - 先看 `log/<exp>/training.log`：是否出現 NaN/Inf、梯度爆炸、loss 權重失衡（特別是 data vs PDE）。
-   - 確認 `gradient_clip`、learning rate、以及（若有）optimizer schedule 是否合理。
-2. **後驗評估（以結果為準，不看 loss 自嗨）**
-   - 針對 `checkpoints/<exp>/{best_model.pth,latest.pth}` 跑：
-     `python scripts/evaluate/evaluate_checkpoint.py --checkpoint <path> --config <cfg.yml>`
-   - 需要更完整物理指標時跑：
-     `python scripts/evaluate/comprehensive_evaluation.py --checkpoint <path> --config <cfg.yml>`
-3. **感測點診斷（先確認可識別性）**
-   - `python scripts/visualize/visualize_qr_sensors.py --input <sensors.npz|json> --output <dir>`
-   - 檢查：近壁覆蓋、過度聚集、條件數（越小越好；通用目標 < 100，視資料矩陣而定）。
-4. **約束/邊界條件檢查（避免「看起來像」但物理壞掉）**
-   - `python scripts/validate_constraints.py --checkpoint <path>`
-   - 對通道流：特別注意壁面無滑移、週期邊界、以及壓力 gauge（評估以 ∇p 為主）。
-5. **修正策略（只改一個變因）**
-   - 優先修改 `configs/templates/` 或既有 config（避免新增大量一次性檔案）。
-   - 常見修正：調整 K / 調整 loss 標準化與權重守恆 / 打開 VS-PINN 或動態權重 / 先 slab 再 full。
-
-## 2. 強制物理驗證 (Mandatory Physics Checks)
-在執行任何大規模訓練或生成數據前，**必須**確認：
-
-*   **雷諾數一致性**: 使用 `scripts/calculate/calculate_reynolds_parameters.py` 確認 Config 與數據集物理參數匹配。
-*   **DNS 品質**: 使用 `scripts/validate_dns_physics.py` 確保 Ground Truth 符合 CFD 標準 (Divergence < 1e-3)。
-
-## 3. 對比實驗流程 (Experiment Comparison SOP)
-**唯一依據**：實驗矩陣、指標、執行順序以 `docs/EXPERIMENT_COMPARISON_PLAN.md` 為準（避免臨時腦補造成不可重現）。
-
-1. **先定義「對照組」與「單一變因」**
-   - 每次對比只改 1 個變因（例：Fourier on/off；GradNorm on/off；prior_weight sweep）。
-   - 固定：seed、感測器檔（不要重抽）、資料切窗/切片、訓練步數與評估網格。
-2. **先 2D 再 3D（逐步加剛性）**
-   - 2D Kolmogorov：用來做消融與 K-scan（低成本、最適合確認機制貢獻）。
-   - 3D Channel：先 `slab` 篩選（降低成本），再升級 full domain 做論文級結果。
-3. **必要 sweep（最少集）**
-   - K-scan：K ∈ {30, 50, 80, 100}（QR 佈點優先，保留 Random 作下界對照）。
-   - prior_weight：{0.0, 0.1, 0.3, 0.5}（避免 prior 太大把 PINN 綁死）。
-   - 噪聲/遺失：σ ∈ {0, 1%, 3%}、dropout ∈ {0, 10%}（至少 2D 做 3 seeds）。
-4. **評估指標（論文必報）**
-   - 全場：relative L2(u,v,w,∇p) + ‖∇·u‖（mean/max）。
-   - Channel 工程量：τ_w / U⁺(y⁺) / Reynolds stress 或 TKE / 能譜（避免只靠 smooth field 取巧）。
+**原則**: 先計畫後執行，避免理解偏差
 
 ---
 
-# 📂 專案地圖 (Resource Map)
+## 階段 1: 問題診斷
 
-Agent 應善用以下資源，避免重複造輪子：
+### 1.1 訓練失敗 → 診斷 SOP
+```bash
+① 檢查穩定性  → log/<exp>/training.log (NaN/梯度爆炸/權重失衡)
+② 後驗評估    → evaluate_checkpoint.py (L2/RMSE)
+③ 感測器診斷  → visualize_qr_sensors.py (覆蓋率/條件數)
+④ 物理驗證    → validate_constraints.py (邊界條件/守恆性)
+⑤ 修正策略    → 單變因修改 configs/templates/
+```
 
-*   **訓練配置**: `configs/`
-    *   `templates/`: 標準化模板 (2D Baseline, 3D Production, Curriculum)。**修改配置優先改這裡**。
-*   **核心代碼**: `pinnx/`
-    *   `models/`: Fourier MLP, SIREN, RWF。
-    *   `physics/`: Navier-Stokes 方程與 VS-PINN 實現。
-    *   `sensors/`: QR-Pivot 採樣演算法。
-*   **工具腳本**: `scripts/`
-    *   `train/train.py`: 訓練入口。
-    *   `evaluate/`: 主要評估工具。
-    *   `visualize/`: 視覺化工具。
-*   **詳細文檔**：
-    *   `docs/TECHNICAL_DOCUMENTATION.md`: 完整架構細節。
-    *   `scripts/README.md`: 詳細腳本指令參數說明。
+### 1.2 強制物理檢查 (Fail-Fast)
+```bash
+# 訓練/數據生成前必做
+① calculate_reynolds_parameters.py  # 雷諾數一致性
+② validate_dns_physics.py          # DNS 品質 (散度 < 1e-3)
+```
+
+---
+
+## 階段 2: 實驗設計
+
+### 2.1 對比實驗原則
+**唯一依據**: `docs/EXPERIMENT_COMPARISON_PLAN.md`
+
+**控制變因法**:
+```
+① 定義對照組與單一變因
+② 固定: seed / 感測器檔 / 資料切片 / 訓練步數
+③ 先 2D (Kolmogorov) → 再 3D (Channel)
+④ 先 slab 篩選 → 再 full domain
+```
+
+### 2.2 必要 Sweep (最小集)
+| 參數 | 範圍 | 用途 |
+|------|------|------|
+| K-scan | {30, 50, 80, 100} | 感測點數量 |
+| prior_weight | {0.0, 0.1, 0.3, 0.5} | 先驗權重 |
+| 噪聲 σ | {0, 1%, 3%} | 魯棒性測試 |
+| dropout | {0, 10%} | 遺失數據 |
+
+### 2.3 論文級評估指標
+```
+全場指標: relative L2(u,v,w,∇p) + ‖∇·u‖ (mean/max)
+工程量:   τ_w / U⁺(y⁺) / TKE / 能譜
+```
+
+---
+
+## 階段 3: 程式碼修改
+
+### 3.1 修改前 (Read → Plan)
+```bash
+① Read 目標文件 → 確認行號/縮進/上下文
+② 評估影響範圍 → 識別依賴關係
+③ 制定測試策略 → 單元測試 + 整合測試
+```
+
+### 3.2 修改中 (Edit → Test)
+```bash
+增量修改模式:
+Edit 函數A → Test ✅ → Commit
+Edit 函數B → Test ✅ → Commit
+Edit 函數C → Test ✅ → Commit
+
+禁止: Edit A+B+C → Test (失敗難定位)
+```
+
+### 3.3 修改後 (Verify → Commit)
+```bash
+① Import 測試    → from module import Class
+② 方法檢查       → hasattr(Class, 'method')
+③ 語法驗證       → python3 -m py_compile <file>
+④ 單元測試       → pytest tests/test_*.py -v
+⑤ AST 結構驗證   → 大重構時必做
+⑥ 快速訓練驗證   → 確保端到端可用
+```
+
+---
+
+## 階段 4: 測試驗證
+
+### 4.1 測試優先級
+```
+P0 (必做): 單元測試 + Import 驗證
+P1 (重要): 整合測試 + 物理驗證
+P2 (建議): 端到端訓練 + 視覺化檢查
+```
+
+### 4.2 物理正確性檢查
+```bash
+① 散度檢查      → ‖∇·u‖ < 1e-3
+② 邊界條件      → 壁面無滑移 / 週期性
+③ 守恆性        → 質量/動量/能量守恆
+④ 量綱一致性    → 無因次化正確性
+```
+
+---
+
+## 階段 5: 文檔更新
+
+### 5.1 必更新文檔
+```
+程式碼變更 → CHANGELOG.md
+新增功能   → docs/API_REFERENCE.md
+配置變更   → docs/CONFIG_REFERENCE.md
+錯誤修復   → docs/TROUBLESHOOTING.md
+```
+
+### 5.2 實驗記錄
+```
+實驗配置   → configs/<exp>.yml
+實驗結果   → results/<exp>/
+分析報告   → context/<exp>_report.md
+```
+
+---
+
+# 🧠 快速決策樹
+
+## 遇到訓練失敗?
+```
+Loss 異常? → 檢查權重平衡 + 梯度裁剪
+評估指標差? → 先看感測器質量
+物理不守恆? → 回到邊界條件與 PDE 設定
+收斂慢?     → 調整學習率 + 檢查標準化
+```
+
+## 需要修改程式碼?
+```
+小修改 (< 20行)  → Read → Edit → Test → Commit
+中修改 (20-100行) → Plan → 增量修改 → 增量測試
+大重構 (> 100行)  → 文檔設計 → 分階段實施 + AST 驗證
+```
+
+## 需要執行實驗?
+```
+新實驗? → 先檢查 EXPERIMENT_COMPARISON_PLAN.md
+修改配置? → 優先使用 configs/templates/
+新指標? → 先在 2D Kolmogorov 驗證
+```
+
+---
+
+# 📂 專案資源地圖
+
+**訓練配置**: `configs/`
+- `templates/`: 標準化模板 (2D Baseline, 3D Production, Curriculum)
+- **修改配置優先改這裡**
+
+**核心代碼**: `pinnx/`
+- `models/`: Fourier MLP, SIREN, RWF
+- `physics/`: Navier-Stokes 方程與 VS-PINN 實現
+- `sensors/`: QR-Pivot 採樣演算法
+
+**工具腳本**: `scripts/`
+- `train/train.py`: 訓練入口
+- `evaluate/`: 主要評估工具
+- `visualize/`: 視覺化工具
+
+**詳細文檔**：
+- `docs/TECHNICAL_DOCUMENTATION.md`: 完整架構細節
+- `scripts/README.md`: 詳細腳本指令參數說明
 
 # ⚠️ 注意事項
-1.  **Loss ≠ Accuracy**: 永遠以 `evaluate.py` 的後驗指標 (L2, RMSE) 為準。
-2.  **Config Management**: 優先修改現有 Template，避免產生大量一次性 Config 檔案。
-3.  **Safety**: 執行耗時指令前，先向使用者解釋意圖。
+1. **Loss ≠ Accuracy**: 永遠以 `evaluate.py` 的後驗指標 (L2, RMSE) 為準
+2. **Config Management**: 優先修改現有 Template，避免產生大量一次性 Config 檔案
+3. **Safety**: 執行耗時指令前，先向使用者解釋意圖
 
 ---
 

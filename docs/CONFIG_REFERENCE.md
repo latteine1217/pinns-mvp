@@ -52,6 +52,7 @@ training:
   batch_size: 1024
   n_collocation: 20000
   gradient_clip: 1.0
+  enforce_pressure_data: true  # 壓力驅動流是否強制要求壓力場資料（新增）
 ```
 
 ## 關鍵參數說明
@@ -115,6 +116,7 @@ physics:
   nu: 0.0125        # 動力黏度
   f0: 1.0           # 強迫振幅
   domain: [0, 6.283185307179586]  # [0, 2π]
+  pressure_driven: false  # 是否為壓力驅動流（Kolmogorov 為體積力驅動）
 ```
 
 **雷諾數定義**：
@@ -123,12 +125,92 @@ Re = √f₀ × L^(3/2) / ν
 L = 2π/k_f
 ```
 
+### Channel Flow 物理參數
+```yaml
+physics:
+  type: "channel_flow"
+  Re_tau: 1000      # 摩擦雷諾數
+  pressure_driven: true  # ⚠️ 必須設為 true（壓力梯度驅動）
+  domain:
+    x: [0, 12.56]   # 流向（2π）
+    y: [0, 2.0]     # 壁面法向
+    z: [0, 6.28]    # 展向（π）
+```
+
+**⚠️ 新增配置（v2025-12-17）**：
+- `pressure_driven`: 聲明流體是否由壓力梯度驅動
+  - `true`: Channel Flow, Pipe Flow 等
+  - `false`: Lid-Driven Cavity, Kolmogorov Flow 等
+- 用途：控制壓力場資料缺失時的處理策略（參見下文 `training.enforce_pressure_data`）
+
 ### 低保真先驗策略
 | 策略 | 適用場景 | prior_weight |
 |------|----------|--------------|
 | 無先驗 | 數據充足（K>200） | 0 |
 | RANS 先驗 | 推薦（K=50-100） | 0.1-0.5 |
 | 課程學習 | 高 Re（Re>100） | 動態調整 |
+
+### 訓練行為控制（新增 v2025-12-17）
+
+#### `training.enforce_pressure_data`
+控制壓力場資料缺失時的行為。
+
+```yaml
+training:
+  enforce_pressure_data: true   # 預設：與 physics.pressure_driven 相同
+```
+
+| 值 | 行為 | 適用場景 |
+|----|------|----------|
+| `true` (嚴格模式) | 壓力驅動流缺少壓力資料時拋出 `ValueError` | 生產環境（推薦） |
+| `false` (允許模式) | 缺少壓力資料時發出警告並初始化為零 | 除錯或特殊情況 |
+| 未設定 | 自動跟隨 `physics.pressure_driven` | 通用配置 |
+
+**範例**：
+
+```yaml
+# 情況 1: Channel Flow（壓力驅動）- 嚴格模式
+physics:
+  pressure_driven: true
+training:
+  enforce_pressure_data: true  # 缺少壓力資料將報錯
+
+# 情況 2: Kolmogorov Flow（體積力驅動）- 寬鬆模式
+physics:
+  pressure_driven: false
+# enforce_pressure_data 預設為 false，缺少壓力資料僅記錄 Info 日誌
+
+# 情況 3: Channel Flow 但允許無壓力資料（不推薦）
+physics:
+  pressure_driven: true
+training:
+  enforce_pressure_data: false  # 覆蓋預設，允許無壓力資料
+```
+
+**錯誤訊息範例**：
+```
+ValueError: ❌ 壓力場資料缺失！
+
+當前配置：
+  physics.pressure_driven = True
+  training.enforce_pressure_data = True
+
+檢測到問題：
+  sensor NPZ 檔案中缺少 'p' (壓力) 欄位
+
+對於壓力驅動流（Channel Flow），壓力場是必需的輸入資料。
+
+解決方案（三選一）：
+  1. 重新生成 sensor data 並確保包含壓力場
+     → python scripts/generate/sensors/xxx.py --include-pressure
+  
+  2. 檢查 NPZ 檔案是否正確載入
+     → data['sensor_data'] 應包含 'u', 'v', 'w', 'p' 鍵
+  
+  3. 若確實無壓力資料且理解風險，設定 config:
+     training:
+       enforce_pressure_data: false
+```
 
 ## 常用配置模板
 
