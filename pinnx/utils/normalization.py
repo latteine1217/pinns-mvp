@@ -644,6 +644,63 @@ class OutputTransform:
                     result[:, i] = result[:, i] * std + mean
             return result
     
+    def has_valid_stats(self) -> bool:
+        """
+        檢查標準化統計量是否有效
+        
+        驗證邏輯:
+        - 若 norm_type='none'，總是返回 True（不需要統計量）
+        - 否則檢查所有已註冊變量的統計量是否有效：
+          * means/stds 必須存在
+          * std 必須 > 1e-12（避免除零或數值不穩定）
+          * 所有值必須是有限數（non-NaN, non-Inf）
+        
+        Returns:
+            bool: 統計量是否有效
+        """
+        # 不啟用標準化時，統計量總是有效
+        if self.norm_type == 'none':
+            return True
+        
+        # 檢查每個變量的統計量
+        for var_name in self.variable_order:
+            # 檢查 mean 是否存在且有效
+            if var_name not in self.means:
+                logger.error(f"❌ 變量 '{var_name}' 缺少均值 (mean)")
+                return False
+            
+            mean_val = self.means[var_name]
+            if not np.isfinite(mean_val):
+                logger.error(f"❌ 變量 '{var_name}' 的均值無效: {mean_val} (NaN/Inf)")
+                return False
+            
+            # 檢查 std 是否存在且有效
+            if var_name not in self.stds:
+                logger.error(f"❌ 變量 '{var_name}' 缺少標準差 (std)")
+                return False
+            
+            std_val = self.stds[var_name]
+            
+            # 檢查是否為有限數
+            if not np.isfinite(std_val):
+                logger.error(f"❌ 變量 '{var_name}' 的標準差無效: {std_val} (NaN/Inf)")
+                return False
+            
+            # 檢查是否過小（會導致數值不穩定）
+            if abs(std_val) < 1e-12:
+                logger.error(
+                    f"❌ 變量 '{var_name}' 的標準差過小: {std_val:.2e}\n"
+                    f"   這會導致除零或數值不穩定。\n"
+                    f"   可能原因:\n"
+                    f"   1. 訓練資料中該變量為常數\n"
+                    f"   2. 資料範圍過小或單位不當\n"
+                    f"   建議: 檢查訓練資料或使用不同的標準化方法"
+                )
+                return False
+        
+        # 所有檢查通過
+        return True
+    
     def get_metadata(self) -> Dict[str, Any]:
         """獲取元數據（用於 checkpoint）"""
         return {
@@ -899,6 +956,15 @@ class UnifiedNormalizer:
     def variable_order(self) -> List[str]:
         """獲取變量順序（單一來源）"""
         return self.output_transform.variable_order
+    
+    def has_valid_stats(self) -> bool:
+        """
+        檢查標準化統計量是否有效（委託給 OutputTransform）
+        
+        Returns:
+            bool: 統計量是否有效
+        """
+        return self.output_transform.has_valid_stats()
     
     def to(self, device: torch.device) -> 'UnifiedNormalizer':
         """移動到指定設備"""

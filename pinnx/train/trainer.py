@@ -108,6 +108,21 @@ class Trainer:
         self.data_normalizer = DataNormalizer.from_config(config, training_data=training_data)
         logging.info(f"📐 DataNormalizer 初始化: {self.data_normalizer}")
         
+        # 🛡️ 驗證標準化統計量有效性（Risk #3 from audit）
+        if not self.data_normalizer.has_valid_stats():
+            raise RuntimeError(
+                "❌ DataNormalizer 統計量無效！\n"
+                "   可能原因:\n"
+                "   1. 標準化類型為 'training_data_norm' 但未提供 training_data\n"
+                "   2. training_data 中某些變量為常數（std ≈ 0）\n"
+                "   3. config['normalization']['params'] 中的統計量包含 NaN/Inf\n"
+                "   解決方案:\n"
+                "   1. 檢查 config['normalization']['params'] 是否正確設定\n"
+                "   2. 確認 training_data 傳遞給 Trainer.__init__()\n"
+                "   3. 檢查 sensor data 的數值範圍是否合理\n"
+                "   4. 若某變量確實為常數，考慮使用 normalization.type='none'"
+            )
+        
         # 訓練狀態
         self.epoch = 0
         self.global_step = 0
@@ -652,17 +667,18 @@ class Trainer:
         variable_weights = lowfi_cfg.get('variable_weights', {'u': 1.0, 'v': 1.0, 'p': 0.5})
         distance_metric = lowfi_cfg.get('distance_metric', 'mse')
         
-        # 創建 PriorLossManager
+        # 創建 PriorLossManager（Simplified 版本只需 consistency_weight）
+        loss_config = {
+            'low_fidelity': {
+                'variable_weights': variable_weights,
+                'distance_metric': distance_metric
+            }
+        }
+        
         self.prior_loss_manager = PriorLossManager(
             consistency_weight=consistency_weight,
-            statistical_weight=0.0,  # 暫不使用統計一致性
-            conservation_weight=0.0,  # 暫不使用守恆定律
-            symmetry_weight=0.0       # 暫不使用對稱性
+            loss_config=loss_config
         )
-        
-        # 更新低保真一致性損失的配置
-        self.prior_loss_manager.low_fidelity_loss.consistency_weight = consistency_weight
-        self.prior_loss_manager.low_fidelity_loss.variable_weights = variable_weights
         self.prior_loss_manager.low_fidelity_loss.distance_metric = distance_metric
         
         logging.info(f"✅ Prior Loss Manager 初始化完成")

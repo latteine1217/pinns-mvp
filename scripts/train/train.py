@@ -125,10 +125,42 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
         v_flat = v_slice.reshape(T_selected, -1)
         p_flat = p_slice.reshape(T_selected, -1) if p_slice is not None else None
         
+        # ========== 驗證 1: Sensor 索引越界檢查 ==========
+        N_total = u_flat.shape[1]
+        if spatial_indices.max() >= N_total:
+            raise IndexError(
+                f"❌ Sensor 索引越界！最大索引 {spatial_indices.max()} >= 總點數 {N_total}\n"
+                f"   可能原因：Sensor 檔案基於不同網格解析度生成\n"
+                f"   DNS 網格: {N}x{N} = {N_total} 點\n"
+                f"   Sensor 索引範圍: [{spatial_indices.min()}, {spatial_indices.max()}]"
+            )
+        if spatial_indices.min() < 0:
+            raise IndexError(
+                f"❌ Sensor 索引無效！最小索引 {spatial_indices.min()} < 0"
+            )
+        
+        logging.info(
+            f"✅ Sensor 索引驗證通過: [{spatial_indices.min()}, {spatial_indices.max()}] "
+            f"⊂ [0, {N_total-1}]"
+        )
+        # ===================================================
+        
         # 提取感測點的值 [T, K]
         u_sensors_vals = u_flat[:, spatial_indices]
         v_sensors_vals = v_flat[:, spatial_indices]
         p_sensors_vals = p_flat[:, spatial_indices] if p_flat is not None else None
+        
+        # ========== 驗證 2: Sensor 資料形狀檢查 ==========
+        expected_shape = (T_selected, K)
+        if u_sensors_vals.shape != expected_shape:
+            raise ValueError(
+                f"❌ Sensor 資料形狀錯誤！\n"
+                f"   預期: {expected_shape}\n"
+                f"   實際: {u_sensors_vals.shape}"
+            )
+        
+        logging.info(f"✅ Sensor 資料形狀驗證: u_sensors_vals.shape = {u_sensors_vals.shape}")
+        # ===================================================
         
     # 4. 構建訓練張量 (T * K 樣本)
     # 我們需要將 [T, K] 展平成 [T*K, 1]
@@ -151,6 +183,35 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
         p_train = p_sensors_vals.flatten()
     else:
         p_train = np.zeros_like(u_train)
+    
+    # ========== 驗證 3: Flatten 順序一致性檢查 ==========
+    # 驗證 flatten 後的總長度
+    assert len(u_train) == T_selected * K, \
+        f"❌ Flatten 長度錯誤！預期 {T_selected * K}，實際 {len(u_train)}"
+    
+    # 驗證 C-order flatten 的對應關係
+    # flatten([T, K]) with C-order -> [u(t0,k0), u(t0,k1), ..., u(t0,kK-1), u(t1,k0), ...]
+    # 檢查第一個時間步的第一個 sensor
+    if not np.isclose(u_train[0], u_sensors_vals[0, 0], rtol=1e-5):
+        raise ValueError(
+            f"❌ Flatten 順序錯誤！\n"
+            f"   u_train[0] = {u_train[0]}\n"
+            f"   u_sensors_vals[0, 0] = {u_sensors_vals[0, 0]}\n"
+            f"   兩者應該相等（第一個時間步的第一個 sensor）"
+        )
+    
+    # 檢查第二個時間步的第一個 sensor（如果有第二個時間步）
+    if T_selected > 1:
+        if not np.isclose(u_train[K], u_sensors_vals[1, 0], rtol=1e-5):
+            raise ValueError(
+                f"❌ Flatten 順序錯誤！\n"
+                f"   u_train[{K}] = {u_train[K]}\n"
+                f"   u_sensors_vals[1, 0] = {u_sensors_vals[1, 0]}\n"
+                f"   兩者應該相等（第二個時間步的第一個 sensor）"
+            )
+    
+    logging.info(f"✅ Flatten 順序驗證通過（C-order）")
+    # =======================================================
         
     # 轉換為 Tensor
     x_sensors = torch.tensor(x_train, dtype=torch.float32, device=device).unsqueeze(1)
@@ -1391,14 +1452,87 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
         z_sensors = torch.zeros_like(x_sensors)
     t_sensors = torch.zeros_like(x_sensors)  # 暫時假設 t=0
     
+    # ========== 座標維度一致性檢查（Coordinate Dimension Consistency） ==========
+    # 檢查 z 座標是否與物理模式一致
+    # 注意：檢查「變化」而非「大小」，使用 std 判斷是否為常數
+    coords_z_is_constant = coords.shape[1] >= 3 and coords[:, 2].std().item() < 1e-6
+    coords_has_varying_z = coords.shape[1] >= 3 and not coords_z_is_constant
+    
+    if is_vs_pinn:
+        # VS-PINN (3D) 模式：期望 z 座標有變化
+        if coords_z_is_constant:
+            z_mean = coords[:, 2].mean().item()
+            logging.warning(
+                f"⚠️ VS-PINN (3D) 模式但 z 座標為常數 (z={z_mean:.4f})。\n"
+                f"   這可能表示:\n"
+                f"   1. 資料來自 2D 切片且固定 z (驗證 z_default={z_mean:.4f} 是否正確)\n"
+                f"   2. 配置錯誤 (這應該是 2D 模式嗎?)\n"
+                f"   如果這是刻意的 2D 切片資料，建議設定 physics.type 為非 VS-PINN。"
+            )
+    else:
+        # 2D 模式：期望 z 座標為常數或不重要
+        if coords_has_varying_z:
+            z_min = coords[:, 2].min().item()
+            z_max = coords[:, 2].max().item()
+            logging.warning(
+                f"⚠️ 2D 物理模式但 z 座標有變化 (範圍: [{z_min:.4f}, {z_max:.4f}])。\n"
+                f"   Z 值將被忽略 (強制為零)。\n"
+                f"   如果這是 3D 資料，建議:\n"
+                f"   1. 設定 physics.type: 'vs_pinn_channel_flow' 以支援 3D\n"
+                f"   2. 若確實為 2D 問題，重新生成感測器資料時進行 2D 提取"
+            )
+    # ====================================================================
+    
     u_sensors = sensor_data['u']
     v_sensors = sensor_data['v']
     
-    # 🆕 壓力場可能不存在（僅速度場訓練）
+    # ========== 壓力場缺失處理（Pressure Field Handling） ==========
+    # 檢查壓力場是否存在
     p_sensors = sensor_data.get('p')
     if p_sensors is None:
-        # 如果沒有壓力數據，初始化為零（由 PINN 從速度場推導）
-        p_sensors = torch.zeros_like(u_sensors)
+        # 判斷物理類型是否為壓力驅動流
+        physics_config = config.get('physics', {})
+        physics_type = physics_config.get('type', '')
+        is_pressure_driven = physics_config.get('pressure_driven', False)
+        
+        # 檢查是否強制要求壓力場（默認：壓力驅動流需要壓力場）
+        enforce_pressure_data = config.get('training', {}).get('enforce_pressure_data', is_pressure_driven)
+        
+        if enforce_pressure_data:
+            # 壓力驅動流必須提供壓力場
+            raise ValueError(
+                f"❌ 壓力場資料缺失錯誤\n"
+                f"   物理類型: '{physics_type}' (pressure_driven={is_pressure_driven})\n"
+                f"   壓力驅動流必須提供壓力場資料（sensor_data['p']）。\n"
+                f"\n"
+                f"   可能的解決方案：\n"
+                f"   1. 確保感測器 NPZ 檔案包含壓力欄位（'p', 'sensor_p', 或 'pressure'）\n"
+                f"   2. 重新生成感測器資料（使用 scripts/generate/sensors/）\n"
+                f"   3. 如果這是速度驅動流，請在 config 中設定：\n"
+                f"      physics:\n"
+                f"        pressure_driven: false\n"
+                f"      或\n"
+                f"      training:\n"
+                f"        enforce_pressure_data: false  # 不推薦，會降低訓練效率\n"
+            )
+        else:
+            # 速度驅動流或用戶明確允許缺失壓力場
+            if is_pressure_driven:
+                logging.warning(
+                    f"⚠️  壓力驅動流缺少壓力場資料！\n"
+                    f"    初始化為零向量（將由 PINN 從速度場與 PDE 推導）。\n"
+                    f"    這會顯著降低訓練效率與收斂速度。\n"
+                    f"    強烈建議提供真實壓力場資料。"
+                )
+            else:
+                logging.info(
+                    f"ℹ️  壓力場未提供（速度驅動流或用戶允許），初始化為零。\n"
+                    f"    壓力場將由 PINN 從速度場與 PDE 殘差推導。"
+                )
+            p_sensors = torch.zeros_like(u_sensors)
+    else:
+        logging.info(f"✅ 壓力場資料已載入：shape={p_sensors.shape}, range=[{p_sensors.min():.4f}, {p_sensors.max():.4f}]")
+    # ================================================================
     
     # 🆕 如果是 VS-PINN，添加 w 分量（假設為 0 或從數據中獲取）
     if is_vs_pinn:
