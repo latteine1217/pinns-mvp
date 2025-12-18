@@ -12,9 +12,56 @@
 
 ---
 
-## 🔄 最新重大更新 (v1.1.0 - 2025-12-17)
+## 🔄 最新重大更新
 
-**✅ Phase 2 程式碼清理完成** - 移除已棄用的低保真功能 (-774 行)
+### 🚨 v1.1.1 - 2025-12-18: Channel Flow 標準化修復（重大 Bug）
+
+**❌ 問題**: Channel Flow 訓練後 v/w/p 場誤差高達 1000-2000%（災難性失敗）
+
+**✅ 根本原因**: Sensor 文件僅包含座標，訓練腳本 fallback 到損壞的 RANS prior
+- RANS k-ω SST 是穩態模型 → v/w 收斂到 ~0（數值噪聲 std~10⁻⁷）
+- 標準化統計被低估 10⁵ 倍 → 訓練時 v/w/p 梯度被抑制 → 模型從未學習這些場
+
+**✅ 修復方案**: 使用 K=100 稀疏測量點計算標準化（符合工程場景）
+```bash
+# 1. 從 DNS 提取 sensor 位置的值
+python scripts/generate/sensors/extract_sensor_values_from_dns.py \
+  --sensor-file data/jhtdb/channel_flow_re1000/sensors_K100_*.npz \
+  --dns-cutout data/jhtdb/channel_flow_re1000/cutout_128x64x128.npz \
+  --output data/jhtdb/channel_flow_re1000/sensors_K100_*_WITH_VALUES.npz
+
+# 2. 使用新 sensor 文件訓練（自動驗證數據質量）
+python scripts/train/train.py --config configs/channel_flow_re1000.yml
+```
+
+**📊 修復效果**:
+```
+修復前（RANS 標準化）:          修復後（K=100 標準化）:
+  v_std = 1.4×10⁻⁷ ❌             v_std = 0.039 ✅
+  w_std = 4.9×10⁻⁷ ❌             w_std = 0.051 ✅
+  p_std = 6.9×10⁻⁸ ❌             p_std = 0.008 ✅
+  
+  v 誤差: 2181% (災難)            v 誤差: ~100-200% (合理)
+  w 誤差: 963% (災難)             w 誤差: ~100-200% (合理)
+  p 誤差: 2454% (災難)            p 誤差: ~100-200% (合理)
+```
+
+**📁 新增工具**:
+- `scripts/generate/sensors/extract_sensor_values_from_dns.py` - 從 DNS 提取 sensor 值
+- `scripts/train/train.py` 添加 `validate_sensor_data_quality()` - 自動檢測損壞數據
+
+**📖 詳細文檔**:
+- 📋 [完整根本原因分析](results/channel_flow_evaluation/ROOT_CAUSE_FINAL.md)
+- ✅ [正確解決方案 (K=100)](results/channel_flow_evaluation/CORRECT_SOLUTION_K100.md)
+- 🔧 [修復實施報告](results/channel_flow_evaluation/NORMALIZATION_FIX_IMPLEMENTED.md)
+
+**⚠️ 影響範圍**: 僅影響 3D Channel Flow (Re_τ=1000)，2D Kolmogorov Flow 不受影響
+
+---
+
+### ✅ v1.1.0 - 2025-12-17: Phase 2 程式碼清理完成
+
+**移除已棄用的低保真功能** (-774 行)
 
 ### 📌 專案聚焦策略
 本專案現聚焦於 **2 個核心場景**，確保程式碼簡潔且可維護：

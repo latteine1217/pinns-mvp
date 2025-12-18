@@ -46,6 +46,79 @@ from pinnx.utils.setup import (
     set_random_seed,
 )
 
+
+# ============================================================================
+# 🚨 修復：添加數據質量驗證
+# ============================================================================
+def validate_sensor_data_quality(sensor_data: Dict[str, Any], logger) -> None:
+    """
+    驗證感測器數據具有合理的物理統計特性
+    
+    防止使用損壞的 RANS prior（v/w/p 標準差 ~10⁻⁷）進行標準化
+    
+    Args:
+        sensor_data: 包含 u/v/w/p 的字典
+        logger: logging.Logger 實例
+    
+    Raises:
+        ValueError: 如果檢測到不合理的數據統計
+    """
+    logger.info("\n" + "="*80)
+    logger.info("🔍 Sensor Data Quality Check")
+    logger.info("="*80)
+    
+    for var in ['u', 'v', 'w', 'p']:
+        if var not in sensor_data:
+            continue
+            
+        data = sensor_data[var]
+        if isinstance(data, torch.Tensor):
+            data_np = data.cpu().numpy().flatten()
+        else:
+            data_np = np.asarray(data).flatten()
+        
+        mean = float(data_np.mean())
+        std = float(data_np.std())
+        data_min = float(data_np.min())
+        data_max = float(data_np.max())
+        
+        logger.info(f"  {var}: mean={mean:.6e}, std={std:.6e}, range=[{data_min:.6e}, {data_max:.6e}]")
+        
+        # 檢查異常小的標準差（數值噪聲）
+        if var in ['v', 'w'] and std < 1e-3:
+            raise ValueError(
+                f"\n❌ CRITICAL: {var} has std={std:.2e} (< 1e-3)\n"
+                f"   This indicates numerical noise, NOT physical data!\n"
+                f"   \n"
+                f"   Likely causes:\n"
+                f"     1. Sensor file has no actual DNS values (coordinates only)\n"
+                f"     2. Using corrupted RANS prior for normalization (steady RANS → v/w ≈ 0)\n"
+                f"     3. Data loading pipeline bug\n"
+                f"   \n"
+                f"   Solutions:\n"
+                f"     - Option A: Generate sensor file with DNS values extracted from cutout\n"
+                f"     - Option B: Force normalization from DNS cutout (not sensors)\n"
+                f"   \n"
+                f"   See: results/channel_flow_evaluation/ROOT_CAUSE_FINAL.md"
+            )
+        
+        if var == 'p' and std < 1e-4:
+            raise ValueError(
+                f"\n❌ CRITICAL: {var} has std={std:.2e} (< 1e-4)\n"
+                f"   Pressure field appears to be gauge pressure residuals!\n"
+                f"   Check if RANS data is being used instead of DNS."
+            )
+        
+        # 檢查全零或 NaN
+        if np.abs(data_np).max() < 1e-10:
+            raise ValueError(f"❌ {var} field is all zeros (max magnitude < 1e-10)!")
+        
+        if not np.isfinite(data_np).all():
+            raise ValueError(f"❌ {var} field contains NaN or Inf!")
+    
+    logger.info("✅ Sensor data quality check PASSED")
+    logger.info("="*80 + "\n")
+
 # Kolmogorov flow data preparation (Fixed Sensors x Time Series)
 def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.device) -> Dict[str, torch.Tensor]:
     """準備 Kolmogorov Flow 訓練資料 (固定感測器 x 時間序列)
@@ -1403,12 +1476,20 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
         # 預設行為：包含壓力場
         target_fields = ['u', 'v', 'w', 'p'] if is_3d else ['u', 'v', 'p']
     
+    # ✅ 檢查是否啟用 lowfi_prior (RANS)
+    lowfi_cfg = config.get('lowfi_prior', {})
+    if lowfi_cfg.get('enabled', False):
+        prior_type = 'rans'  # 使用 RANS prior
+    else:
+        prior_type = 'none'  # 僅使用 sensor data
+    
     training_bundle = load_channel_flow(
         config_path=config_path,  # ⭐ 傳遞配置路徑給 ChannelFlowLoader
         strategy=strategy,
         K=K,
         target_fields=target_fields,
-        sensor_file=sensor_file  # 傳遞自定義文件名
+        sensor_file=sensor_file,  # 傳遞自定義文件名
+        prior_type=prior_type  # ✅ NEW: 傳遞 prior_type
     )
     
     training_data = training_bundle.as_training_dict(
@@ -1919,24 +2000,71 @@ def main():
             trainer.training_data = training_data_sample
             
             # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）
+            # 🚨 修復：從實際 sensor data 計算標準化（避免使用損壞的 RANS prior）
             if config.get('data', {}).get('normalize', False):
                 norm_cfg = config.get('normalization', {})
                 if norm_cfg.get('type') == 'training_data_norm' and not norm_cfg.get('params'):
-                    # 從感測點數據計算 Z-score
-                    sensor_data = {
-                        'u': training_data_sample['u_sensors'],
-                        'v': training_data_sample['v_sensors'],
-                        'p': training_data_sample['p_sensors']
-                    }
-                    if 'w_sensors' in training_data_sample:
-                        sensor_data['w'] = training_data_sample['w_sensors']
+                    # 檢查 sensor data 是否包含實際值
+                    has_sensor_values = all(
+                        f'{var}_sensors' in training_data_sample and 
+                        training_data_sample[f'{var}_sensors'].numel() > 0
+                        for var in ['u', 'v', 'w', 'p']
+                    )
+                    
+                    if has_sensor_values:
+                        # ✅ 使用 K=100 sensor data（工程場景 - 稀疏測量）
+                        logger.info(f"🔧 Computing normalization from K=100 sensor data")
+                        normalization_data = {
+                            'u': training_data_sample['u_sensors'].cpu().numpy(),
+                            'v': training_data_sample['v_sensors'].cpu().numpy(),
+                            'w': training_data_sample['w_sensors'].cpu().numpy(),
+                            'p': training_data_sample['p_sensors'].cpu().numpy()
+                        }
+                    else:
+                        # ⚠️ Fallback: Sensor 文件沒有值，使用包含值的版本
+                        logger.warning("⚠️  Sensor data missing u/v/w/p values!")
+                        logger.warning("   Attempting to load sensor file with extracted DNS values...")
+                        
+                        sensor_with_values = "data/jhtdb/channel_flow_re1000/sensors_K100_qr_pivot_3d_v5_WITH_VALUES.npz"
+                        if Path(sensor_with_values).exists():
+                            logger.info(f"✅ Found sensor file with values: {sensor_with_values}")
+                            sensor_data = np.load(sensor_with_values)
+                            normalization_data = {
+                                'u': sensor_data['u_sensors'],
+                                'v': sensor_data['v_sensors'],
+                                'w': sensor_data['w_sensors'],
+                                'p': sensor_data['p_sensors']
+                            }
+                        else:
+                            raise FileNotFoundError(
+                                f"\n❌ CRITICAL: Cannot compute normalization!\n"
+                                f"\n"
+                                f"Sensor data has no u/v/w/p values, and fallback file not found:\n"
+                                f"  {sensor_with_values}\n"
+                                f"\n"
+                                f"Generate it with:\n"
+                                f"  python scripts/generate/sensors/extract_sensor_values_from_dns.py \\\n"
+                                f"    --sensor-file <your_sensor_coords.npz> \\\n"
+                                f"    --dns-cutout data/jhtdb/channel_flow_re1000/cutout_128x64x128.npz \\\n"
+                                f"    --output {sensor_with_values}\n"
+                            )
+                    
+                    # 驗證數據質量
+                    validate_sensor_data_quality(normalization_data, logger)
+                    
+                    # 記錄統計量供驗證
+                    logger.info("📊 Sensor Normalization Statistics (K=100):")
+                    for var, data in normalization_data.items():
+                        if isinstance(data, np.ndarray):
+                            logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
                     
                     from pinnx.utils.normalization import DataNormalizer
                     trainer.data_normalizer = DataNormalizer.from_data(
-                        sensor_data, 
+                        normalization_data,
                         norm_type='training_data_norm'
                     )
-                    logger.info(f"✅ 已從訓練資料計算標準化統計量（Ensemble member {i+1}）: {trainer.data_normalizer}")
+                    logger.info(f"✅ Normalization computed from K=100 sensor data (Ensemble member {i+1})")
+                    logger.info(f"   Normalizer: {trainer.data_normalizer}")
             
             # 載入 checkpoint（若指定）
             if args.resume:
@@ -1962,24 +2090,71 @@ def main():
         trainer.training_data = training_data_sample
         
         # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）
+        # 🚨 修復：從實際 sensor data 計算標準化（避免使用損壞的 RANS prior）
         if config.get('data', {}).get('normalize', False):
             norm_cfg = config.get('normalization', {})
             if norm_cfg.get('type') == 'training_data_norm' and not norm_cfg.get('params'):
-                # 從感測點數據計算 Z-score
-                sensor_data = {
-                    'u': training_data_sample['u_sensors'],
-                    'v': training_data_sample['v_sensors'],
-                    'p': training_data_sample['p_sensors']
-                }
-                if 'w_sensors' in training_data_sample:
-                    sensor_data['w'] = training_data_sample['w_sensors']
+                # 檢查 sensor data 是否包含實際值
+                has_sensor_values = all(
+                    f'{var}_sensors' in training_data_sample and 
+                    training_data_sample[f'{var}_sensors'].numel() > 0
+                    for var in ['u', 'v', 'w', 'p']
+                )
+                
+                if has_sensor_values:
+                    # ✅ 使用 K=100 sensor data（工程場景 - 稀疏測量）
+                    logger.info(f"🔧 Computing normalization from K=100 sensor data")
+                    normalization_data = {
+                        'u': training_data_sample['u_sensors'].cpu().numpy(),
+                        'v': training_data_sample['v_sensors'].cpu().numpy(),
+                        'w': training_data_sample['w_sensors'].cpu().numpy(),
+                        'p': training_data_sample['p_sensors'].cpu().numpy()
+                    }
+                else:
+                    # ⚠️ Fallback: Sensor 文件沒有值，使用包含值的版本
+                    logger.warning("⚠️  Sensor data missing u/v/w/p values!")
+                    logger.warning("   Attempting to load sensor file with extracted DNS values...")
+                    
+                    sensor_with_values = "data/jhtdb/channel_flow_re1000/sensors_K100_qr_pivot_3d_v5_WITH_VALUES.npz"
+                    if Path(sensor_with_values).exists():
+                        logger.info(f"✅ Found sensor file with values: {sensor_with_values}")
+                        sensor_data = np.load(sensor_with_values)
+                        normalization_data = {
+                            'u': sensor_data['u_sensors'],
+                            'v': sensor_data['v_sensors'],
+                            'w': sensor_data['w_sensors'],
+                            'p': sensor_data['p_sensors']
+                        }
+                    else:
+                        raise FileNotFoundError(
+                            f"\n❌ CRITICAL: Cannot compute normalization!\n"
+                            f"\n"
+                            f"Sensor data has no u/v/w/p values, and fallback file not found:\n"
+                            f"  {sensor_with_values}\n"
+                            f"\n"
+                            f"Generate it with:\n"
+                            f"  python scripts/generate/sensors/extract_sensor_values_from_dns.py \\\n"
+                            f"    --sensor-file <your_sensor_coords.npz> \\\n"
+                            f"    --dns-cutout data/jhtdb/channel_flow_re1000/cutout_128x64x128.npz \\\n"
+                            f"    --output {sensor_with_values}\n"
+                        )
+                
+                # 驗證數據質量
+                validate_sensor_data_quality(normalization_data, logger)
+                
+                # 記錄統計量供驗證
+                logger.info("📊 Sensor Normalization Statistics (K=100):")
+                for var, data in normalization_data.items():
+                    if isinstance(data, np.ndarray):
+                        logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
                 
                 from pinnx.utils.normalization import DataNormalizer
                 trainer.data_normalizer = DataNormalizer.from_data(
-                    sensor_data, 
+                    normalization_data,
                     norm_type='training_data_norm'
                 )
-                logger.info(f"✅ 已從訓練資料計算標準化統計量: {trainer.data_normalizer}")
+                logger.info(f"✅ Normalization computed from K=100 sensor data")
+                logger.info(f"   Normalizer: {trainer.data_normalizer}")
         
         # 載入 checkpoint（若指定）
         if args.resume:
