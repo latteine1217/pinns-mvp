@@ -1,0 +1,3760 @@
+國  立  清  華  大  學 
+
+碩  士  論  文 
+
+開發 RP-1 骨架化學動力學機制用於計算流體力學在液態火箭
+
+引擎燃燒室模擬 
+
+Developing a skeletal RP-1 chemical kinetic mechanism for 
+CFD in liquid rocket engines combustion chamber 
+
+系別 : 工程與系統科學系  組別 : 先進熱流與能源系統組 
+
+指導教授 :  林洸銓   Kuang C. Lin 
+
+學號姓名 :  113011576 劉奕承  Yi-Cheng Liu 
+
+中 華 民 國  114 年 12 月 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+Table of Contents 
+
+Table of Contents .................................................................................................................................. i 
+
+List of Figures ......................................................................................................................................ii 
+
+List of Tables ..................................................................................................................................... iii 
+
+Nomenclature ..................................................................................................................................... iii 
+
+Chapter 1 
+
+Introduction ...................................................................................................................... 1 
+
+1.1 
+
+Background. ......................................................................................................................... 1 
+
+1.1.1  Liquid rocket engine .................................................................................................................... 1 
+
+1.1.2  Rocket Propellant 1 (RP-1) surrogate .......................................................................................... 2 
+
+1.2 
+
+Literature review .................................................................................................................. 3 
+
+1.2.1  CFD study of liquid rocket engine ............................................................................................... 3 
+
+1.2.2  Chemical kinetic mechanism of RP-1 .......................................................................................... 5 
+
+1.2.3  Reduced chemical kinetic mechanism of RP-1 ............................................................................ 7 
+
+1.3  Motivation ............................................................................................................................ 9 
+
+1.4 
+
+Objective .............................................................................................................................. 9 
+
+Chapter 2  Methodology .................................................................................................................. 10 
+
+2.1  Mechanism reduction ......................................................................................................... 10 
+
+2.1.1  Mechanism reduction flowchart of RP-1 ................................................................................... 10 
+
+2.1.2  Mechanism reduction using parallel-preconditioning sensitivity analysis (PPSA) ................... 12 
+
+2.2 
+
+Premixed flame .................................................................................................................. 14 
+
+2.2.1 
+
+0-D Ignition delay times ............................................................................................................. 14 
+
+2.2.2 
+
+1-D Flame speed ........................................................................................................................ 15 
+
+2.3 
+
+Application to a non-premixed realistic rocket engine ...................................................... 17 
+
+Chapter 3  Results and discussion ................................................................................................... 22 
+
+3.1 
+
+Premixed flame .................................................................................................................. 22 
+
+3.1.1  Mechanism reduction using parallel-preconditioning sensitivity analysis (PPSA) ................... 22 
+
+3.1.2 
+
+0-D ignition delay time .............................................................................................................. 23 
+
+3.1.3 
+
+1-D laminar flame speed ............................................................................................................ 24 
+
+3.2 
+
+Preliminary application results of a non-premixed realistic rocket engine ....................... 25 
+
+Appendix ........................................................................................................................................ 27 
+
+Reference ....................................................................................................................................... 27 
+
+i 
+
+ 
+ 
+ 
+ 
+List of Figures 
+
+Figure 1.1 Combustion process in liquid rocket engines. ................................................................... 1 
+
+Figure 1.2 Structure of (a) paraffins (b) cycloparaffins (c) aromatics. ............................................... 2 
+
+Figure 2.1 Flowchart of developing the RP-1 skeletal mechanism. ................................................. 11 
+
+Figure 2.2 Comparison of experimental RP-1 ignition delay time with simulated at 10 and 20 atm 
+
+for equivalence ratios 𝜙 of 0.5 and 1.0 using various kinetic mechanisms. ...................................... 11 
+
+Figure 2.3 Comparison of experimental RP-1 flame speed with simulated at 1 atm and 403 K using 
+
+various kinetic mechanisms. .............................................................................................................. 12 
+
+Figure 2.4 Definition of the ignition delay time ............................................................................... 15 
+
+Figure 2.5 Schematic of the laminar flame-speed configuration. ..................................................... 17 
+
+Figure 2.6 Size parameters of the thrust chamber and injector (all dimensions in millimeters) [17].
+
+ ........................................................................................................................................................... 20 
+
+Figure 2.7 Mesh model and boundary conditions for gas-oxygen/kerosene ignition and combustion 
+
+simulation based on Liu et al. [17]. ................................................................................................... 20 
+
+Figure 3.1 Flowchart of reduction process for the detailed mechanism. .......................................... 22 
+
+Figure 3.2 Comparison of experimental RP-1 ignition delay time with simulated at 10 and 20 atm 
+
+for equivalence ratios 𝜙 of 0.5 and 1.0 using detailed mechanism and various reduced mechanisms.
+
+ ........................................................................................................................................................... 23 
+
+Figure 3.3 Comparison of experimental RP-1 flame speed with simulated at 1 atm and 403 K using 
+
+detailed mechanism and various reduced mechanisms. .................................................................... 24 
+
+Figure 3.4 Comparison of the ignition-pressurization process between experiment and simulation.
+
+ ........................................................................................................................................................... 25 
+
+Figure 3.5 Steady-state pressure distribution in the combustion chamber at the z = 0 mm plane. ... 26 
+
+Figure 3.6 Velocity field and streamlines in the combustion chamber at the z= 0 mm plane. .......... 26 
+
+Figure 3.7 Temperature distribution in the combustion chamber after ignition at the z = 0 mm plane.
+
+ ........................................................................................................................................................... 26 
+
+ii 
+
+ 
+ 
+ 
+ 
+List of Tables 
+
+Table 1.1 Computational studies on liquid rocket engines.................................................................. 4 
+
+Table 1.2 Kinetic mechanisms of RP-1 surrogate oxidation ............................................................... 6 
+
+Table 1.3 Experimental studies on RP-1 oxidation. ............................................................................ 6 
+
+Table 1.4 Reduced chemical kinetic mechanism of RP-1. .................................................................. 8 
+
+Table 2.1 Target parameters used in PPSA for mechanism reduction. .............................................. 14 
+
+Table 2.2 Operating parameters for homogeneous reactor simulations of RP-1 ignition. ................ 15 
+
+Table 2.3 Parameters used for RP-1 laminar flame-speed calculation. ............................................. 16 
+
+Table 2.4 Grid parameters for laminar flame-speed simulations. ..................................................... 16 
+
+Table 2.5 Boundary conditions for the gas-oxygen/kerosene ignition and combustion simulation. 21 
+
+Table 3.1 Sizes of reduced mechanism generated using PPSA......................................................... 22 
+
+Nomenclature 
+
+Abbreviations 
+
+CFD: computational fluid dynamics  
+
+CF: thrust coefficient 
+
+c*: characteristic exhaust velocity 
+
+CRZ: central recirculation zone  
+
+EDC: Eddy dissipation concept 
+
+EWT: Enhanced wall treatment 
+
+FS: flame speed 
+
+FVM: finite volume method 
+
+FANS: Favre-averaged Navier-Stokes 
+
+FDNS: Finite Difference Navier–Stokes 
+
+GSA: global sensitivity analysis 
+
+GMRES: Generalized Minimal Residual 
+
+IDT: ignition delay time 
+
+Isp: specific impulse 
+
+LREs: Liquid rocket engines 
+
+LES: large eddy simulation 
+
+iii 
+
+ 
+ 
+PPSA: Parallel-Preconditioning Sensitivity Analysis 
+
+RP-1: Rocket Propellant 1 
+
+RANS: Reynolds-Averaged Navier-Stokes 
+
+SVF: soot volume fraction 
+
+ST: shock tube 
+
+SEF: spherically expanding flame 
+
+SP: species profiles 
+
+TF: temperature field 
+
+WSGGM: weighted-sum-of-gray-gases model 
+
+Latin Symbols 
+
+𝐴: tubular cross-section area 
+
+𝑐𝑝: constant-pressure specific heat capacity of the gas mixture 
+
+𝑐𝑝𝑖: constant-pressure specific heat capacity of the 𝑖𝑡ℎ species 
+
+𝑐𝑣: constant-volume specific heat capacity of the gas mixture 
+
+𝐷𝑖𝑗: binary mass diffusion coefficient for species pair 𝑖 and 𝑗 
+
+𝐷𝑇: turbulent diffusivity 
+
+𝐺: zone volume of pressure-weighted accumulated  
+
+𝐺𝑘: average velocity gradient 
+
+ℎ: specific enthalpy of the gas mixture 
+
+ℎ𝑖: specific enthalpy of the species 𝑖𝑡ℎ species 
+
+𝐽⃑𝑖: diffusion flux of the species 𝑖 
+
+𝑘: turbulent kinetic energy 
+
+𝑀: zone mass 
+
+𝑀𝑤,𝑖: the molecular weight of species 𝑖 
+
+𝑀̇ : mass flow rate 
+
+𝑁: number of chemical species 
+
+𝑁ℛ: number of chemical reactions 
+
+𝑛̇ : molar flow rate of gas 
+
+P: pressure 
+
+iv 
+
+ 
+ 
+𝑝: local relative pressure 
+
+𝑝0: operating pressure 
+
+𝑃̅: average pressure 
+
+𝑅: universal gas constant 
+
+𝑅̂𝑖,𝓇: Arrhenius molar rate of creation or depletion of the species 𝑖 in reaction 𝓇 
+
+𝑺: chemical reaction source term vector 
+
+S: mean rate of strain tensor  
+
+𝑆L: laminar flame speed 
+
+𝑆𝑐t: turbulent Schmidt number 
+
+T: temperature 
+
+𝑇̅: average temperature 
+
+𝑡: time 
+
+𝑢: velocity magnitude 
+
+𝑢𝑖̇ : specific internal energy of the species 𝑖 
+
+𝑉: volume 
+
+𝑉̇ : volume flow rate 
+
+𝑉𝑖: diffusion velocity of the 𝑖𝑡ℎ species 
+
+𝑣̅𝑥: average velocity of x-direction 
+
+𝑣̅𝑦: average velocity of y-direction 
+
+𝑣̅𝑧: average velocity of z-direction 
+
+𝑥: spatial coordinate along the principal flow direction 
+
+𝑌𝑖: mass fraction of the species 𝑖 
+
+𝑊𝑖: molecular weight of the species 
+
+Greek Symbols 
+
+𝛼𝑇: turbulent thermal diffusivity coefficient 
+
+𝜆: thermal conductivity of the gas mixture 
+
+𝜇: mixture viscosity 
+
+𝜇t: turbulence viscosity coefficient 
+
+𝜌: density 
+
+v 
+
+ 
+ 
+𝜏: ignition delay time 
+
+𝜔̇̅𝑖: mean molar rate of production of the species 𝑖. 
+
+𝜀: dissipation rate of turbulent kinetic energy 
+
+𝜎𝑘: turbulent Prandtl numbers for 𝑘 
+
+𝜎𝜀: turbulent Prandtl numbers for 𝜀  
+
+vi 
+
+ 
+ 
+1 
+
+2 
+
+3 
+
+4 
+
+5 
+
+6 
+
+7 
+
+8 
+
+9 
+
+Chapter 1  Introduction 
+
+1.1  Background. 
+
+1.1.1  Liquid rocket engine 
+
+Liquid rocket engines (LREs) used to be missiles, aircraft and Jet assisted system [1]. Currently they 
+
+are all concerned with space flight and have served as the primary propulsion systems for most launch 
+
+vehicles and spacecraft for decades. Their advantage lies in the ability to be designed across a wide 
+
+range of thrust levels to suit specific launch stages and  spacecraft requirements. This flexibility is 
+
+enabled  by  liquid  bipropellants,  which  provide  higher  specific  impulse  than  other  chemical 
+
+propulsion systems. In LREs, the injector atomizes the liquid propellants (fuel and oxidizer), which 
+
+10 
+
+mix and react in  the  chamber and  combustion generates high-temperature, high-pressure products 
+
+11 
+
+which  exhausts  are  accelerated  to  supersonic  speeds  through  the  nozzle  to  make  thrust  based  on 
+
+12 
+
+Newton’s  third  law  of  motion  (see  Figure  1.1).  Improving  the  performance  of  future  LREs  may 
+
+13 
+
+require  increase  in  internal  pressure  and  heat  flux  that  already  substantially.  There  are  many 
+
+14 
+
+challenges  to  engine  life,  reliability,  safety  and  pollutants  emission.  To  address  this  issue,  it  is 
+
+15 
+
+essential to fully understand the chemical and physical processes involved, and to develop suitable 
+
+16 
+
+models that can be integrated into advanced analytical tools. 
+
+17 
+
+18 
+
+19 
+
+20 
+
+21 
+
+Figure 1.1 Combustion process in liquid rocket engines. 
+
+1 
+
+ 
+ 
+ 
+ 
+ 
+ 
+22 
+
+1.1.2  Rocket Propellant 1 (RP-1) surrogate 
+
+23 
+
+Rocket  Propellant  1  (RP-1)  is  a  well-established  hydrocarbon  fuel  that  has  been  widely  used  in 
+
+24 
+
+propulsion systems. Typically paired with oxygen as a bipropellant since its development in the 1950s 
+
+25 
+
+[2]. RP-1 is derived from a specific kerosene fraction, which undergoes additional refining processes 
+
+26 
+
+to remove unsaturated compounds and sulfur-containing hydrocarbons by acid washing and sulfur 
+
+27 
+
+dioxide extraction [3]. Generally, distillates with a high paraffinic content from crude oil are selected 
+
+28 
+
+for RP-1 production to ensure that the fuel meets critical specifications, including density, heat of 
+
+29 
+
+combustion,  and  aromatic  content.  Previous  studies  have  shown  that  RP-1  is  a  complex  blend  of 
+
+30 
+
+various hydrocarbons, including paraffins, olefins, and aromatics [4, 5] as shown in Figure 1.2. Due 
+
+31 
+
+to  the  complexity  of  the  composition  of  this  fuel,  it  is  necessary  to  use  less  complex  component 
+
+32 
+
+surrogate model with similar properties for simulation of ignition, flame propagation, heat release, 
+
+33 
+
+and emissions. However, there is a lack of kinetic mechanisms specifically developed for rocket fuels. 
+
+34 
+
+In this regard, other kerosene-based fuels（such as Jet-A and diesel）are often used for comparison 
+
+35 
+
+in combustion studies. Experimental measurements indicate Jet-A that show similar structural classes 
+
+36 
+
+and ignition delay times (IDT) and flame speeds (FS) [6, 7]. Therefore, kerosene and diesel fuel have 
+
+37 
+
+great potential in modeling studies of RP-1. 
+
+38 
+
+39 
+
+Figure 1.2 Structure of (a) paraffins (b) cycloparaffins (c) aromatics. 
+
+2 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+40 
+
+1.2  Literature review 
+
+41 
+
+1.2.1  CFD study of liquid rocket engine 
+
+42 
+
+Early  combustion simulations of liquid rocket  engines were constrained by limited computational 
+
+43 
+
+resources and therefore relied primarily on global reaction mechanism. The computational studies of 
+
+44 
+
+liquid  rocket  engines  are  summarized  in  Table  1.1.  In  1997,  Beard  et  al.  [8]  applied  equilibrium 
+
+45 
+
+chemistry to evaluate film-cooling performance and showed that RP-1 film injections reduce wall 
+
+46 
+
+temperature with lower specific impulse loss. In 2001, Wang et al. [9] developed a C12H24 surrogate 
+
+47 
+
+fuel step and a quasi-global mechanism, validating its ability to predict combustion efficiency and 
+
+48 
+
+plume radiation. In 2007, Buyn et al. [10] utilized a one-step global reaction coupled with a two-step 
+
+49 
+
+soot formation–oxidation scheme to predict non-gray thermal radiation and soot formation. It was 
+
+50 
+
+found that higher wall emissivity leads to increased radiative heat flux. In 2012, Zhang et al. [11] use 
+
+51 
+
+a one-step global reaction to investigate high-frequency combustion instabilities, showing that the 
+
+52 
+
+abrupt pressure peaks occur near the injector panel.  In 2012, Yang et al. [12] use a 10-species and 
+
+53 
+
+17-reactions mechanism in eddy-dissipation-concept model to evaluate film-cooling, showing that 
+
+54 
+
+higher coolant flow rates and angled film holes improve cooling effectiveness. Furthermore, doping 
+
+55 
+
+RP-1 with a small amount of H2 or H2O was shown to enhance specific impulse loss.  
+
+56 
+
+In 2014, Kim et al. [13] investigated a regeneratively cooled thrust chamber and showed that 
+
+57 
+
+detailed  kerosene  mechanism  containing  209-species  and  1673-reactions  significantly  improve 
+
+58 
+
+predictions  of  combustion  efficiency  and  thrust  coefficient,  whereas  global  mechanism  fails  to 
+
+59 
+
+capture intermediate chemistry and leads to unrealistically high flame temperatures. In 2018, Wang 
+
+60 
+
+et  al.  [14]  conducted  large  eddy  simulation  of  bi-swirl  injectors  under  supercritical  conditions, 
+
+61 
+
+integrating  a  skeletal  mechanism  containing  106  species  and  382  reactions  [15]  with  flamelet 
+
+62 
+
+combustion  model.  The  results  revealed  flame  stabilization  by  recirculation  zones  and  strong 
+
+63 
+
+geometric effects on mixing, thermal protection and oscillatory dynamics. In 2019, Taghavi et al. [16] 
+
+64 
+
+simulated reactive flow in the RD‑108 thrust chamber, validating equivalence ratio effects on engine 
+
+65 
+
+performance and demonstrating that finite‑rate chemistry has good agreement with experimental data. 
+
+66 
+
+In  2021,  Liu  et  al.  [17]  experimentally  and  numerically  investigated  ignition  in  a  rocket-based 
+
+67 
+
+combined  engine  with  a  coaxial  swirl  injector,  showing  that  oxygen  pre-filling  strongly  affects 
+
+68 
+
+ignition  pressure  and  that  flame  stabilization  from  central  recirculation  zones.  Their  simulations 
+
+69 
+
+reproduced  flame-kernel  formation  and  propagation.  In  2024,  Li  et  al.  [18]  performed  3-D  trans-
+
+3 
+
+ 
+70 
+
+critical large eddy simulation of a swirl coaxial injector using an eddy-dissipation-concept model and 
+
+71 
+
+found  that  combustion  instability  is  driven  primarily  by  pressure  with  velocity  rather  than  swirl-
+
+72 
+
+induced tangential components. These high-fidelity studies highlight the need for accurate real-fluid 
+
+73 
+
+thermodynamics and reliable kinetics mechanisms for combustion modeling. 
+
+74 
+
+Table 1.1 Computational studies on liquid rocket engines. 
+
+Ref. 
+
+Year 
+
+Config  Numerical methoda  Valuationb 
+
+Beard et al. 
+[8]  
+
+Wang et al. 
+[9] 
+
+1997 
+
+3D 
+Thrust 
+chamber 
+
+FVM, 
+FANS, 
+k-epsilon model 
+
+2001 
+
+2D 
+
+FDNS code 
+
+Byun et al. 
+[10] 
+
+2007 
+
+Zhang et al. 
+[11] 
+
+2012 
+
+Yang et al. 
+[12] 
+
+2012 
+
+2D 
+Thrust 
+chamber 
+
+3D 
+Thrust 
+chamber 
+
+3D 
+Thrust 
+chamber 
+
+FVM, 
+RANS, 
+k-epsilon model, 
+WSGGM model 
+FVM, 
+RANS, 
+k-epsilon model 
+
+FVM, 
+RANS, 
+k-epsilon model, 
+EDC model 
+
+Mechanis
+m/global 
+rxnc 
+
+Target 
+fuel 
+
+Global rxn 
+
+RP-1 
+
+Global rxn 
+
+RP-1 
+
+Global rxn  kerosene 
+
+Global rxn 
+
+RP-1 
+
+Global rxn 
+
+RP-1 
+
+Temperature, 
+Film-cooling 
+effectiveness 
+Temperature, 
+soot oxidation  
+
+Temperature, 
+Pressure, SVF 
+
+Temperature, 
+Pressure, 
+Velocity, 
+Frequency 
+Isp, 
+Temperature, 
+Pressure, 
+Film-cooling 
+effectiveness 
+Isp, c*, CF, 
+Temperature, 
+Pressure 
+Density, 
+Temperature, 
+Pressure, 
+Velocity, 
+Frequency 
+Isp, Thrust, 
+Temperature, 
+Pressure, 
+Reaction rate 
+
+kerosene 
+
+kerosene 
+
+2018 
+
+2014 
+
+2019 
+
+Kim et al. 
+[13] 
+
+Wang et al. 
+[14] 
+
+3D  
+Swirl 
+injector 
+
+2D 
+Thrust 
+chamber 
+
+2D 
+Thrust 
+chamber 
+
+Taghavi et al. 
+[16] 
+
+Mechanism 
+(209sp/ 
+1673rxn) 
+
+Mechanism 
+(106sp/ 
+382rxn) 
+
+FVM, 
+RANS, 
+k-epsilon-fμ model 
+FVM, 
+LES, 
+Subgrid-scale 
+model, 
+EDC model 
+FVM, 
+RANS, 
+k-epsilon model, 
+EDC model 
+FVM, 
+RANS, 
+k-epsilon model, 
+EDC model 
+FVM, 
+LES, 
+Subgrid-scale 
+model, 
+EDC model 
+a FVM: finite volume method; FANS: Favre-averaged Navier-Stokes; FDNS code: Finite Difference Navier–Stokes code; 
+RANS: Reynolds-Averaged Navier-Stokes; LES: large eddy simulation; WSGGM: weighted-sum-of-gray-gases model; 
+EDC: eddy dissipation concept. 
+ SVF: soot volume fraction; Isp: specific impulse; c*: characteristic exhaust velocity; CF: thrust coefficient. 
+b
+c rxn: reaction; sp: species. 
+
+Density, 
+Temperature, 
+Pressure, 
+Velocity, 
+Frequency 
+
+Temperature, 
+Pressure, 
+Velocity 
+
+3D 
+Thrust 
+chamber 
+
+3D  
+Swirl 
+injector 
+
+Liu et al.  
+[17] 
+
+Li et al. [18] 
+
+2024 
+
+2021 
+
+Global rxn  kerosene 
+
+Global rxn  kerosene 
+
+Global rxn  kerosene 
+
+4 
+
+75 
+76 
+77 
+78 
+79 
+
+ 
+ 
+80 
+
+1.2.2  Chemical kinetic mechanism of RP-1 
+
+81 
+
+RP-1, a kerosene-based rocket propellant, is often modeled using surrogate mixtures composed of 
+
+82 
+
+representative hydrocarbons. From 1995 to 1997, Farmer et al. [3, 4] studied RP-1 and proposed two 
+
+83 
+
+multi-component surrogate mixtures targeting specific compound classes. In 2013, MacDonald et al. 
+
+84 
+
+[19] measured ethylene yields and overall fuel decomposition rates during RP-1 pyrolysis using laser 
+
+85 
+
+absorption in shock tube and developed three-components detailed mechanism consist of n-dodecane, 
+
+86 
+
+methylcyclohexane, iso-cetane (32/59/9 mol%) to validate experimental measurement. 
+
+87 
+
+ Although  few  surrogates  have  been  developed  specifically  for  RP-1  fuels,  extensive  kinetics 
+
+88 
+
+mechanism  research  for  kerosene  and  diesel  fuels  has  been  published.  Table  1.2  summarizes  the 
+
+89 
+
+mechanism of kerosene and diesel fuels. Dagaut et al. [20] proposed four surrogate models containing 
+
+90 
+
+one  to  three  components. Among  them,  the  three-component  surrogate  composed  of  n-decane,  n-
+
+91 
+
+propylbenzene,  n-propylcyclohexane  (74/15/11  mol%)  was  identified  as  the  most  appropriate  for 
+
+92 
+
+predicted  the  jet-stirred-reactor  experimental  results. A  two-component  mixture  of n-decane  and 
+
+93 
+
+1,2,4-trimethylbenzene (80/20wt%), referred to as the Aachen surrogate, was proposed by Honnet et 
+
+94 
+
+al. [21] and was shown to predict the critical conditions of autoignition and soot volume fractions 
+
+95 
+
+observed in kerosene flames. Pei et al. [22] developed a two-component surrogate mechanism for 
+
+96 
+
+diesel fuel, consisting of n-dodecane and m-xylene (77/23 mol%) which was able to reproduce shock 
+
+97 
+
+tube  and  flow  reactor  data.  Narayanaswamy  [23]  developed  a  jet-fuel  surrogate  mechanism 
+
+98 
+
+consisting of n-dodecane, methylcyclohexane, and m-xylene (30.3/21.2/48.5 mol%) which predicted 
+
+99 
+
+ignition  delay  times  in  shock  tubes  across  low  to  high  temperature  range.  Furthermore,  the 
+
+100 
+
+mechanism also reproduces species profiles in flow reactors at high temperatures as well as laminar 
+
+101 
+
+flame speed. 
+
+102 
+
+Table 1.3 summarizes experimental studies on RP-1 oxidation. Recent experimental studies show 
+
+103 
+
+that kerosene, diesel fuel and RP-1 measurement of combustion characteristics such as ignition delay 
+
+104 
+
+times and laminar flame speeds are closely matched, due to its similar component which supports the 
+
+105 
+
+use of kerosene and diesel fuel surrogates to approximate RP-1 combustion behavior. 
+
+106 
+
+5 
+
+ 
+ 
+ 
+107 
+
+Table 1.2 Kinetic mechanisms of RP-1 surrogate oxidation 
+
+Ref. 
+
+Year 
+
+Reactora 
+
+Predicted 
+targetsb 
+
+Species/ 
+reaction 
+numbers 
+
+Dagaut et al. 
+[20] 
+
+2006 
+
+JSR 
+
+SP 
+
+209/ 1673 
+
+Honnet et al. 
+[21] 
+
+2009 
+
+ST, RCM, JSR 
+BSP 
+
+IDT, FS, SVF 
+
+118/ 527 
+
+MacDonald  
+et al. [19] 
+
+2013 
+
+ST 
+
+SP 
+
+2700/ 
+10164 
+
+Pei et al. [22] 
+
+2015 
+
+ST, RCM, FR, 
+JSR 
+
+SP, IDT, FS 
+
+163/ 887 
+
+Narayanaswamy 
+et al. [23] 
+
+2016 
+
+ST, FR, BSP 
+
+SP, IDT, FS 
+
+369/ 2691 
+
+Operational 
+conditions 
+
+𝑃 = 1 atm 
+𝑇 = 900-1300 K 
+𝜙 = 0.5-2.0 
+𝑃 = 12, 50 bar 
+𝑇 = 625-1250 K 
+𝜙 = 1, 2 
+𝑃 = 20 atm 
+𝑇 = 1050-1500 K 
+𝜙 = 0.17% fuel in 
+Ar 
+𝑃 = 1-80 bar 
+𝑇 = 700-1600 K 
+𝜙 = 0.5-2.0 
+𝑃 = 20 atm 
+𝑇 = 667-1250 K 
+𝜙 = 1 
+
+a ST: shock tube; RCM: rapid compression machine FR: flow reactor; JSR: jet-stirred reactor; BSP: burner stabilized 
+premixed flames. 
+b SP: species profiles; IDT: ignition delay time; FS: flame speed; SVF: soot volume fraction. 
+
+108 
+109 
+110 
+
+111 
+
+112 
+
+Table 1.3 Experimental studies on RP-1 oxidation. 
+
+Reference  
+
+Year 
+
+Reactora   Measuredb  
+
+MacDonald  
+et al. [19] 
+
+Alturaifi et al. 
+[6] 
+
+Keesee et al. 
+[7]  
+
+2013 
+
+ST 
+
+SP 
+
+2019 
+
+ST  
+
+IDT  
+
+2021 
+
+SEF  
+
+FS  
+
+a ST: shock tube; SEF: spherically expanding flame.  
+b SP: species profiles; IDT: ignition delay time; FS: flame speed.  
+
+113 
+114 
+
+115 
+
+Operational 
+conditions  
+P = 20 atm  
+T = 1050−1500 K 
+𝜙 = 0.17% fuel in 
+Ar  
+P = 7−26 atm  
+T = 785−1293 K  
+𝜙= 0.5-1.0 
+P = 1 atm  
+T = 403 K  
+𝜙= 0.7-1.5 
+
+Computing 
+validation  
+
+Yes 
+
+No  
+
+No  
+
+6 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+116 
+
+1.2.3  Reduced chemical kinetic mechanism of RP-1 
+
+117 
+
+Although  RP-1  existing  kinetic  mechanisms  include  only  a  limited  number  of  representative 
+
+118 
+
+components, they remain too large for multidimensional simulations and thus must be reduced for 
+
+119 
+
+computational efficiency. These reduced mechanisms are listed in Table 1.4.   
+
+120 
+
+Previously, several efforts attempted to develop global and quasi-global kerosene mechanisms to 
+
+121 
+
+simplify the modeling of combustion chemistry. In 1981, Westbrook and Dryer [24] proposed one-
+
+122 
+
+step  global  mechanism  capable  of  reproducing  flame  speeds  for  the  hydrocarbon-air  mixtures. 
+
+123 
+
+However, the multiple step quasi-global mechanisms typically consist of two parts: a global kerosene 
+
+124 
+
+step pyrolysis that forms small hydrocarbons, and a global oxidation step for small hydrocarbons. In 
+
+125 
+
+2001, Wang et al. [9] develop a quasi-global mechanism combining C12H24 global steps and wet-CO 
+
+126 
+
+detailed mechanism. In 2010, Franzelli et al. [25] introduced a two-step mechanism  incorporating 
+
+127 
+
+kerosene oxidation and CO-CO2 equilibrium, which predicted the ignition delay time, laminar flame 
+
+128 
+
+speeds and burnt-gas temperature. In 2011, Choi [26] developed a 10-step quasi-global mechanism 
+
+129 
+
+consisting of a kerosene pyrolysis reaction and an ethylene quasi-global mechanism that reproduced 
+
+130 
+
+the ignition delay times. In 2023, Nada et al. [27] proposed a four -step mechanism using C10H20 as 
+
+131 
+
+single  surrogate  fuel,  which  was  able  to  predict  species  profiles  in  perfectly  stirred  reactors  and 
+
+132 
+
+temperature distributions. 
+
+133 
+
+Other  studies  have  developed  reduced  mechanisms  directly  from  large  detailed  kinetic 
+
+134 
+
+mechanisms. In 2004, Luche et al. [28] reduced a detailed mechanism containing 225 species and 
+
+135 
+
+3493  irreversible  reactions  to  a  134  species  and  1220  reactions  mechanism,  which  was  able  to 
+
+136 
+
+reproduce species profiles in perfectly stirred reactors. In 2012, Wang et al. [15] proposed a skeletal 
+
+137 
+
+mechanism consisting of 106 species and 382 reactions, derived from a detailed mechanism with 209 
+
+138 
+
+species and 1673 reversible reactions [20]. This reduced mechanism preserved the accuracy of the 
+
+139 
+
+high-temperature  oxidation  of  kerosene  surrogates,  such  as  ignition  delay  times,  laminar  flame 
+
+140 
+
+speeds and species profiles. In 2018, Koniavitis et al. [29] developed two reduced mechanisms with 
+
+141 
+
+17 and 42 species, both derived from detailed mechanisms containing 367 species and 1892 reactions 
+
+142 
+
+[23]. And these mechanisms were able to reproduce species profiles, ignition strain rates and laminar 
+
+143 
+
+flame speeds.  
+
+144 
+
+7 
+
+ 
+ 
+ 
+145 
+
+Table 1.4 Reduced chemical kinetic mechanism of RP-1.  
+
+Ref. 
+
+Year 
+
+Components 
+
+Predicted 
+targetsa 
+
+Original 
+mechanism 
+species/reaction 
+numbers 
+
+Reduced 
+mechanism 
+species/reaction 
+numbers 
+
+FS 
+
+SP 
+
+SP 
+
+IDT, FS, 
+TF 
+
+IDT 
+
+IDT, FS, 
+TF, SP 
+
+N/A 
+
+N/A 
+
+1 step 
+
+16 steps 
+
+225/ 3493 
+
+134/ 1220 
+
+N/A 
+
+N/A 
+
+2 steps 
+
+10 steps 
+
+209/ 1673 
+
+106/ 382 
+
+FS, SP 
+
+369/ 2691 
+
+17/ no mention, 
+42/ no mention 
+
+Westbrook 
+et al. [24] 
+Wang et al. 
+[9] 
+
+Luche et 
+al. [28]  
+
+Franzelli 
+et al. [25] 
+Choi et al. 
+[26] 
+
+1981 
+
+2001 
+
+2004 
+
+2010 
+
+2011 
+
+Wang et al. 
+[15] 
+
+2012 
+
+Koniavitis 
+et al. [29] 
+
+Nada et al. 
+[27] 
+
+2018 
+
+2023 
+
+C12H23 
+
+C12H24 
+
+74% n-decane, 
+15% n-propylbenzene, 
+11% n-propylcyclohexane 
+
+C9.7396H20.0542 
+
+C9.7396H20.0542 
+
+74% n-decane, 
+15% n-propylbenzene, 
+11% n-propylcyclohexane 
+30.3% n-dodecane, 
+21.2% m-xylene, 
+48.5% methylcyclohexane 
+
+C10H20 
+
+TF, SP 
+
+N/A 
+
+4 steps 
+
+146 
+147 
+
+a TF: temperature field; IDT: ignition delay time; FS: flame speed; SP: species profile. 
+
+8 
+
+ 
+ 
+ 
+148 
+
+1.3  Motivation  
+
+149 
+
+RP-1 combustion chemistry plays a central role in the numerical analysis of liquid rocket propulsion. 
+
+150 
+
+However,  RP-1  is  a  highly  complex  multi-component  hydrocarbon  fuel,  and  even  detailed 
+
+151 
+
+mechanisms developed for representative surrogate species remain prohibitively large for practical 
+
+152 
+
+CFD applications. As a result, many previous studies have relied on global mechanisms consisting 
+
+153 
+
+of  only  one  or  two  overall  reaction  steps. Although  such  models  provide  reasonable  flame-shape 
+
+154 
+
+predictions,  their  excessive  simplification  prevents  them  from  capturing  intermediate-species 
+
+155 
+
+formation  and  consumption,  leading  to  severe  overprediction  of  flame  temperature  and  degraded 
+
+156 
+
+accuracy in engine-performance calculations. 
+
+157 
+
+Furthermore,  the  historical  lack  of  RP-1-specific  experimental  data  has  forced  researchers  to 
+
+158 
+
+depend on chemically similar kerosene fuels as substitutes. Recently, two key experimental datasets 
+
+159 
+
+reporting ignition delay times and laminar flame speeds of RP-1 [6, 7]. These measurements now 
+
+160 
+
+provide  the  essential  foundation  for  developing  and  validating  an  intermediate-size  skeletal 
+
+161 
+
+mechanism that balances computational efficiency with chemical fidelity, enabling more predictive 
+
+162 
+
+simulations of RP-1 combustion and ignition. 
+
+163 
+
+164 
+
+1.4  Objective 
+
+165 
+
+The objective of this study is to develop a skeletal chemical kinetic mechanism for an RP-1 surrogate 
+
+166 
+
+to  enable  accurate  and  computationally  efficient  simulations  of  RP-1  combustion  in  liquid  rocket 
+
+167 
+
+engines.  The  surrogate  formulation  consists  of  n-dodecane  (C₁₂H₂₆),  m-xylene  (C₈H₁₀),  and 
+
+168 
+
+methylcyclohexane  (C₇H₁₄)  [23],  adopted  from  multi-component  jet-fuel  surrogate  strategies. The 
+
+169 
+
+reduced  mechanism  is  optimized  for  computational  performance,  allowing  its  application  to 
+
+170 
+
+Reynolds-Averaged  Navier–Stokes  (RANS)  and  Large  Eddy  Simulation  (LES)  frameworks. 
+
+171 
+
+Mechanism reduction is performed using the Parallel-Preconditioning Sensitivity Analysis (PPSA) 
+
+172 
+
+method to remove kinetically insignificant species and reactions while preserving key combustion 
+
+173 
+
+properties such as ignition delay and laminar flame speed. Finally, the skeletal RP-1 mechanism is 
+
+174 
+
+evaluated through three-dimensional reactive-flow simulations of a rocket-engine configuration and 
+
+175 
+
+validated against available experimental measurements. 
+
+176 
+
+9 
+
+ 
+ 
+ 
+ 
+177 
+
+Chapter 2  Methodology  
+
+178 
+
+2.1  Mechanism reduction 
+
+179 
+
+2.1.1  Mechanism reduction flowchart of RP-1 
+
+180 
+
+The workflow for developing the skeletal mechanism of RP-1 is shown in Figure 2.1. The detailed 
+
+181 
+
+mechanisms of Dagaut et al. (209 species and 1673 reactions) [20], Honnet et al. (118 species and 
+
+182 
+
+527 reactions) [21], Pei et al. (163 species and 887 reactions) [22] and Narayanaswamy et al. (369 
+
+183 
+
+species and 2691 reactions) [23] are evaluated against the RP-1 experimental datasets, the ignition 
+
+184 
+
+delay time of Alturaifi et al. [6], and flame speed of Keesee et al. [7]. From the comparison of IDT 
+
+185 
+
+(see  Figure  2.2),  the  Dagaut  et  al.  [20]  mechanism  overpredicts  ignition  by  one  to  two  orders 
+
+186 
+
+magnitude and matches experimental data only up to an equivalence ratio of 1. The Honnet et al. [21] 
+
+187 
+
+mechanism matches the experimental data well at high-pressure conditions but underpredicts at the 
+
+188 
+
+low-pressure conditions. The Pei et al. mechanism reproduces the experimental data accurately under 
+
+189 
+
+high-temperature  conditions. The  Narayanaswamy  et  al.  [23]    mechanism  shows  good  agreement 
+
+190 
+
+across most of the temperature range.  
+
+191 
+
+In  the  flame  speeds  comparison  (see  Figure  2.3),  all  these  mechanisms  exhibit  a  consistent 
+
+192 
+
+leftward shift in the peak flame speed relative to the experimental data. This mismatch is attributed 
+
+193 
+
+to differences in the average molecular weight between the surrogate fuels used in these mechanisms 
+
+194 
+
+and actual RP-1 sample tested by Keesee  et al. [7]. The  equivalence ratio is determined from  the 
+
+195 
+
+stoichiometric  fuel–air  ratio  based  on  the  average  molecular  weight  of  the  fuel;  consequently, 
+
+196 
+
+surrogates with lighter or heavier effective molecular weights shift the calculated stoichiometric point 
+
+197 
+
+and  lead  to  discrepancies  in  predicted  versus  experimental  flame  speeds.  The  Dagaut  et  al.  [20] 
+
+198 
+
+mechanism underpredicts the peak flame speed, while the Pei et al. [22] mechanism decreases too 
+
+199 
+
+rapidly under rich mixtures. Furthermore, the Honnet et al. [21] mechanism, when applied with its 
+
+200 
+
+two-component surrogate, fails to reproduce flame speeds. 
+
+201 
+
+Overall,  when  evaluated  against  both  ignition  delay  and  flame  speed  measurements,  the 
+
+202 
+
+Narayanaswamy et al. [23] mechanism shows the most accurate ignition delay predictions across the 
+
+203 
+
+full temperature and pressure range. Although its flame speed prediction exhibits a slight peak shift, 
+
+204 
+
+the overall trends and magnitude are closer than other mechanisms. Given its larger number of species 
+
+205 
+
+and  more  detailed  reaction  pathways,  the  mechanism  also  offers  greater  flexibility  for  selective 
+
+206 
+
+reduction while retaining the essential chemical fidelity for RP-1 combustion modeling. 
+
+10 
+
+ 
+207 
+208 
+
+209 
+
+210 
+
+211 
+212 
+
+Figure 2.1 Flowchart of developing the RP-1 skeletal mechanism. 
+
+Figure 2.2 Comparison of experimental RP-1 ignition delay time with simulated at 10 and 20 atm 
+for equivalence ratios 𝜙 of 0.5 and 1.0 using various kinetic mechanisms. 
+
+11 
+
+ 
+ 
+ 
+  
+213 
+
+214 
+215 
+216 
+
+Figure 2.3 Comparison of experimental RP-1 flame speed with simulated at 1 atm and 403 K using 
+various kinetic mechanisms. 
+
+217 
+
+2.1.2  Mechanism reduction using parallel-preconditioning sensitivity analysis (PPSA) 
+
+218 
+
+The  Parallel-Preconditioned  Sensitivity Analysis  (PPSA)  is  developed  based  on  the  conventional 
+
+219 
+
+global  sensitivity  analysis  (GSA)  [30]. An  adaptive  preconditioning  approach  is  incorporated  to 
+
+220 
+
+accelerate the solution of stiff ordinary differential equation, enabling efficient evaluation of zero-
+
+221 
+
+dimensional combustion properties such as ignition delay time and product concentration during the 
+
+222 
+
+fuel pyrolysis and oxidation. All chemical kinetic calculations are performed using the open-source 
+
+223 
+
+library Cantera [31].  
+
+224 
+
+In  adaptive  preconditioning  approach,  the  governing  equations  of  reactive  systems  are 
+
+225 
+
+discretized  and  linearized  into  the  algebraic  form 𝐴𝑥 = 𝐵 .  The  governing  equation  and  the  state 
+
+226 
+
+vector are defined as follows: 
+
+𝑑𝑆
+𝑑𝑡
+
+= 𝑓(𝑡, 𝑆) 
+
+(1) 
+
+227 
+
+where 𝑓 is governing equation expressed as a function of time and corresponding state vector; S state 
+
+228 
+
+vector defined as 𝑆 = [𝑇, 𝑛1, 𝑛2, 𝑛3, ⋯ , 𝑛𝑘], 𝑇 is temperature and 𝑛𝑘 is the moles of species 𝑇. 
+
+229 
+
+To  reduce  the  condition  number  and  accelerate  the  convergence  of  the  linearized  system,  a 
+
+230 
+
+preconditioning  matrix  is  applied  to  both  sides  of  the  equation,  giving 𝑃−1𝐴𝑥 = 𝑃−1𝐵 ,  and  the 
+
+12 
+
+ 
+ 
+ 
+ 
+231 
+
+equation  is  solved  iteratively  using  the  Generalized  Minimal  Residual  (GMRES)  method  [32]. 
+
+232 
+
+During the Newton-Raphson iteration, the solution of vector 𝑥 is obtained by mining the 2-norm of 
+
+233 
+
+the residual. The preconditioner is defined as: 
+
+𝑃 = 𝐼 − ∆𝑡𝛽𝐽(𝑆) 
+
+(2) 
+
+234 
+
+where 𝐼 𝑖𝑠 a unit matrix with identical dimension of the Jacobian, ∆𝑡 is the discretized time step size, 
+
+235 
+
+𝛽 is the coefficient of the discretized time step size, 𝐽(𝑆) is the Jacobian of state vector 𝑆. 
+
+236 
+
+Two types of error measures are adopted in this study to define the species sensitivity index and 
+
+237 
+
+to  evaluate  the  reduction  error  between  the  detailed  and  reduced  mechanisms. Accordingly,  the 
+
+238 
+
+relative error and the relative 𝐿2-norm error of ignition delay time are defined as follows: 
+
+239 
+
+and 
+
+𝑒𝑟𝑒𝑙𝑎𝑡𝑖𝑣𝑒 =   |
+
+𝜏𝑟𝑒𝑑𝑢𝑐𝑒𝑑 − 𝜏𝑑𝑒𝑡𝑎𝑖𝑙𝑒𝑑
+𝜏𝑑𝑒𝑡𝑎𝑖𝑙𝑒𝑑
+
+|
+
+𝑃,𝜑,𝑇
+
+𝑒𝐿2−𝑛𝑜𝑟𝑚 =  
+
+‖𝜏𝑟𝑒𝑑𝑢𝑐𝑒𝑑 − 𝜏𝑑𝑒𝑡𝑎𝑖𝑙𝑒𝑑‖
+ |
+‖𝜏𝑑𝑒𝑡𝑎𝑖𝑙𝑒𝑑‖
+
+𝑃,𝜑,𝑇
+
+(3) 
+
+(4) 
+
+240 
+
+Where 𝜏𝑟𝑒𝑑𝑢𝑐𝑒𝑑 and 𝜏𝑑𝑒𝑡𝑎𝑖𝑙𝑒𝑑 are the ignition delays vectors computed by the reduced and detailed 
+
+241 
+
+mechanisms  under  a  certain  pressure 𝑃,  equivalence  ratio 𝜑 and  temperature 𝑇. The  relative  error 
+
+242 
+
+which  allows  the  combustion-property  curves  to  shift  only  upward  or  downward.  However,  the 
+
+243 
+
+relative  𝐿2 -norm  error,  which  provides  greater  flexibility  by  accounting  for  changes  in  both 
+
+244 
+
+magnitude and combustion-property curves. 
+
+245 
+
+The parameters employed in the PPSA are shown in Table 2.1. The 3-in-1 structure of PPSA 
+
+246 
+
+consists  of  three  components:  (1)  the  sensitivity-analysis  stage,  each  species  in  the  detailed 
+
+247 
+
+mechanism is removed individually, and the resulting errors in the targeted combustion properties 
+
+248 
+
+are  computed  to  establish  a  species-importance  ranking.  (2)  a  mechanism-reconstruction  stage 
+
+249 
+
+follows,  where  species  are  added  sequentially  according  to  their  ranked  importance.  Species  are 
+
+250 
+
+retained if the prediction errors of all combustion properties remain within pre-specified tolerances, 
+
+251 
+
+yielding  an  intermediate-size  mechanism.  (3)  the  mechanism-reduction  stage,  each  species  in  the 
+
+252 
+
+reconstructed  mechanism  undergoes  a  species-by-species  removal  test. A  species  is  deleted  if  its 
+
+253 
+
+removal keeps all combustion-property errors within tolerance; otherwise, it is restored. This iterative 
+
+254 
+
+process continues until all species have been evaluated, resulting in the final reduced mechanism. 
+
+255 
+
+13 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+Table 2.1 Target parameters used in PPSA for mechanism reduction. 
+Target species  
+
+N-C12H26,  MCH-C7H14,  A1CH3CH3,  A1CH3,  A1,  A-C3H4,  P-C3H4, 
+CH4, C2H2, C2H4, C2H6, C3H6, I-C4H8, C4H4, C4H6, I-C5H8, C5H81-3, 
+C5H10, C7H14, C6H12-1, CO, CO2, OH, HO2, O2, N2, HE, AR, O, H, H2, 
+H2O 
+
+Error tolerance  
+Pressure (P)  
+Temperature (T)  
+Equivalence ratio (ϕ)  
+The ratio of fuel mixtures  30.3% N-C12H26, 48.5% MCH-C7H14, 21.2% A1CH3CH3 
+
+0.10 - 0.25 with an increment of 0.05 
+10 and 20 atm 
+770 to 1100 K 
+0.5, 1.0 
+
+Species/reactions 
+
+369/2691 
+
+256 
+
+257 
+
+258 
+
+2.2  Premixed flame 
+
+259 
+
+2.2.1  0-D Ignition delay times 
+
+260 
+
+The ignition delay time is a fundamental parameter in combustion, as it governs the onset of ignition 
+
+261 
+
+and strongly influences fuel behavior in practical propulsion. The measurements were performed in 
+
+262 
+
+a heated, high-pressure shock tube according to the experiment set up by Alturaif et al. [6]. In this 
+
+263 
+
+study, the corresponding simulation is carried out using 0-D homogeneous batch reactor via ANSYS 
+
+264 
+
+CHEMKIN-Pro software [33] by constraining the volume and solving the governing equation. The 
+
+265 
+
+calculation is used to assess how spontaneous ignition behavior emerges in the proposed mechanism. 
+
+266 
+
+The parameters used in a homogeneous reactor for RP-1 ignition shown in Table 2.2. The governing 
+
+267 
+
+equations of the closed homogeneous batch reactor are listed as follows: 
+
+268 
+
+Species conservation equation: 
+
+𝜌
+
+ⅆ𝑌𝑖
+ⅆ𝑡
+
+= 𝜔̇ 𝑖𝑊𝑖 
+
+(5) 
+
+269 
+
+where 𝜌 is zone density and 𝜔̇ 𝑖 is the molar rate of production of the species 𝑖. 𝑌𝑖 and 𝑊𝑖̇ are mass 
+
+270 
+
+fraction and molecular weight of the species 𝑖, respectively. 𝑡 is time. 
+
+271 
+
+Energy equation: 
+
+𝜌𝑐𝑣
+
+𝑑𝑇
+𝑑𝑡
+
+𝑁
+
+= − ∑ 𝜔̇ 𝑖𝑊𝑖𝑢𝑖
+
+−
+
+𝑖=1
+
+𝑃
+𝑉
+
+𝑑𝑉
+𝑑𝑡
+
+(6) 
+
+272 
+
+where 𝑐𝑣  is  the  constant-volume  specific  heat  capacity  of  the  gas  mixture.  𝑁  is  the  number  of 
+
+273 
+
+chemical species. 𝑇, 𝑃, and 𝑉 are temperature, pressure, and volume respectively. 𝑢𝑖̇ is the specific 
+
+274 
+
+internal energy of the species 𝑖. 
+
+275 
+
+The equation of accumulated volume: 
+
+14 
+
+ 
+ 
+ 
+ 
+ 
+𝑁
+
+𝐺 = 𝑃𝑉 = 𝑀𝑅𝑇 (∑
+𝑖=1
+
+𝑌𝑖
+𝑊𝑖
+
+) 
+
+(7) 
+
+276 
+
+where  𝐺  is  pressure-weighted  accumulated  zone  volume.  𝑀  is  zone  mass.  𝑅  is  the  universal  gas 
+
+277 
+
+constant. 
+
+278 
+
+    In the homogeneous reactor module, the ignition delay time (𝜏) is defined by the time that it takes 
+
+279 
+
+for the reaction rate of the hydroxyl group (OH) to reach its maximum (
+
+𝑑[𝑂𝐻]
+
+𝑑𝑡
+
+)
+𝑚𝑎𝑥
+
+ (see Figure 2.4). 
+
+280 
+
+281 
+
+ Table 2.2 Operating parameters for homogeneous reactor simulations of RP-1 ignition. 
+
+Setting parameters in the 0-D homogeneous reactor 
+
+Authors 
+
+Pressure 
+(P) 
+
+Temperature 
+(T) 
+
+Mole fraction (Xi) 
+of fuel mixture 
+
+Mole fraction (Xi) 
+of oxidizer 
+mixture 
+
+Alturaifi  et  al. 
+2019 [6] 
+
+10 atm 
+
+20 atm 
+
+785 – 1293 K 
+
+N-C12H26: 0.303 
+MCH-C7H14: 0.485 
+A1CH3CH3: 0.212 
+
+O2: 0.21 
+N2: 0.79 
+
+𝜙 
+
+0.5 
+
+1.0 
+
+282 
+283 
+
+284 
+285 
+
+286 
+
+Figure 2.4 Definition of the ignition delay time 
+
+287 
+
+2.2.2  1-D Flame speed 
+
+288 
+
+Flame  speed  is  a  fundamental  property  that  characterizes  flame  structure,  extinction  behavior, 
+
+289 
+
+propagation velocity, and flame stabilization. In this study, the flame speed is computed using the 
+
+290 
+
+Premixed Flame Speed module in ANSYS CHEMKIN-PRO [33]. The initial conditions used for the 
+
+291 
+
+calculations  are  listed  in  Table  2.3  and  Table  2.4.  The  governing  equations  of  the  1-D  premixed 
+
+292 
+
+flame reactor are listed as follows: 
+
+15 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+293 
+
+Continuity equation: 
+
+𝑀̇ = 𝜌𝐴𝑢 = 𝜌𝐴𝑆𝐿 
+
+(8) 
+where 𝑀̇  is the mass flow rate; 𝜌 is the density; 𝑢 is the velocity of the fluid mixture; 𝐴 is the cross-
+
+294 
+
+295 
+
+sectional area; 𝑆𝐿 = 𝑢 is defined as the laminar flame speed. 
+
+296 
+
+Energy equation: 
+
+𝑀̇
+
+𝑑𝑇
+𝑑𝑥
+
+−
+
+1
+𝑐𝑝
+
+𝑑
+𝑑𝑥
+
+(𝜆𝐴
+
+𝑑𝑇
+𝑑𝑥
+
+) +
+
+𝐴
+𝑐𝑝
+
+𝐾
+∑ 𝜌𝑌𝑖𝑉𝑖𝑐𝑝𝑖
+𝑖=1
+
+𝑑𝑇
+𝑑𝑥
+
++
+
+𝐴
+𝑐𝑝
+
+𝐾
+∑ 𝜔̇ 𝑖ℎ𝑖𝑤𝑖
+𝑖=1
+
+= 0 
+
+(9) 
+
+297 
+
+where 𝑐𝑝 and 𝑐𝑝𝑖 are constant-pressure specific heat capacity of the gas mixture and the 𝑖th species 
+
+298 
+
+299 
+
+300 
+
+301 
+
+302 
+
+respectively; 𝜆 is the thermal conductivity of the gas mixture; 𝑉𝑖 is the diffusion velocity of the 𝑖th 
+
+species. ℎ𝑖 is the specific enthalpy of the 𝑖th species. 
+
+Species equation: 
+
+𝑀̇
+
+𝑑𝑇
+𝑑𝑥
+
+−
+
+1
+𝑐𝑝
+
+𝑑
+𝑑𝑥
+
+(𝜆𝐴
+
+𝑑𝑇
+𝑑𝑥
+
+) +
+
+𝐴
+𝑐𝑝
+
+𝐾
+∑ 𝜌𝑌𝑖𝑉𝑖𝑐𝑝𝑖
+𝑖=1
+
+𝑑𝑇
+𝑑𝑥
+
++
+
+𝐴
+𝑐𝑝
+
+𝐾
+∑ 𝜔̇ 𝑖ℎ𝑖𝑤𝑖
+𝑖=1
+
+= 0 
+
+where 𝜔̇̅𝑖 is the mean molar rate of production of the species 𝑖. 
+
+(10) 
+
+In  the  flat  flame  burner  module,  the  flame  speed  (𝑆𝐿 )  is  defined  as  the  rate  of  expansion  of 
+
+303 
+
+the flame front in combustion as shown in Figure 2.5. 
+
+304 
+
+305 
+
+306 
+
+307 
+
+308 
+
+Table 2.3 Parameters used for RP-1 laminar flame-speed calculation. 
+Pressure (P) 
+Unburnt Temperature (Tu) 
+Equivalence ratio (ϕ) 
+
+1 atm 
+403 K 
+0.7-1.5 
+
+Table 2.4 Grid parameters for laminar flame-speed simulations. 
+Maximum number of grid points allowed 
+Adaptive grid control based on solution gradient 
+Adaptive grid control based on solution curvature 
+Number of uniform grid points 
+Converged criteria 
+
+500 
+0.05 
+0.05 
+10 
+10-9 
+
+16 
+
+ 
+ 
+ 
+ 
+𝑉𝑢,𝑛 
+
+𝑆𝐿  
+
+𝑉𝑢 
+
+𝑉𝑢,𝑡 
+
+𝛼  
+
+𝛼 
+
+𝑉𝑢 
+
+Flame 
+
+𝑆𝐿 = 𝑉𝑢 𝑠𝑖𝑛 𝛼 
+
+309 
+
+310 
+
+311 
+
+Figure 2.5 Schematic of the laminar flame-speed configuration. 
+
+312 
+
+2.3  Application to a non-premixed realistic rocket engine 
+
+313 
+
+A  three-dimensional  circumferential  symmetric  model  is  employed  to  simulate  non-premixed 
+
+314 
+
+reactive flow using commercial  computational fluid dynamic software (ANSYS Fluent 2022 R2). 
+
+315 
+
+The conservation equations of mass, momentum, energy, and species are solve using the Reynolds-
+
+316 
+
+Averaged Navier–Stokes (RANS). The  turbulence transport equations of the realizable k–ε  model 
+
+317 
+
+[34]  are  additionally  solved  to  provide  closure.  The  turbulence–chemistry  interaction  is  modeled 
+
+318 
+
+using the Eddy Dissipation Concept (EDC) [35], which determines the reaction source terms in the 
+
+319 
+
+species transport equations. The governing equations of atmospheric flow are listed as follows [36]: 
+
+320 
+
+Continuity equation: 
+
+𝜕𝜌
+𝜕𝑡
+
++
+
+𝜕(𝜌𝑣̅𝑥)
+𝜕𝑥
+
++
+
+𝜕(𝜌𝑣̅𝑦)
+𝜕𝑦
+
++
+
+𝜕(𝜌𝑣̅𝑧)
+𝜕𝑧
+
+= 0 
+
+(11) 
+
+321 
+
+where 𝑣̅𝑥 is the  average velocity of x-direction, 𝑣̅𝑦 is the average velocity of y-direction,  𝑣̅𝑧 is the 
+
+322 
+
+average velocity of z-direction and 𝜌 is the density. 
+
+323 
+
+Ideal gas law: 
+
+𝜌 = (𝑝 + 𝑝0) (𝑅𝑇 ∑
+𝑖
+
+⁄
+
+𝑌𝑖
+𝑀𝑤,𝑖
+
+)
+
+(12) 
+
+324 
+
+where 𝜌 is the density, 𝑝 is the local relative pressure, 𝑝0 is the operating pressure, 𝑅 is the universal 
+
+325 
+
+gas constant, 𝑇 is the static temperature, 𝑌𝑖 is the mass fraction of species 𝑖, and 𝑀𝑤,𝑖 is the molecular 
+
+326 
+
+weight of species 𝑖. 
+
+327 
+
+Momentum equation in the x-direction: 
+
+17 
+
+ 
+                                                  
+ 
+ 
+ 
+𝜕
+𝜕𝑡
+
+(𝜌𝑣̅𝑥) +
+
+𝜕
+𝜕𝑥
+
+(𝜌𝑣̅𝑥𝑣̅𝑥) +
+
+𝜕
+𝜕𝑦
+
+(𝜌𝑣̅𝑥𝑣̅𝑦) +
+
+𝜕
+𝜕𝑧
+
+(𝜌𝑣̅𝑥𝑣̅𝑧) 
+
+= −
+
+𝜕𝑃̅
+𝜕𝑥
+
++ (𝜇 + 𝜇𝑡)(
+
+𝜕2𝑣̅𝑥
+2
+𝜕𝑥2 +
+
+𝜕2𝑣̅𝑥
+2
+𝜕𝑦2 +
+
+𝜕2𝑣̅𝑥
+2
+𝜕𝑧2 ) 
+
+328 
+
+Momentum equation in the y-direction: 
+
+𝜕
+𝜕𝑡
+
+(𝜌𝑣̅𝑦) +
+
+𝜕
+𝜕𝑥
+
+(𝜌𝑣̅𝑥𝑣̅𝑦) +
+
+𝜕
+𝜕𝑦
+
+(𝜌𝑣̅𝑦𝑣̅𝑦) +
+
+𝜕
+𝜕𝑧
+
+(𝜌𝑣̅𝑦𝑣̅𝑧) 
+
+= −
+
+𝜕𝑃̅
+𝜕𝑦
+
++ (𝜇 + 𝜇𝑡)(
+
+𝜕2𝑣̅𝑦
+2
+𝜕𝑥2 +
+
+𝜕2𝑣̅𝑦
+2
+𝜕𝑦2 +
+
+𝜕2𝑣̅𝑦
+2
+𝜕𝑧2 ) 
+
+329 
+
+Momentum equation in the z-direction: 
+
+𝜕
+𝜕𝑡
+
+(𝜌𝑣̅𝑧) +
+
+𝜕
+𝜕𝑥
+
+(𝜌𝑣̅𝑥𝑣̅𝑧) +
+
+𝜕
+𝜕𝑦
+
+(𝜌𝑣̅𝑧𝑣̅𝑦) +
+
+𝜕
+𝜕𝑧
+
+(𝜌𝑣̅𝑧𝑣̅𝑧) 
+
+= −
+
+𝜕𝑃̅
+𝜕𝑦
+
++ (𝜇 + 𝜇𝑡)(
+
+𝜕2𝑣̅𝑧
+2
+𝜕𝑥2 +
+
+𝜕2𝑣̅𝑧
+2
+𝜕𝑦2 +
+
+𝜕2𝑣̅𝑧
+2
+𝜕𝑧2 ) 
+
+(13) 
+
+(14) 
+
+(15) 
+
+330 
+
+where 𝜌  is  the  density, 𝑣̅𝑥  is  the  average  velocity  of  x-direction, 𝑣̅𝑦  is  the  average  velocity  of  y-
+
+331 
+
+direction,  𝑣̅𝑧  is  the  average  velocity  of  z-direction, 𝑃̅  is  the  average  pressure,  𝜇  is  the  viscosity 
+
+332 
+
+coefficient and 𝜇t is the turbulence viscosity coefficient which  𝜇𝑡 = 𝜌𝐶𝜇
+
+𝑘2
+𝜀
+
+, C𝑢 = 0.09. 
+
+333 
+
+Energy equation: 
+
+𝜕(𝜌𝑇̅)
+𝜕𝑡
+
++ 𝑣̅𝑥
+
+𝜕(𝜌𝑇̅)
+𝜕𝑡
+
++ 𝑣̅𝑦
+
+𝜕(𝜌𝑇̅)
+𝜕𝑡
+
++ 𝑣̅𝑧
+
+𝜕(𝜌𝑇̅)
+𝜕𝑡
+
+= [
+
+𝑘
+𝑐𝑝
+
++ 𝜌𝛼𝑇] [
+
+𝜕2(𝜌𝑇̅)
+𝜕𝑥2 +  
+
+𝜕2(𝜌𝑇̅)
+𝜕𝑦2 +  
+
+𝜕2(𝜌𝑇̅)
+𝜕𝑧2 ] +
+
+Φ
+𝑐𝑝
+
++
+
+𝑘𝜔
+𝑐𝑝
+
+(16) 
+
+334 
+
+where 𝜌  is  the  density, 𝑣̅𝑥  is  the  average  velocity  of  x-direction, 𝑣̅𝑦  is  the  average  velocity  of  y-
+
+335 
+
+direction, 𝑣̅𝑧 is the average velocity of z-direction, 𝑇̅ is the average temperature, 𝛼𝑇is the turbulent 
+
+336 
+
+thermal  diffusivity  coefficient  and 𝜇t  is  the  turbulence  viscosity  coefficient  which 𝛼𝑡 =
+
+𝜌𝜇𝑡
+𝜎𝑡
+
+, 𝜇𝑡 =
+
+337 
+
+338 
+
+𝜌𝐶𝜇𝑘
+𝜔
+
+, 𝐶𝜇 = 0.09, 𝜎𝑇 = 0.9.  
+
+Species transport equation: 
+
+𝜕(𝜌𝑌𝑖)
+𝜕𝑡
+
++
+
+𝜕(𝜌𝑣̅𝑥𝑌𝑖)
+𝜕𝑥
+
++
+
+𝜕(𝜌𝑣̅𝑦𝑌𝑖)
+𝜕𝑦
+
++
+
+𝜕(𝜌𝑣̅𝑧𝑌𝑖)
+𝜕𝑧
+
+= − [
+
+𝜕
+𝜕𝑥
+
+(𝐽⃑𝑖) +
+
+𝜕
+𝜕𝑦
+
+(𝐽⃑𝑖) +
+
+𝜕
+𝜕𝑧
+
+𝑁ℛ
+
+(𝐽⃑𝑖)] + 𝑀𝑊𝑖 ∑ 𝑅̂𝑖,𝓇
+
+𝓇=1
+
+(17) 
+
+339 
+
+where 𝑅̂𝑖,𝓇  the  Arrhenius  molar  rate  of  creation  or  depletion  of  species  𝑖  in  reaction  𝓇 ; 𝑁ℛ  the 
+
+18 
+
+ 
+ 
+ 
+ 
+ 
+ 
+  
+ 
+ 
+ 
+340 
+
+number of chemical reactions; where for turbulent flow, 𝐽⃑𝑖 is the mass diffusion term of the species 
+
+341 
+
+𝑖, which can be written in the following term: 
+
+𝑁−1
+𝐽⃑𝑖 = − ∑[(𝜌𝐷𝑖𝑗 +
+𝑗=1
+
+𝜇𝑡
+𝑆𝑐𝑡
+
+) 𝛻𝑌𝑖]
+
+(18) 
+
+342 
+
+where 𝐷𝑖𝑗 is binary mass diffusion  coefficient for species pair 𝑖 and 𝑗; 𝑆𝑐𝑡 is the turbulent Schmidt 
+
+343 
+
+number  which  is  fixed  to  0.7  and  can  be  defined  as  𝑆𝑐𝑡 =
+
+𝜇𝑡
+𝜌𝐷𝑇
+
+ ,  where  𝜇𝑡  and 𝐷𝑇  are  turbulent 
+
+344 
+
+viscosity and turbulent diffusivity respectively. 
+
+345 
+
+Calculation of velocity with fuel and air in co-flow condition: 
+
+𝑃𝑉̇ = 𝑛̇ 𝑅𝑇 
+
+(19) 
+where  P  represents  pressure; 𝑉̇   and 𝑛̇   are  volume  flow  rate  and  molar  flow  rate  of  gas;  R  is  the 
+
+346 
+
+347 
+
+universal gas constant; T is temperature.  
+
+348 
+
+Transport equations of 𝑘 and 𝜀 for realizable 𝑘 − 𝜀 model turbulence as shown below: 
+
+𝜕
+𝜕𝑡
+
+(𝜌𝑘) +
+
+𝜕
+𝜕𝑥𝑗
+
+(𝜌𝑘𝑢𝑗) =
+
+𝜕
+𝜕𝑥𝑗
+
+[(𝜇 +
+
+𝜇𝑡
+𝜎𝑘
+
+)
+
+𝜕𝑘
+𝜕𝑥𝑗
+
+] + 𝐺𝑘 − 𝜌𝜀 
+
+349 
+
+and 
+
+𝜕
+𝜕𝑡
+
+(𝜌𝜀) +
+
+𝜕
+𝜕𝑥𝑗
+
+(𝜌𝜀𝑢𝑗) =
+
+𝜕
+𝜕𝑥𝑗
+
+[(𝜇 +
+
+𝜇𝑡
+𝜎𝜀
+
+)
+
+𝜕𝜀
+𝜕𝑥𝑗
+
+] + 𝜌𝐶1𝑆𝜀 − 𝜌𝐶2
+
+𝜀2
+𝑘 + √𝜈𝜀
+
+(20) 
+
+(21) 
+
+350 
+
+where  𝑘  denotes  turbulent  kinetic  energy,  𝜀  is  dissipation  rate  of  turbulent  kinetic  energy,  the 
+
+351 
+
+turbulent Prandtl numbers for 𝑘 and 𝜀, which 𝜎𝑘 = 1.0, 𝜎𝜀 = 1.2, the turbulent viscosity 𝜇𝑡 = 𝜌𝐶𝜇
+
+𝑘2
+𝜀
+
+, 
+
+352 
+
+the production  term of  turbulent kinetic energy k attributed to the average velocity gradient 𝐺𝑘 =
+
+353 
+
+𝜇𝑡𝑆2 ,  the  modulus  of  the  mean  rate  of  strain  tensor  S=√2𝑆𝑖𝑗𝑆𝑖𝑗 .  The  coefficients  in  the  above 
+
+354 
+
+equation included 𝜂 = S 
+
+𝑘
+
+𝜀
+
+ , 𝐶1 = max [0.43,
+
+𝜂
+
+2
+
+𝜂+5
+
+] and 𝐶2 = 1.9. 
+
+355 
+
+In this study, the computational domain was adopted from an RBCC rocket thruster with a coaxial 
+
+356 
+
+swirl injector configuration reported by Liu et al. [17], as shown in Figure 2.6 and Figure 2.7. To 
+
+357 
+
+reduce computational cost, one-sixth of the combustion chamber is modeled using circumferential 
+
+358 
+
+symmetry, and periodic boundary conditions  are applied on  the symmetry planes. Since wall heat 
+
+359 
+
+transfer is not considered, all solid walls are treated as adiabatic and no-slip. The kerosene inlet is 
+
+360 
+
+simplified by using a mass-flow-inlet instead of tracking droplets with a discrete-phase model (DPM), 
+
+361 
+
+and  the  fuel  mass  flow  rate  is  calculated  from  the  specified  inlet  velocity.  The  corresponding 
+
+19 
+
+ 
+ 
+ 
+362 
+
+boundary conditions are summarized in Table 2.5. A structured mesh consisting of approximately 
+
+363 
+
+400,000  cells  is  generated  for  the  domain.  Enhanced  wall  treatment  (EWT)  [37]  is  applied  to 
+
+364 
+
+accurately resolve the near-wall region, and the first layer spacing is set to 0.01 mm, resulting in a y⁺ 
+
+365 
+
+value close to 1. 
+
+366 
+
+The governing equations are solved using the finite-volume  method with second-order upwind 
+
+367 
+
+discretization. A coupled algorithm based on the pressure-based solver applied to solve the equations 
+
+368 
+
+(11) and (13)-(15). The convergence criteria were set to  scale residuals below 10⁻⁶ for continuity, 
+
+369 
+
+momentum, and energy equations, and 10⁻⁴ for species transport equations. The simulation initiates 
+
+370 
+
+with a steady-state cold-flow calculation to establish the oxygen-kerosene mixing field. Subsequently, 
+
+371 
+
+an ignition energy (1 J) is applied at the spark-igniter location, activating transient combustion with 
+
+372 
+
+volumetric reaction source terms until stable combustion is achieved. 
+
+373 
+
+374 
+
+375 
+376 
+
+377 
+
+378 
+379 
+380 
+
+Figure 2.6 Size parameters of the thrust chamber and injector (all dimensions in millimeters) [17]. 
+
+Figure 2.7 Mesh model and boundary conditions for gas-oxygen/kerosene ignition and combustion 
+simulation based on Liu et al. [17]. 
+
+20 
+
+ 
+ 
+ 
+ 
+ 
+ 
+381 
+
+382 
+
+383 
+
+Table 2.5 Boundary conditions for the gas-oxygen/kerosene ignition and combustion simulation. 
+Gauge Pressure (P) 
+Fuel inlet 
+
+0 
+10.41 (g/s) 
+
+Mass flow rate (ν) 
+
+Species mole fraction (Xi) 
+
+XC10H20: 1.0 
+
+Oxidizer inlet 
+
+Mass flow rate (ν) 
+
+22.92 (g/s) 
+
+Pressure (P) 
+
+2 (Mpa) 
+
+Species mole fraction (Xi) 
+
+XO2: 1.0 
+
+Outlet 
+
+Pressure (P) 
+
+Species mole fraction (Xi) 
+
+0 (Mpa) 
+XN2: 0.78 
+XO2: 0.22 
+
+21 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+384 
+
+Chapter 3  Results and discussion 
+
+385 
+
+3.1  Premixed flame 
+
+386 
+
+3.1.1  Mechanism reduction using parallel-preconditioning sensitivity analysis (PPSA) 
+
+387 
+
+The PPSA reduction tool is applied to the three-component surrogate mechanism of RP-1 as shown 
+
+388 
+
+in Figure 3.1. As the relative-error tolerance increases in increments of 0.05, the numbers of species 
+
+389 
+
+and reactions decrease. When the tolerance reaches 0.20–0.25, clear deviations appear in both the 
+
+390 
+
+ignition  delay  time  and  flame  speed  predictions.  For  this  reason,  the  reduction  does  not  proceed 
+
+391 
+
+beyond this range. Within this interval, several reduced mechanisms converge to the same size. The 
+
+392 
+
+mechanism reduction at tolerance value of 0.225 demonstrated optimal agreement with experimental 
+
+393 
+
+data. However, due to the unavailability of species profile data from jet-stirred reactor experiments 
+
+394 
+
+for RP-1, this study excluded such validation for skeletal mechanism development. Table 3.1 shows 
+
+395 
+
+different levels of reduction in terms of  species and reaction numbers. The 92-species mechanism 
+
+396 
+
+has 75% of species and 86% of reactions are removed from the detailed mechanism [23]. Eventually, 
+
+397 
+
+the  92-species  and  368  reactions  mechanism  was  selected  as  the  RP-1  skeletal  mechanism  which 
+
+398 
+
+compromises between complexity and predictive accuracy.  
+
+399 
+
+400 
+
+401 
+
+Figure 3.1 Flowchart of reduction process for the detailed mechanism. 
+
+402 
+
+Table 3.1 Sizes of reduced mechanism generated using PPSA. 
+
+Error tolerance 
+0 (Detailed) 
+0.1 
+0.15 
+0.2 
+0.225 
+0.25 
+
+Species no./Reaction no. 
+369/2691 
+119/502 
+107/430 
+101/443 
+92/368 
+80/276 
+
+403 
+
+22 
+
+ 
+ 
+ 
+ 
+404 
+
+3.1.2  0-D ignition delay time 
+
+405 
+
+Figure  3.2  compares  the  experimental  ignition  delay  times  with  those  predicted  by  the  detailed 
+
+406 
+
+mechanism and several reduced  mechanisms at two equivalence ratios (𝜙 = 0.5 and 1.0) and two 
+
+407 
+
+pressures (10 and 20 atm). As the relative-error tolerance increases from 0.10 to 0.20, the reduced 
+
+408 
+
+mechanisms with 119-, 107- and 101-species remain close to both the detailed mechanism and the 
+
+409 
+
+experimental data. Their predictions follow the correct temperature dependence and maintain good 
+
+410 
+
+agreement under all test conditions. In contrast, the 80-species mechanism generated at a tolerance 
+
+411 
+
+of  0.25  departs  significantly  from  the  experimental  data.   It  consistently  overpredicts  the  ignition 
+
+412 
+
+delay, particularly in the high-temperature region, and fails to reproduce valid results under the low-
+
+413 
+
+pressure, fuel-lean condition. This behavior indicates that essential kinetic pathways are removed at 
+
+414 
+
+this  level  of  reduction,  making  the  mechanism  unreliable.  Between  these  limits,  the  92-species 
+
+415 
+
+mechanism generated at a tolerance of 0.225 provides the most balanced performance. Although it 
+
+416 
+
+predicts  slightly  lower  ignition  delays  in  the  low-temperature  region,  it  preserves  good  accuracy 
+
+417 
+
+across all conditions while retaining the smallest mechanism size among the acceptable candidates. 
+
+418 
+
+419 
+
+420 
+421 
+
+Figure 3.2 Comparison of experimental RP-1 ignition delay time with simulated at 10 and 20 atm 
+for equivalence ratios 𝜙 of 0.5 and 1.0 using detailed mechanism and various reduced mechanisms. 
+
+23 
+
+ 
+ 
+ 
+422 
+
+3.1.3  1-D laminar flame speed 
+
+423 
+
+Since  no  established  kinetic  mechanism  for  RP-1,  the  detailed  jet-fuel  mechanism  developed  by 
+
+424 
+
+Narayanaswamy et al. [23] is adopted as the baseline. In Figure 3.3, noticeable differences remain 
+
+425 
+
+between experimental flame speed data of RP-1 and computed results of the detailed mechanism. To 
+
+426 
+
+improve this discrepancy, a sequence of reduced mechanisms is generated by gradually relaxing the 
+
+427 
+
+relative-error tolerance, beginning with a 0.10 with an increment of 0.05, the first reduction produces 
+
+428 
+
+a 119-species mechanism, which shifts the peak flame speed toward the experimental location but 
+
+429 
+
+underpredicts its magnitude. Increasing the tolerance to 0.15 and 0.20 yields 107-species and 101-
+
+430 
+
+species  mechanisms,  respectively,  both  showing  a  gradual  rise  and  closer  agreement  with 
+
+431 
+
+experimental data. A significant transition occurs at an error tolerance of 0.25, where collapses to 80 
+
+432 
+
+species due to removal of twenty species. This abrupt reduction suppresses predicted flame speed, 
+
+433 
+
+indicating the loss of key kinetic pathways; therefore, the reduction process does not proceed beyond 
+
+434 
+
+this point. Instead, intermediate tolerances between 0.20 and 0.25 are examined. Within this range 
+
+435 
+
+several reductions yield to mechanisms of identical size of 92-species and demonstrate the closest 
+
+436 
+
+agreement with the experimental data across the entire range of equivalence ratios. 
+
+437 
+
+438 
+
+439 
+440 
+
+Figure 3.3 Comparison of experimental RP-1 flame speed with simulated at 1 atm and 403 K using 
+detailed mechanism and various reduced mechanisms. 
+
+24 
+
+ 
+ 
+ 
+ 
+441 
+
+3.2  Preliminary application results of a non-premixed realistic rocket engine 
+
+442 
+
+The three-dimensional CFD model of the ignition and combustion of rocket-based combined cycle 
+
+443 
+
+(RBCC)  engine  is  coupled  with  the  92-species  skeletal  mechanism  to  simulate  and  validate  the 
+
+444 
+
+experimental results of Liu et al. [17]. To reduce computational cost, an initial verification was first 
+
+445 
+
+conducted using kerosene-air global mechanism available in ANSYS Fluent. the simulation model 
+
+446 
+
+and  boundary  condition  of  this  preliminary  step,  as  listed  in  Table  2.5  and  shown  in  Figure  2.7. 
+
+447 
+
+Figure 3.4 compares the ignition pressurization process between experimental and simulation. Both 
+
+448 
+
+ignition moments occur at nearly 0.65 s. However, the simulated pressure peak reaches 2.57 MPa, 
+
+449 
+
+slightly higher than the measured value of 2.25 MPa.  
+
+450 
+
+451 
+
+452 
+
+Figure 3.4 Comparison of the ignition-pressurization process between experiment and simulation. 
+
+453 
+
+454 
+
+Figure 3.5 shows that the steady-state combustion chamber pressure predicted by the simulation 
+
+455 
+
+is 2.40 MPa, which agrees well with the experimental steady-state pressure of 2.43 MPa with error 
+
+456 
+
+of only 1%.  Figure 3.6 illustrates the flow field after ignition. Oxygen and kerosene are injected into 
+
+457 
+
+the combustion chamber forming the central recirculation zone (CRZ) in the upstream region. The 
+
+458 
+
+flow accelerates through the nozzle throat reaching a Mach number of 2.83, accompanied by a slight 
+
+25 
+
+ 
+ 
+ 
+ 
+459 
+
+decrease  due  to  the  flow  expansion. As  shown  in  Figure  3.7,  the  temperature  field  reveals  that 
+
+460 
+
+ignition  originates  near  the  upstream  and  propagates  downstream  through  convention  motion 
+
+461 
+
+associated with the central recirculation zone (CRZ). The flame core spreads along the jet but does 
+
+462 
+
+not reach the lower end of the chamber. The predicted flame temperature reaches approximately 4500 
+
+463 
+
+K, which is significantly higher than expected. This overprediction likely arises from limitations of 
+
+464 
+
+the global reaction mechanism. 
+
+465 
+
+466 
+
+467 
+
+Figure 3.5 Steady-state pressure distribution in the combustion chamber at the z = 0 mm plane. 
+
+468 
+
+469 
+
+470 
+
+Figure 3.6 Velocity field and streamlines in the combustion chamber at the z= 0 mm plane. 
+
+471 
+
+472 
+
+473 
+
+Figure 3.7 Temperature distribution in the combustion chamber after ignition at the z = 0 mm plane. 
+
+474 
+
+26 
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+475 
+
+Appendix 
+
+476 
+
+Reference 
+
+477 
+478 
+479 
+
+480 
+481 
+
+482 
+483 
+484 
+
+485 
+486 
+
+487 
+488 
+
+489 
+490 
+
+491 
+492 
+493 
+
+494 
+495 
+
+496 
+497 
+
+498 
+499 
+500 
+
+501 
+502 
+503 
+
+504 
+505 
+
+506 
+507 
+508 
+
+509 
+510 
+
+511 
+512 
+
+1.  Gokulakrishnan, P., et al. Supersonic  combustion simulation of cavity-stabilized hydrocarbon 
+flames using ethylene reduced kinetic mechanism. in 42nd AIAA/ASME/SAE/ASEE Joint Propulsion 
+Conference & Exhibit. 2006. 
+
+2.  Ma, H. A study on thermal stability and its improvement of hydrocarbon fuel. in International 
+Annual Conference of ICT. 1993. 
+
+3.  Farmer,  R.,  P.  Anderson,  and  G.C.  Cheng.  Propellant  chemistry  for  CFD  applications.  in 
+Thirteenth  Workshop  for  Computational  Fluid  Dynamic  Applications  in  Rocket  Propulsion  and 
+Launch Vehicle Technology. 1996. 
+
+4.  Farmer, R., et al., Propulsion chemistry for CFD applications. Contract No. NAS8-40574 Final 
+Report, 1997. 
+
+5.  Andersen,  P.C.  and  T.J.  Bruno,  Thermal  decomposition  kinetics  of  RP-1  rocket  propellant. 
+Industrial & engineering chemistry research, 2005. 44(6): p. 1670–1676. 
+
+6.  Alturaifi, S.A., et al., A shock-tube autoignition study of jet, rocket, and diesel fuels. Energy & 
+fuels, 2019. 33(3): p. 2516–2525. 
+
+7.  Keesee, C.L., B. Guo, and E.L. Petersen, Laminar flame speed measurements of kerosene-based 
+fuels accounting for uncertainties in mixture average molecular weight. Journal of engineering for 
+gas turbines and power, 2021. 143(4): p. 041018. 
+
+8.  Beard, R., et al. Numerical simulation of a film-cooled LOX/RP-1 rocket nozzle. in 33rd Joint 
+Propulsion Conference and Exhibit. 1997. 
+
+9.  Wang,  T.-S.,  Thermophysics  characterization  of  kerosene  combustion.  Journal  of 
+Thermophysics and Heat Transfer, 2001. 15(2): p. 140–147. 
+
+10.  Byun,  D.  and  S.W.  Baek,  Numerical  investigation  of  combustion  with  non-gray  thermal 
+radiation and soot formation effect in a liquid rocket engine. International Journal of Heat and Mass 
+Transfer, 2007. 50(3): p. 412–422. 
+
+11.  Zhang,  H.,  et  al.,  Analysis  of  combustion  instability  via  constant  volume  combustion  in  a 
+LOX/RP-1 bipropellant liquid rocket engine. Science China Technological Sciences, 2012. 55(4): p. 
+1066–1077. 
+
+12.  Yang, W. and B. Sun, Numerical simulation of liquid film in a liquid oxygen/rocket propellant 1 
+liquid rocket. Journal of thermophysics and heat transfer, 2012. 26(2): p. 328–336. 
+
+13.  Kim,  S.-K.,  et  al.,  Multidisciplinary  simulation  of  a  regeneratively  cooled  thrust  chamber  of 
+liquid rocket engine: Turbulent combustion and nozzle flow. International Journal of Heat and Mass 
+Transfer, 2014. 70: p. 1066–1077. 
+
+14.  Wang,  X.,  et  al.,  Near-field  flame  dynamics  of  liquid  oxygen/kerosene  bi-swirl  injectors  at 
+supercritical conditions. Combustion and Flame, 2018. 190: p. 1–11. 
+
+15.  Wang, Q.-D., et al., Skeletal mechanism generation for high-temperature oxidation of kerosene 
+surrogates. Combustion and Flame, 2012. 159(1): p. 91–102. 
+
+513 
+
+16.  Taghavi, S.R., M.A. Dehnavi, and A. Ghafouri, Numerical analysis of reactive turbulent flow in 
+
+27 
+
+ 
+514 
+
+the thrust chamber of RD-108 engine rocket. Defence Technology, 2019. 15(4): p. 565–575. 
+
+515 
+516 
+517 
+
+518 
+519 
+
+520 
+521 
+
+522 
+523 
+
+524 
+525 
+
+526 
+527 
+
+528 
+529 
+530 
+
+531 
+532 
+
+533 
+534 
+
+535 
+536 
+
+537 
+538 
+
+539 
+540 
+
+541 
+542 
+
+543 
+544 
+
+545 
+546 
+
+547 
+548 
+549 
+
+17.  Liu,  B.,  et  al.,  Experimental  and  Numerical  Investigations  on  the  Ignition  of  RBCC  Gas‐
+Oxygen/Kerosene Rocket Ejector. International Journal of Aerospace Engineering, 2021. 2021(1): p. 
+7002104. 
+
+18.  Li, G., et al., Supercritical combustion instabilities of oxygen/kerosene mixture in a swirl coaxial 
+injector. Applied Thermal Engineering, 2024. 241: p. 122429. 
+
+19.  MacDonald,  M.E.,  et  al.,  Formulation  of  an  RP-1  pyrolysis  surrogate  from  shock  tube 
+measurements of fuel and ethylene time histories. Fuel, 2013. 103: p. 1051–1059. 
+
+20.  Dagaut, P., A. El Bakali, and A. Ristori, The combustion of kerosene: Experimental results and 
+kinetic modelling using 1- to 3-component surrogate model fuels. Fuel, 2006. 85(7): p. 944–956. 
+
+21.  Honnet, S., et al., A surrogate fuel for kerosene. Proceedings of the Combustion Institute, 2009. 
+32(1): p. 485–492. 
+
+22.  Pei, Y., et al., A multicomponent blend as a diesel fuel surrogate for compression ignition engine 
+applications. Journal of Engineering for Gas Turbines and Power, 2015. 137(11): p. 111502. 
+
+23.  Narayanaswamy,  K.,  H.  Pitsch,  and  P.  Pepiot,  A  component  library  framework  for  deriving 
+kinetic  mechanisms  for  multi-component  fuel  surrogates:  Application  for  jet  fuel  surrogates. 
+Combustion and Flame, 2016. 165: p. 288–309. 
+
+24.  Westbrook,  C.K.  and  F.L.  Dryer,  Simplified  reaction  mechanisms  for  the  oxidation  of 
+hydrocarbon fuels in flames. Combustion science and technology, 1981. 27(1-2): p. 31–43. 
+
+25.  Franzelli, B., et al., A two-step chemical scheme for kerosene–air premixed flames. Combustion 
+and Flame, 2010. 157(7): p. 1364–1373. 
+
+26.  Choi, J. A quasi global mechanism of kerosene combustion for propulsion applications. in 47th 
+AIAA/ASME/SAE/ASEE Joint Propulsion Conference & Exhibit. 2011. 
+
+27.  Nada,  Y.,  et  al.,  Four-step  global  kinetics  mechanism  for  diluted  combustion  fueled  with 
+kerosene. Fuel, 2023. 346: p. 128322. 
+
+28.  Luche, J., et al., Reduction of large detailed kinetic mechanisms: application to  kerosene/air 
+combustion. Combustion science and technology, 2004. 176(11): p. 1935–1963. 
+
+29.  Koniavitis, P., S. Rigopoulos, and W. Jones, Reduction of a detailed chemical mechanism for a 
+kerosene surrogate via RCCE-CSP. Combustion and Flame, 2018. 194: p. 85–106. 
+
+30.  Liu,  Z.,  et  al.,  Development  of  a  reduced  multi-component  combustion  mechanism  for  a 
+diesel/natural gas dual fuel engine by cross-reaction analysis. Fuel, 2021. 293: p. 120388. 
+
+31.  Goodwin,  D.G.,  et  al.,  Cantera:  An  object-oriented  software  toolkit  for  chemical  kinetics, 
+thermodynamics, and transport processes. Zenodo, 2018. 
+
+32.  Saad,  Y.  and  M.H.  Schultz,  GMRES:  A  generalized  minimal  residual  algorithm  for  solving 
+nonsymmetric linear systems. SIAM Journal on scientific and statistical computing, 1986.  7(3): p. 
+856–869. 
+
+550 
+
+33.  CHEMKIN, P., 19.0, ANSYS. Inc.: San Diego, 2018. 
+
+551 
+552 
+
+34.  Shih, T.-H., et al.,  A new k-ϵ  eddy  viscosity model  for high reynolds number turbulent  flows. 
+Computers & fluids, 1995. 24(3): p. 227–238. 
+
+28 
+
+ 
+35.  Magnussen, B. On the structure of turbulence and a generalized eddy dissipation concept for 
+chemical reaction in turbulent flow. in 19th aerospace sciences meeting. 1981. 
+
+36.  Kumar, C.P. and A. Kumar, Effect of diaphragms on regression rate in hybrid rocket motors. 
+Journal of Propulsion and Power, 2013. 29(3): p. 559–572. 
+
+37.  Kader,  B.,  Temperature  and  concentration  profiles  in  fully  turbulent  boundary  layers. 
+International journal of heat and mass transfer, 1981. 24(9): p. 1541–1544. 
+
+553 
+554 
+
+555 
+556 
+
+557 
+558 
+559 
+
+29 
+
+ 
+ 
+

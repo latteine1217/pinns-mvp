@@ -276,17 +276,30 @@ class NPZReader(DataReader):
         coordinates = {}
         fields = {}
         
+        # ✅ Metadata keys (should NOT be treated as coordinates)
+        metadata_keys = {'shape', 'domain_size', 'domain_lengths', 'grid_shape',
+                        'source_cas', 'source_dat', 'model_type', 
+                        'Re_tau_estimate', 'nu', 'rho', 'timestamp'}
+        
         for key in data.files:
             arr = data[key]
+            # ✅ Skip metadata fields
+            if key in metadata_keys:
+                continue
+            # Known coordinate axes
             if key.lower() in ['x', 'y', 'z', 't', 'time']:
                 coordinates[key.lower()] = arr
-            elif key.lower() in ['u', 'v', 'w', 'p', 'pressure']:
+            # Known flow fields
+            elif key.lower() in ['u', 'v', 'w', 'p', 'pressure', 'k', 'mu_t', 'nu_t']:
                 fields[key.lower()] = arr
+            # Infer from shape (only for unknowns)
             else:
                 # 嘗試從形狀推斷
-                if arr.ndim == 1:
+                if arr.ndim == 1 and len(arr) > 10:
+                    # Large 1D array → likely a coordinate axis
                     coordinates[key] = arr
                 else:
+                    # Multi-dim or small 1D array → field data
                     fields[key] = arr
         
         # 使用基類的 build_metadata

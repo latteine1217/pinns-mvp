@@ -61,7 +61,7 @@ data:
 # ====================================================================
 normalization:
   type: "training_data_norm"          # 輸出標準化類型：training_data_norm（從訓練資料計算）
-  variables: ["u", "v", "w", "p"]     # 需要標準化的輸出變數
+  variable_order: ["u", "v", "w", "p"] # ✅ 3D 流場變量順序（修正：使用 variable_order 而非 variables）
   params: {}                          # 留空以自動從感測點資料計算均值/標準差（Z-Score）
   
   # 可選：手動指定 JHTDB 統計量（若已知完整場統計量）
@@ -187,6 +187,57 @@ physics:
     periodic_z: true                  # z 方向週期性
     pressure_driven: true             # 壓力驅動流
     mean_pressure_gradient: 0.0025    # 平均壓力梯度
+
+# ====================================================================
+# 7.5. 低保真先驗配置（RANS Prior）
+# ====================================================================
+lowfi_prior:
+  enabled: true                       # ✅ 啟用 RANS prior
+  data_path: ./data/lowfi/channel_rans/rans_k_omega_sst.npz  # ✅ RANS k-omega SST 資料
+  data_type: rans                     # 資料類型：rans / les / synthetic
+  
+  # RANS 資料結構（NPZ 格式）
+  rans_structure:
+    direct_npz: true                  # ✅ 使用 NPZ 格式
+    field_mapping:
+      u: u                            # NPZ 欄位名稱（已正確命名）
+      v: v
+      w: w
+      p: p
+      k: k                            # 湍流動能
+      nu_t: mu_t                      # 渦黏度（NPZ 中名為 mu_t）
+    coord_mapping:
+      X: x                            # 座標映射（NPZ 中為小寫）
+      Y: y
+      Z: z
+  
+  # 插值設定
+  interpolation:
+    method: linear                    # 插值方法：linear / cubic
+    extrapolation_mode: nearest       # 外插模式：nearest / boundary
+    quality_check: true               # 插值品質檢查
+  
+  # 先驗權重設定
+  consistency_weight: 0.3             # 全域一致性權重（對應 losses.prior_weight）
+  variable_weights:
+    u: 1.0                            # u 速度權重
+    v: 1.0                            # v 速度權重
+    w: 1.0                            # w 速度權重
+    p: 0.5                            # 壓力權重（較低，RANS 壓力不準確）
+  
+  # 空間權重策略（可選）
+  spatial_weighting:
+    enabled: true                     # 啟用空間權重（近壁區權重高）
+    strategy: distance_to_wall        # 策略：distance_to_wall / turbulence_intensity
+    wall_region_weight: 2.0           # 近壁區權重倍數
+    wall_thickness: 0.1               # 近壁區厚度（y+ < 100）
+    core_region_weight: 1.0           # 核心區權重
+  
+  # 湍流模型配置（Fluent V2 使用 k-omega SST）
+  turbulence_model:
+    type: k_omega_sst                 # 湍流模型類型
+    enabled: true                     # 是否使用湍流變量（k, omega）
+    use_nu_t: true                    # 是否使用渦黏度 nu_t
 
 # ====================================================================
 # 8. 損失函數權重

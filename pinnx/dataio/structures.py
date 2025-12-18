@@ -284,11 +284,16 @@ class FlowDataBundle:
         sensor_data: Dict[str, torch.Tensor] = {}
         for name in target_fields:
             if name in self.samples.values:
+                # ✅ Field available in sensor samples
                 values_np = self.samples.values[name].reshape(-1, 1)
+            elif self.lowfi_prior is not None and name in self.lowfi_prior.values:
+                # ✅ NEW: Field missing in sensors, but available in lowfi_prior (coordinates-only workflow)
+                values_np = self.lowfi_prior.values[name].reshape(-1, 1)
             elif name == 'w' and include_w:
+                # ✅ 2D case: w not available, use zeros
                 values_np = np.zeros((self.samples.num_points, 1), dtype=np.float64)
             else:
-                raise KeyError(f"Target field '{name}' not available in sensor samples")
+                raise KeyError(f"Target field '{name}' not available in sensor samples or lowfi_prior")
             sensor_data[name] = torch.from_numpy(values_np).float().to(device)
 
         lowfi_data_tensors: Dict[str, torch.Tensor] = {}

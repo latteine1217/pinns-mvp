@@ -97,9 +97,11 @@ lowfi_prior:
 # ====================================================================
 # Normalization
 # ====================================================================
+# ✅ 修復：Kolmogorov flow 是 2D，僅標準化 u, v, p（無 w）
 normalization:
   type: training_data_norm
-  params: {}
+  variable_order: ['u', 'v', 'p']  # ✅ 明確指定變量順序（排除 w）
+  params: {}  # 從 training_data 自動計算
   noise_sigma: 0.0
   dropout_prob: 0.0
   steady_state:

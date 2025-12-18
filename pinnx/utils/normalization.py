@@ -376,6 +376,8 @@ class OutputTransform:
         # 根據類型提取標準化係數
         if norm_type == 'training_data_norm':
             means, stds = cls._extract_training_data_scales(params, training_data, config)
+            # ✅ 調整 variable_order 為實際有統計量的變量（防止 validation 失敗）
+            variable_order = list(means.keys())
         elif norm_type == 'friction_velocity':
             means, stds = cls._extract_friction_velocity_scales(params, config)
         elif norm_type == 'manual':
@@ -402,55 +404,64 @@ class OutputTransform:
         config: Dict
     ) -> Tuple[Dict[str, float], Dict[str, float]]:
         """從訓練資料或配置中提取標準化係數（內部輔助方法）"""
+        # 從配置中讀取 variable_order（如有提供）
+        norm_config = config.get('normalization', {})
+        variable_order = norm_config.get('variable_order', ['u', 'v', 'w', 'p'])
+        
         # 優先級 1: 從配置中明確提供
-        if all(k in params for k in ['u_mean', 'u_std', 'v_mean', 'v_std', 'w_mean', 'w_std', 'p_mean', 'p_std']):
-            means = {
-                'u': params['u_mean'],
-                'v': params['v_mean'],
-                'w': params['w_mean'],
-                'p': params['p_mean']
-            }
-            stds = {
-                'u': params['u_std'],
-                'v': params['v_std'],
-                'w': params['w_std'],
-                'p': params['p_std']
-            }
-            logger.info("📐 使用配置中的標準化係數")
+        required_keys = [f'{v}_{s}' for v in variable_order for s in ['mean', 'std']]
+        if all(k in params for k in required_keys):
+            means = {v: params[f'{v}_mean'] for v in variable_order}
+            stds = {v: params[f'{v}_std'] for v in variable_order}
+            logger.info(f"📐 使用配置中的標準化係數: {list(means.keys())}")
             return means, stds
         
         # 優先級 2: 從訓練資料計算
         if training_data is not None:
+            # 🔍 首先檢測 training_data 中實際存在的變量
+            available_vars = []
+            for var_name in variable_order:
+                key = var_name if var_name in training_data else f'{var_name}_sensors'
+                if key in training_data:
+                    available_vars.append(var_name)
+            
+            # 如果 variable_order 包含不存在的變量，警告並調整
+            missing_vars = set(variable_order) - set(available_vars)
+            if missing_vars:
+                logger.warning(
+                    f"⚠️  variable_order 包含不存在的變量: {missing_vars}，"
+                    f"將只使用可用變量: {available_vars}"
+                )
+            
             means = {}
             stds = {}
-            for var_name in ['u', 'v', 'w', 'p']:
+            for var_name in available_vars:  # 只處理實際存在的變量
                 # 支援兩種鍵名格式：'u' 或 'u_sensors'
                 key = var_name if var_name in training_data else f'{var_name}_sensors'
                 
-                if key in training_data:
-                    values = training_data[key]
-                    if isinstance(values, torch.Tensor):
-                        values = values.detach().cpu().numpy()
-                    
-                    # ⚠️ 跳過空張量或零長度陣列（防止 NaN）
-                    if values.size == 0:
-                        logger.info(f"⏭️  {var_name} 為空張量，跳過標準化統計量計算")
-                        continue
-                    
-                    mean = float(np.mean(values))
-                    std = float(np.std(values))
-                    
-                    # 🛡️ 防禦性檢查：拒絕 NaN 或 Inf
-                    if not np.isfinite(mean) or not np.isfinite(std):
-                        logger.warning(f"⚠️  {var_name} 的統計量包含 NaN/Inf (mean={mean}, std={std})，跳過")
-                        continue
-                    
-                    if abs(std) < 1e-10:
-                        logger.warning(f"⚠️  {var_name} 的標準差接近零，設為 1.0")
-                        std = 1.0
-                    
-                    means[var_name] = mean
-                    stds[var_name] = std
+                values = training_data[key]
+                if isinstance(values, torch.Tensor):
+                    values = values.detach().cpu().numpy()
+                
+                # ⚠️ 跳過空張量或零長度陣列（防止 NaN）
+                if values.size == 0:
+                    logger.info(f"⏭️  {var_name} 為空張量，跳過標準化統計量計算")
+                    continue
+                
+                mean = float(np.mean(values))
+                std = float(np.std(values))
+                
+                # 🛡️ 防禦性檢查：拒絕 NaN 或 Inf
+                if not np.isfinite(mean) or not np.isfinite(std):
+                    logger.warning(f"⚠️  {var_name} 的統計量包含 NaN/Inf (mean={mean}, std={std})，跳過")
+                    continue
+                
+                if abs(std) < 1e-10:
+                    logger.warning(f"⚠️  {var_name} 的標準差接近零，設為 1.0")
+                    std = 1.0
+                
+                means[var_name] = mean
+                stds[var_name] = std
             
             if means:
                 logger.info(f"📐 從訓練資料計算標準化係數: {list(means.keys())}")

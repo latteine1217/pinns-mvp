@@ -62,6 +62,7 @@ lowfi_prior:
 # ====================================================================
 normalization:
   type: training_data_norm
+  variable_order: ['u', 'v', 'p']  # 2D flow: exclude w
   params: {}
   noise_sigma: 0.0
   dropout_prob: 0.0

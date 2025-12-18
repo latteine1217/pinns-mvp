@@ -89,8 +89,10 @@ class SensorDataReader(NPZReader):
         - 'coords_2d': 2D 座標，需要擴展到 3D
         """
         if 'sensor_points' in data:
+            # 標準格式：直接使用
             points = np.asarray(data['sensor_points'])
         elif 'coords' in data:
+            # 備選格式：coords
             points = np.asarray(data['coords'])
         elif 'coords_2d' in data:
             # 2D → 3D 擴展
@@ -100,10 +102,23 @@ class SensorDataReader(NPZReader):
                 coords_2d[:, 1],  # y
                 np.full(len(coords_2d), self.z_default)  # z (constant)
             ])
+        elif 'sensor_x' in data and 'sensor_y' in data:
+            # ✅ 新增：支援分離座標格式 (sensor_x, sensor_y, sensor_z)
+            sensor_x = np.asarray(data['sensor_x'])
+            sensor_y = np.asarray(data['sensor_y'])
+            
+            if 'sensor_z' in data:
+                # 3D 座標
+                sensor_z = np.asarray(data['sensor_z'])
+                points = np.column_stack([sensor_x, sensor_y, sensor_z])
+            else:
+                # 2D 座標，擴展為 3D
+                sensor_z = np.full(len(sensor_x), self.z_default)
+                points = np.column_stack([sensor_x, sensor_y, sensor_z])
         else:
             raise KeyError(
                 f"Cannot find sensor coordinates. "
-                f"Expected 'sensor_points', 'coords', or 'coords_2d'"
+                f"Expected 'sensor_points', 'coords', 'coords_2d', or 'sensor_x/sensor_y/sensor_z'"
             )
         
         # 返回標準格式：{'x': [...], 'y': [...], 'z': [...]}
@@ -159,11 +174,10 @@ class SensorDataReader(NPZReader):
                     if field in data:
                         fields[field] = np.asarray(data[field]).reshape(-1)
             
+            # ✅ 允許純座標檔案（沒有 velocity/pressure 資料）
+            # 這種情況下，資料將從 JHTDB 或 RANS prior 取得
             if not fields:
-                raise KeyError(
-                    "Cannot find velocity/pressure data. "
-                    "Expected 'sensor_data', 'sensor_u/v/w/p', or 'u/v/w/p'"
-                )
+                logger.info("No velocity/pressure data found in sensor file (coordinates-only file)")
         
         return fields
     
@@ -185,9 +199,28 @@ class SensorDataReader(NPZReader):
             raise ValueError(f"Cannot infer variable names for {n_vars} columns")
     
     def _build_sensor_metadata(self, filepath: Union[str, Path], data: dict) -> Dict[str, Any]:
-        """構建感測點元數據，包含 selection_info"""
+        """構建感測點元數據，包含 selection_info 和標量 metadata"""
         # 使用基類的 build_metadata
         metadata = self.build_metadata(filepath, 'NPZ-Sensor')
+        
+        # ✅ 提取標量 metadata（直接從 NPZ keys）
+        scalar_keys = ['K', 'condition_number', 'energy_ratio', 'method', 
+                       'seam_weight', 'source_file', 'ndim', 'grid_shape', 
+                       'periodic_axes', 'domain_lengths']
+        
+        for key in scalar_keys:
+            if key in data:
+                value = data[key]
+                # 處理 numpy scalar/array
+                if hasattr(value, 'shape'):
+                    if value.shape == ():
+                        # 0-dim array (scalar)
+                        metadata[key] = value.item()
+                    else:
+                        # Multi-dim array
+                        metadata[key] = value.tolist()
+                else:
+                    metadata[key] = value
         
         # 提取 selection_info
         if 'selection_info' in data:
@@ -195,10 +228,19 @@ class SensorDataReader(NPZReader):
             metadata['selection_info'] = selection_info.item() if selection_info.ndim == 0 else selection_info
         else:
             # 嘗試從其他欄位構建
+            # 計算實際的 K 值
+            K_actual = 0
+            if 'sensor_x' in data:
+                K_actual = len(data['sensor_x'])
+            elif 'coords' in data:
+                K_actual = len(data['coords'])
+            elif 'sensor_points' in data:
+                K_actual = len(data['sensor_points'])
+            
             metadata['selection_info'] = {
-                'strategy': str(data.get('strategy', 'unknown')),
-                'K_requested': int(data.get('K_requested', 0)),
-                'K_actual': int(len(data.get('coords', data.get('sensor_points', [])))),
+                'strategy': metadata.get('method', str(data.get('strategy', 'unknown'))),
+                'K_requested': int(metadata.get('K', data.get('K_requested', K_actual))),
+                'K_actual': K_actual,
                 'selection_timestamp': str(data.get('timestamp', 'unknown'))
             }
         
@@ -726,19 +768,36 @@ class ChannelFlowLoader:
 
     def _load_rans_prior(self) -> LowFiData:
         """載入真實 RANS 先驗資料"""
-        # 尋找 RANS 資料檔案
+        # ✅ 優先從 config 讀取 lowfi_prior.data_path
+        lowfi_cfg = self.config.get('lowfi_prior', {})
+        if lowfi_cfg.get('enabled', False) and 'data_path' in lowfi_cfg:
+            rans_path = Path(lowfi_cfg['data_path'])
+            # 支援相對路徑（相對於專案根目錄）
+            if not rans_path.is_absolute():
+                # 假設 config_path 在 configs/ 下，專案根目錄在上一層
+                project_root = self.config_path.parent.parent if self.config_path.parent.name == 'configs' else self.config_path.parent
+                rans_path = project_root / rans_path
+            
+            if rans_path.exists():
+                logger.info(f"Loading RANS prior from config: {rans_path}")
+                return self.lowfi_loader.load(rans_path, data_type='rans')
+            else:
+                logger.warning(f"RANS path from config not found: {rans_path}")
+        
+        # ✅ 回退：在 cache_dir 尋找標準檔名
         rans_patterns = ['rans_data.npz', 'lowfi_prior.npz', 'rans_baseline.nc']
         
         for pattern in rans_patterns:
             rans_path = self.cache_dir / pattern
             if rans_path.exists():
-                logger.info(f"Loading RANS prior from {rans_path}")
+                logger.info(f"Loading RANS prior from cache: {rans_path}")
                 return self.lowfi_loader.load(rans_path, data_type='rans')
         
         # 無法找到RANS資料，直接拋出錯誤
         raise FileNotFoundError(
-            f"No RANS prior data found in {self.cache_dir}. "
-            f"Searched for: {rans_patterns}. "
+            f"No RANS prior data found. "
+            f"Checked config path: {lowfi_cfg.get('data_path', 'N/A')}. "
+            f"Searched in {self.cache_dir} for: {rans_patterns}. "
             f"Mock fallback has been removed for this system."
         )
     
