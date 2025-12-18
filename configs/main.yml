@@ -75,9 +75,9 @@ normalization:
 # 4. 感測點配置
 # ====================================================================
 sensors:
-  K: 500                               # 感測點數量
+  K: 100                               # 感測點數量
   selection_method: "qr_pivot"         # 選點策略：qr_pivot / random / uniform / hybrid
-  sensor_file: "sensors_K500_qr_pivot_3d_wall_enhanced.npz"  # 預生成感測點文件（相對於 cache_dir）
+  sensor_file: "sensors_K100_qr_pivot_3d_v5_gradu_eig_large.npz"  # 預生成感測點文件（相對於 cache_dir）
   
   # Hybrid 策略配置（若使用 hybrid）
   hybrid_config:

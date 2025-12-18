@@ -1,21 +1,21 @@
 # ====================================================================
 # Kolmogorov Flow Re=50 kf=4 K=100 Vanilla Baseline Config
 # ====================================================================
-# Strategy: Pure PINNs without RANS Prior or Curriculum
+# Strategy: Pure PINNs without Turbulence Prior or Curriculum
 # 1. No lowfi_prior (pure data-driven)
 # 2. No curriculum (fixed LR and weights throughout training)
-# 3. Same architecture and physics as RANS-prior version for fair comparison
+# 3. Same architecture and physics as Leith-prior version for fair comparison
 #
-# Purpose: Baseline for comparison with RANS-prior version
+# Purpose: Baseline for comparison with Leith-prior version
 # ====================================================================
 
 experiment:
   name: kolmogorov_re50_kf4_K100_vanilla
-  version: v1.0_baseline
+  version: v1.1_baseline
   seed: 42
   device: auto
   precision: float32
-  description: "Re=50 vanilla baseline without RANS prior or curriculum for comparison."
+  description: "Re=50 vanilla baseline without turbulence prior or curriculum for comparison with Leith-prior version."
 
 reproducibility:
   deterministic: true
@@ -23,7 +23,7 @@ reproducibility:
   num_workers: 4
 
 # ====================================================================
-# Data Configuration (Same as RANS version)
+# Data Configuration (Same as Leith-prior version)
 # ====================================================================
 data:
   source: kolmogorov_dns
@@ -58,7 +58,7 @@ lowfi_prior:
   enabled: false
 
 # ====================================================================
-# Normalization (Same as RANS version)
+# Normalization (Same as Leith-prior version)
 # ====================================================================
 normalization:
   type: training_data_norm
@@ -70,7 +70,7 @@ normalization:
     time_window: [15.0, 35.0]
 
 # ====================================================================
-# Sensors (Same as RANS version - CRITICAL for fair comparison)
+# Sensors (Same as Leith-prior version - CRITICAL for fair comparison)
 # ====================================================================
 sensors:
   K: 100
@@ -78,7 +78,7 @@ sensors:
   sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
 
 # ====================================================================
-# Model Architecture (Same as RANS version)
+# Model Architecture (Same as Leith-prior version)
 # ====================================================================
 model:
   type: fourier_vs_mlp
@@ -102,7 +102,7 @@ model:
     hidden_omega_0: 30.0
 
 # ====================================================================
-# Physics (Same as RANS version)
+# Physics (Same as Leith-prior version)
 # ====================================================================
 physics:
   type: kolmogorov_flow_2d
@@ -185,7 +185,7 @@ curriculum:
   enable: false
 
 # ====================================================================
-# Evaluation (Same as RANS version)
+# Evaluation (Same as Leith-prior version)
 # ====================================================================
 evaluation:
   grid_resolution: [512, 512]
@@ -201,7 +201,7 @@ evaluation:
     dpdx_l2_error: 0.30
 
 # ====================================================================
-# Logging (Same as RANS version)
+# Logging (Same as Leith-prior version)
 # ====================================================================
 logging:
   level: info

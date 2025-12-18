@@ -1,14 +1,14 @@
 # ====================================================================
-# Kolmogorov Flow Re=50 kf=4 K=100 RANS Prior Training Config
+# Kolmogorov Flow Re=50 kf=4 K=100 Leith Prior Training Config
 # ====================================================================
-# Strategy: "Enhanced Convergence - Phase 1 (SOAP)"
-# 1. Disable conflicting automated mechanisms (GradNorm, Causal).
-# 2. Use Curriculum Stages to explicitly control Weights.
-# 3. Strengthen continuity constraints progressively.
+# Strategy: "Leith Turbulence Model Prior (適合 2D 湍流)"
+# 1. 使用 Leith 渦黏模型代替 k-ε RANS（更適合捕捉 2D 逆級串）
+# 2. Curriculum Stages 顯式控制權重（Leith 品質較高，使用較低初始權重）
+# 3. 漸進式強化連續性約束
 # 4. Phase 2 (L-BFGS fine-tuning) 將使用獨立配置從 checkpoint 恢復
 #
 # Stages:
-# - Stage 1 (0-2000):   Prior=10.0 (Strong), Continuity=2.0 (Moderate)
+# - Stage 1 (0-2000):   Prior=2.0 (Moderate), Continuity=2.0 (Moderate)
 # - Stage 2 (2000-6000): Prior=1.0 (Decay), Continuity=5.0 (Ramped)
 # - Stage 3 (6000-10000): Prior=0.1 (Minimal), Continuity=10.0 (Strong)
 #
@@ -17,12 +17,12 @@
 # ====================================================================
 
 experiment:
-  name: kolmogorov_re50_kf4_K100_rans_prior
-  version: v3.0_lbfgs_enhanced
+  name: kolmogorov_re50_kf4_K100_leith_prior
+  version: v3.1_leith_prior
   seed: 42
   device: auto
   precision: float32
-  description: "Re=50 with RANS prior. Enhanced with L-BFGS fine-tuning (last 2000 epochs)."
+  description: "Re=50 with Leith turbulence prior (適合 2D 湍流，無 k/epsilon). Enhanced with L-BFGS fine-tuning."
 
 reproducibility:
   deterministic: true
@@ -67,8 +67,8 @@ data:
 # - 無壓力場（診斷模型），loss 計算時自動跳過
 lowfi_prior:
   enabled: true
-  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4_leith.h5  # ✅ 修正：Leith 模型
-  data_type: leith  # ✅ 修正：標記為 Leith 模型
+  data_path: ./data/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5  # ✅ Leith 模型
+  data_type: leith  # ✅ 標記為 Leith 模型
   rans_structure:
     group_path: /mean_field
     # ✅ Leith 模型場映射（簡化，無 k/epsilon）
@@ -329,6 +329,6 @@ logging:
   save_stage_checkpoints: true
 
 output:
-  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_rans_prior
-  results_dir: ./results/kolmogorov_re50_kf4_K100_rans_prior
-  visualization_dir: ./results/kolmogorov_re50_kf4_K100_rans_prior/visualizations
+  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_leith_prior
+  results_dir: ./results/kolmogorov_re50_kf4_K100_leith_prior
+  visualization_dir: ./results/kolmogorov_re50_kf4_K100_leith_prior/visualizations
