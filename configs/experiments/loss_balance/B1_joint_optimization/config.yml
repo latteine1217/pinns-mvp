@@ -1,0 +1,268 @@
+# ====================================================================
+# 實驗 B1.4: Joint Optimization (Data + Momentum + Continuity)
+# ====================================================================
+# 目的: 聯合優化權重平衡，同時解決 B1.1/B1.2 的兩大問題
+# 問題 1: momentum_weight=0.3 過低 → 質量守恆退化 2.5×
+# 問題 2: data_weight=10.0 過高 → 數據主導 >55%
+# 策略: 降低 data (10→5) + 恢復 momentum (0.3→1.0) + 保持最佳 continuity (5.0)
+# 預期: 質量守恆改善至 A1/A2 水平 (~8e-4), total_loss 優於 B1.1 (~3.7)
+# 時間: ~20 分鐘 (1000 epochs)
+# ====================================================================
+
+experiment:
+  name: loss_balance_B1_joint_optimization
+  version: v1.0
+  seed: 42
+  device: auto
+  precision: float32
+  description: "B1.4: Joint optimization - data=5.0, momentum=1.0, continuity=5.0"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# Data Configuration (與 A3/B1.1 完全相同)
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: "Kolmogorov flow (Re=50, k_f=4)"
+    domain:
+      x: [0.0, 6.283185307179586]
+      y: [0.0, 6.283185307179586]
+    resolution:
+      x: 256
+      y: 256
+    time_range: [15.0, 35.0]
+    dt: 0.001
+    variables: [u, v, p]
+    physics_params:
+      Re: 50.0
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# Low-Fi Prior (與 A3/B1.1 完全相同)
+# ====================================================================
+lowfi_prior:
+  enabled: true
+  data_path: ./data/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5
+  data_type: leith
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      nu_t: nu_t
+    coord_mapping:
+      x: x
+      y: y
+  
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+  
+  consistency_weight: 5.0        # 與 A3/B1.1 相同
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.0
+
+# ====================================================================
+# Normalization (⭐ 使用 DNS Ground Truth)
+# ====================================================================
+# ⚠️ 重要變更: 使用 dns_ground_truth_norm 替代 training_data_norm
+# 理由: training_data_norm 使用稀疏感測器 (K=100) 計算統計量
+#       dns_ground_truth_norm 使用完整 DNS 場 (256×256×201 ≈ 13M 點)
+# 優勢: 
+#   1. 避免感測器採樣偏差
+#   2. 統計量更準確 (u_std: 0.468 vs 0.115, 修正 4× 誤差)
+#   3. 提升訓練穩定性與收斂速度
+normalization:
+  type: dns_ground_truth_norm
+  variable_order: ['u', 'v', 'p']
+  params:
+    dns_file: ./data/kolmogorov_dns/dns_re50_t100.h5
+    time_range: [15.0, 35.0]  # 使用穩態時間窗口
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  steady_state:
+    enabled: true
+    time_window: [15.0, 35.0]
+
+# ====================================================================
+# Sensors (與 A3/B1.1 完全相同)
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
+
+# ====================================================================
+# Model Architecture (與 A3/B1.1 完全相同)
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 256
+  depth: 6
+  activation: swish
+  block_type: resnet
+
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 16
+    fourier_sigma: 4.0
+    include_input: true
+
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+
+# ====================================================================
+# Physics (與 A3/B1.1 完全相同)
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# ⭐ B1.4 核心變更: Joint Optimization
+# ====================================================================
+losses:
+  # ✅ 修改 1: 降低 data_weight (10.0 → 5.0)
+  # 理由: B1.1/B1.2 的 data_loss 佔 >55%，過度主導訓練
+  # 預期: 物理約束佔比提升，data_loss 會略升但總體性能改善
+  data_weight: 5.0              # B1.1: 10.0 → B1.4: 5.0 (降低 50%)
+  
+  # ✅ 修改 2: 恢復 momentum_weight (0.3 → 1.0)
+  # 理由: B1.1/B1.2 的 momentum_weight=0.3 導致質量守恆退化 2.5×
+  # 預期: 散度降低至 A1/A2 水平 (~8e-4)，動量方程滿足改善
+  momentum_x_weight: 1.0        # B1.1: 0.3 → B1.4: 1.0 (恢復 A1/A2 水平)
+  momentum_y_weight: 1.0        # B1.1: 0.3 → B1.4: 1.0 (恢復 A1/A2 水平)
+  
+  # ✅ 保持 3: continuity_weight (B1.1 最佳值)
+  # 理由: B1.1 vs B1.2 顯示 5.0 優於 10.0
+  # 預期: 與 B1.1 相同的散度約束強度
+  continuity_weight: 5.0        # B1.1: 5.0 → B1.4: 5.0 (保持最佳值)
+  
+  # 與 B1.1 相同
+  prior_weight: 5.0
+  periodicity_weight: 10.0
+  
+  # 與 B1.1 相同
+  normalize_losses: true
+  adaptive_weighting: false
+  causal_weighting: false
+
+# ====================================================================
+# Training (與 A3/B1.1 完全相同)
+# ====================================================================
+training:
+  optimizer:
+    type: soap
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+
+  lr_scheduler:
+    type: step
+    gamma: 0.5
+    step_size: 500
+
+  epochs: 1000
+  max_epochs: 1000
+  batch_size: 20000
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+  
+  early_stopping:
+    enabled: false
+
+  sampling:
+    N_pde: 10000
+    adaptive_sampling: false
+    boundary_points: 1000
+  
+  gradient_clip: 1.0
+  amp:
+    enabled: false
+
+# ====================================================================
+# Curriculum (與 A3 相同)
+# ====================================================================
+curriculum:
+  enable: false
+
+# ====================================================================
+# Logging & Output
+# ====================================================================
+logging:
+  tensorboard: true
+  log_level: INFO
+
+output:
+  save_dir: ./results/loss_balance/B1_joint_optimization
+  checkpoint_dir: ./checkpoints/loss_balance/B1_joint_optimization
+
+# ====================================================================
+# 預期結果分析
+# ====================================================================
+# 權重比例變化：
+#   B1.1: data : momentum : continuity = 10.0 : 0.3 : 5.0 = 33 : 1 : 17
+#   B1.4: data : momentum : continuity = 5.0 : 1.0 : 5.0 = 5 : 1 : 5
+#
+# Loss 組成預測（Weighted Loss）：
+#   B1.1 (實際):
+#     - Data:  2.05 (55.4%)
+#     - Prior: 1.47 (39.8%)
+#     - PDE:   0.17 (4.6%)
+#     - Div:   0.01 (0.3%)
+#     Total: 3.70
+#
+#   B1.4 (預期):
+#     - Data:  ~1.0-1.3 (30-35%)  ← data_weight ↓ 50%
+#     - Prior: ~1.5-1.6 (40-45%)  ← 略升（相對權重↑）
+#     - PDE:   ~0.5-0.7 (15-20%)  ← momentum_weight ↑ 3.3×
+#     - Div:   ~0.02 (0.5-1%)     ← 保持
+#     Total: ~3.0-3.8 (預期略優於 B1.1)
+#
+# 質量守恆預測：
+#   B1.1: continuity_loss = 0.002022 (~2.0e-3)
+#   B1.4: continuity_loss ≈ 0.001 or better (~1.0e-3, 接近 A1/A2)
+#   理由: momentum_weight ↑ 3.3× 強化速度場物理一致性
+#
+# 對比 A3 (Physics-First 極端策略):
+#   A3:  data : momentum : continuity = 1.0 : 5.0 : 20.0 = 1 : 5 : 20
+#   B1.4: data : momentum : continuity = 5.0 : 1.0 : 5.0 = 5 : 1 : 5
+#   B1.4 是「中庸策略」(介於 Data-First B1.1 與 Physics-First A3 之間)
+#
+# ====================================================================
