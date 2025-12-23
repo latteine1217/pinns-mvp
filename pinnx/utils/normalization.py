@@ -220,7 +220,7 @@ class OutputTransform:
     - manual: 手動指定 means/stds
     """
     
-    SUPPORTED_TYPES = ['none', 'training_data_norm', 'friction_velocity', 'manual']
+    SUPPORTED_TYPES = ['none', 'training_data_norm', 'friction_velocity', 'manual', 'dns_ground_truth_norm']
     DEFAULT_VAR_ORDER = ['u', 'v', 'w', 'p', 'S']
     
     def __init__(self, config: OutputNormConfig):
@@ -378,6 +378,10 @@ class OutputTransform:
             means, stds = cls._extract_training_data_scales(params, training_data, config)
             # ✅ 調整 variable_order 為實際有統計量的變量（防止 validation 失敗）
             variable_order = list(means.keys())
+        elif norm_type == 'dns_ground_truth_norm':
+            means, stds = cls._extract_dns_ground_truth_scales(params, config)
+            # ✅ 調整 variable_order 為實際有統計量的變量
+            variable_order = list(means.keys())
         elif norm_type == 'friction_velocity':
             means, stds = cls._extract_friction_velocity_scales(params, config)
         elif norm_type == 'manual':
@@ -509,6 +513,149 @@ class OutputTransform:
         }
         
         logger.info(f"📐 Friction velocity scales: u_τ={u_tau}, ρ={rho}")
+        return means, stds
+    
+    @staticmethod
+    def _extract_dns_ground_truth_scales(
+        params: Dict,
+        config: Dict
+    ) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """從 DNS 完整時空域計算標準化係數（科學正確方法）
+        
+        Args:
+            params: normalization.params 配置參數，必須包含：
+                - dns_file: DNS HDF5 文件路徑
+                - time_range: [t_start, t_end] 時間範圍（可選，默認使用全部）
+                - variable_order: 變量順序（可選，默認 ['u', 'v', 'p']）
+            config: 完整配置字典
+        
+        Returns:
+            (means, stds): 均值與標準差字典
+        
+        Raises:
+            FileNotFoundError: DNS 文件不存在
+            KeyError: DNS 文件缺少必要變量
+            ValueError: 參數格式錯誤
+        
+        Example:
+            normalization:
+              type: dns_ground_truth_norm
+              params:
+                dns_file: ./data/kolmogorov_dns/dns_re50_t100.h5
+                time_range: [15.0, 35.0]  # 可選
+                variable_order: ['u', 'v', 'p']  # 可選
+        """
+        import h5py
+        from pathlib import Path
+        
+        # ========== 驗證參數 ==========
+        dns_file = params.get('dns_file')
+        if dns_file is None:
+            raise ValueError(
+                "dns_ground_truth_norm 需要提供 dns_file 參數！\n"
+                "範例：\n"
+                "  normalization:\n"
+                "    type: dns_ground_truth_norm\n"
+                "    params:\n"
+                "      dns_file: ./data/kolmogorov_dns/dns_re50_t100.h5\n"
+                "      time_range: [15.0, 35.0]  # 可選\n"
+            )
+        
+        dns_path = Path(dns_file)
+        if not dns_path.exists():
+            raise FileNotFoundError(
+                f"DNS 文件不存在: {dns_file}\n"
+                f"請確認路徑正確，或使用相對於專案根目錄的路徑。"
+            )
+        
+        # 讀取配置參數
+        time_range = params.get('time_range')  # [t_start, t_end] or None
+        variable_order = params.get('variable_order')
+        if variable_order is None:
+            # 從 config.normalization.variable_order 讀取
+            norm_config = config.get('normalization', {})
+            variable_order = norm_config.get('variable_order', ['u', 'v', 'p'])
+        
+        logger.info(f"📂 載入 DNS 完整場數據: {dns_file}")
+        logger.info(f"   變量順序: {variable_order}")
+        if time_range:
+            logger.info(f"   時間範圍: [{time_range[0]:.2f}, {time_range[1]:.2f}]")
+        
+        # ========== 載入 DNS 數據 ==========
+        means = {}
+        stds = {}
+        
+        with h5py.File(dns_path, 'r') as f:
+            # 檢查時間範圍
+            if 'time' in f:
+                time = f['time'][:]
+                if time_range is not None:
+                    t_start, t_end = time_range
+                    time_mask = (time >= t_start) & (time <= t_end)
+                    time_indices = np.where(time_mask)[0]
+                    logger.info(f"   選定時間步: {len(time_indices)}/{len(time)} ({len(time_indices)/len(time)*100:.1f}%)")
+                else:
+                    time_indices = np.arange(len(time))
+                    logger.info(f"   使用全部時間步: {len(time_indices)}")
+            else:
+                # 沒有時間維度，假設是單一快照
+                time_indices = None
+                logger.warning("⚠️  DNS 文件無 'time' 鍵，假設為單一快照")
+            
+            # 逐變量計算統計量
+            for var_name in variable_order:
+                if var_name not in f:
+                    logger.warning(f"⚠️  DNS 文件缺少變量 '{var_name}'，跳過")
+                    continue
+                
+                data = f[var_name]
+                
+                # 根據是否有時間範圍選擇數據
+                if time_indices is not None:
+                    # 有時間維度：data shape = (T, Ny, Nx)
+                    values = data[time_indices, :, :]
+                else:
+                    # 無時間維度：data shape = (Ny, Nx)
+                    values = data[:]
+                
+                # 計算統計量（全時空域）
+                mean = float(np.mean(values))
+                std = float(np.std(values))
+                
+                # 防禦性檢查
+                if not np.isfinite(mean) or not np.isfinite(std):
+                    logger.error(
+                        f"❌ {var_name} 統計量包含 NaN/Inf！\n"
+                        f"   mean={mean}, std={std}\n"
+                        f"   這可能表示 DNS 數據損壞或包含異常值。"
+                    )
+                    raise ValueError(f"{var_name} 統計量異常: mean={mean}, std={std}")
+                
+                if abs(std) < 1e-10:
+                    logger.warning(
+                        f"⚠️  {var_name} 標準差接近零 (std={std:.2e})，設為 1.0\n"
+                        f"   這可能表示場是常數或數值精度不足。"
+                    )
+                    std = 1.0
+                
+                means[var_name] = mean
+                stds[var_name] = std
+                
+                # 記錄統計量
+                logger.info(
+                    f"   {var_name}: mean={mean:+.6f}, std={std:.6f}, "
+                    f"range=[{values.min():.6f}, {values.max():.6f}]"
+                )
+        
+        if not means:
+            raise ValueError(
+                f"無法從 DNS 文件計算統計量！\n"
+                f"DNS 文件: {dns_file}\n"
+                f"要求變量: {variable_order}\n"
+                f"可用變量: {list(f.keys())}\n"
+            )
+        
+        logger.info(f"✅ 從 DNS 完整場計算標準化係數: {list(means.keys())}")
         return means, stds
     
     def normalize(
