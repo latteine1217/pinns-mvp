@@ -2004,50 +2004,40 @@ def main():
             if config.get('data', {}).get('normalize', False):
                 norm_cfg = config.get('normalization', {})
                 if norm_cfg.get('type') == 'training_data_norm' and not norm_cfg.get('params'):
+                    # 🔧 FIX: 從配置讀取正確的 variable_order（支援 2D/3D）
+                    variable_order = norm_cfg.get('variable_order', ['u', 'v', 'w', 'p'])
+                    logger.info(f"📐 Variable order from config: {variable_order}")
+                    
                     # 檢查 sensor data 是否包含實際值
                     has_sensor_values = all(
                         f'{var}_sensors' in training_data_sample and 
                         training_data_sample[f'{var}_sensors'].numel() > 0
-                        for var in ['u', 'v', 'w', 'p']
+                        for var in variable_order  # 🔧 FIX: 使用配置的 variable_order
                     )
                     
                     if has_sensor_values:
                         # ✅ 使用 K=100 sensor data（工程場景 - 稀疏測量）
                         logger.info(f"🔧 Computing normalization from K=100 sensor data")
+                        # 🔧 FIX: 動態構建 dict，只包含 variable_order 中的變量
                         normalization_data = {
-                            'u': training_data_sample['u_sensors'].cpu().numpy(),
-                            'v': training_data_sample['v_sensors'].cpu().numpy(),
-                            'w': training_data_sample['w_sensors'].cpu().numpy(),
-                            'p': training_data_sample['p_sensors'].cpu().numpy()
+                            var: training_data_sample[f'{var}_sensors'].cpu().numpy()
+                            for var in variable_order
                         }
                     else:
-                        # ⚠️ Fallback: Sensor 文件沒有值，使用包含值的版本
-                        logger.warning("⚠️  Sensor data missing u/v/w/p values!")
-                        logger.warning("   Attempting to load sensor file with extracted DNS values...")
-                        
-                        sensor_with_values = "data/jhtdb/channel_flow_re1000/sensors_K100_qr_pivot_3d_v5_WITH_VALUES.npz"
-                        if Path(sensor_with_values).exists():
-                            logger.info(f"✅ Found sensor file with values: {sensor_with_values}")
-                            sensor_data = np.load(sensor_with_values)
-                            normalization_data = {
-                                'u': sensor_data['u_sensors'],
-                                'v': sensor_data['v_sensors'],
-                                'w': sensor_data['w_sensors'],
-                                'p': sensor_data['p_sensors']
-                            }
-                        else:
-                            raise FileNotFoundError(
-                                f"\n❌ CRITICAL: Cannot compute normalization!\n"
-                                f"\n"
-                                f"Sensor data has no u/v/w/p values, and fallback file not found:\n"
-                                f"  {sensor_with_values}\n"
-                                f"\n"
-                                f"Generate it with:\n"
-                                f"  python scripts/generate/sensors/extract_sensor_values_from_dns.py \\\n"
-                                f"    --sensor-file <your_sensor_coords.npz> \\\n"
-                                f"    --dns-cutout data/jhtdb/channel_flow_re1000/cutout_128x64x128.npz \\\n"
-                                f"    --output {sensor_with_values}\n"
-                            )
+                        # ❌ 失敗：training_data 中缺少必要的 sensor 數據
+                        missing_vars = [var for var in variable_order 
+                                       if f'{var}_sensors' not in training_data_sample 
+                                       or training_data_sample[f'{var}_sensors'].numel() == 0]
+                        raise ValueError(
+                            f"\n❌ CRITICAL: Cannot compute normalization!\n"
+                            f"\n"
+                            f"Required variables: {variable_order}\n"
+                            f"Missing in training_data: {missing_vars}\n"
+                            f"\n"
+                            f"Please ensure your data preparation function creates all required '{var}_sensors' fields.\n"
+                            f"For 2D problems, set normalization.variable_order: ['u', 'v', 'p']\n"
+                            f"For 3D problems, set normalization.variable_order: ['u', 'v', 'w', 'p']\n"
+                        )
                     
                     # 驗證數據質量
                     validate_sensor_data_quality(normalization_data, logger)
@@ -2059,11 +2049,14 @@ def main():
                             logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
                     
                     from pinnx.utils.normalization import DataNormalizer
+                    # 🔧 FIX: 傳遞 variable_order 參數以確保正確的變量順序
                     trainer.data_normalizer = DataNormalizer.from_data(
                         normalization_data,
-                        norm_type='training_data_norm'
+                        norm_type='training_data_norm',
+                        variable_order=variable_order  # 🔧 FIX: 明確指定 variable_order
                     )
                     logger.info(f"✅ Normalization computed from K=100 sensor data (Ensemble member {i+1})")
+                    logger.info(f"   Variable order: {variable_order}")
                     logger.info(f"   Normalizer: {trainer.data_normalizer}")
             
             # 載入 checkpoint（若指定）
@@ -2094,50 +2087,40 @@ def main():
         if config.get('data', {}).get('normalize', False):
             norm_cfg = config.get('normalization', {})
             if norm_cfg.get('type') == 'training_data_norm' and not norm_cfg.get('params'):
+                # 🔧 FIX: 從配置讀取正確的 variable_order（支援 2D/3D）
+                variable_order = norm_cfg.get('variable_order', ['u', 'v', 'w', 'p'])
+                logger.info(f"📐 Variable order from config: {variable_order}")
+                
                 # 檢查 sensor data 是否包含實際值
                 has_sensor_values = all(
                     f'{var}_sensors' in training_data_sample and 
                     training_data_sample[f'{var}_sensors'].numel() > 0
-                    for var in ['u', 'v', 'w', 'p']
+                    for var in variable_order  # 🔧 FIX: 使用配置的 variable_order
                 )
                 
                 if has_sensor_values:
                     # ✅ 使用 K=100 sensor data（工程場景 - 稀疏測量）
                     logger.info(f"🔧 Computing normalization from K=100 sensor data")
+                    # 🔧 FIX: 動態構建 dict，只包含 variable_order 中的變量
                     normalization_data = {
-                        'u': training_data_sample['u_sensors'].cpu().numpy(),
-                        'v': training_data_sample['v_sensors'].cpu().numpy(),
-                        'w': training_data_sample['w_sensors'].cpu().numpy(),
-                        'p': training_data_sample['p_sensors'].cpu().numpy()
+                        var: training_data_sample[f'{var}_sensors'].cpu().numpy()
+                        for var in variable_order
                     }
                 else:
-                    # ⚠️ Fallback: Sensor 文件沒有值，使用包含值的版本
-                    logger.warning("⚠️  Sensor data missing u/v/w/p values!")
-                    logger.warning("   Attempting to load sensor file with extracted DNS values...")
-                    
-                    sensor_with_values = "data/jhtdb/channel_flow_re1000/sensors_K100_qr_pivot_3d_v5_WITH_VALUES.npz"
-                    if Path(sensor_with_values).exists():
-                        logger.info(f"✅ Found sensor file with values: {sensor_with_values}")
-                        sensor_data = np.load(sensor_with_values)
-                        normalization_data = {
-                            'u': sensor_data['u_sensors'],
-                            'v': sensor_data['v_sensors'],
-                            'w': sensor_data['w_sensors'],
-                            'p': sensor_data['p_sensors']
-                        }
-                    else:
-                        raise FileNotFoundError(
-                            f"\n❌ CRITICAL: Cannot compute normalization!\n"
-                            f"\n"
-                            f"Sensor data has no u/v/w/p values, and fallback file not found:\n"
-                            f"  {sensor_with_values}\n"
-                            f"\n"
-                            f"Generate it with:\n"
-                            f"  python scripts/generate/sensors/extract_sensor_values_from_dns.py \\\n"
-                            f"    --sensor-file <your_sensor_coords.npz> \\\n"
-                            f"    --dns-cutout data/jhtdb/channel_flow_re1000/cutout_128x64x128.npz \\\n"
-                            f"    --output {sensor_with_values}\n"
-                        )
+                    # ❌ 失敗：training_data 中缺少必要的 sensor 數據
+                    missing_vars = [var for var in variable_order 
+                                   if f'{var}_sensors' not in training_data_sample 
+                                   or training_data_sample[f'{var}_sensors'].numel() == 0]
+                    raise ValueError(
+                        f"\n❌ CRITICAL: Cannot compute normalization!\n"
+                        f"\n"
+                        f"Required variables: {variable_order}\n"
+                        f"Missing in training_data: {missing_vars}\n"
+                        f"\n"
+                        f"Please ensure your data preparation function creates all required '{var}_sensors' fields.\n"
+                        f"For 2D problems, set normalization.variable_order: ['u', 'v', 'p']\n"
+                        f"For 3D problems, set normalization.variable_order: ['u', 'v', 'w', 'p']\n"
+                    )
                 
                 # 驗證數據質量
                 validate_sensor_data_quality(normalization_data, logger)
@@ -2149,11 +2132,14 @@ def main():
                         logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
                 
                 from pinnx.utils.normalization import DataNormalizer
+                # 🔧 FIX: 傳遞 variable_order 參數以確保正確的變量順序
                 trainer.data_normalizer = DataNormalizer.from_data(
                     normalization_data,
-                    norm_type='training_data_norm'
+                    norm_type='training_data_norm',
+                    variable_order=variable_order  # 🔧 FIX: 明確指定 variable_order
                 )
                 logger.info(f"✅ Normalization computed from K=100 sensor data")
+                logger.info(f"   Variable order: {variable_order}")
                 logger.info(f"   Normalizer: {trainer.data_normalizer}")
         
         # 載入 checkpoint（若指定）
