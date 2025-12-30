@@ -68,7 +68,6 @@ dependencies:
       
       # 實驗管理與日誌
       - wandb>=0.16        # Weights & Biases 實驗追蹤
-      - tensorboard>=2.13  # TensorBoard 可視化
       
       # 張量操作
       - einops>=0.7        # 優雅的張量操作

@@ -311,8 +311,8 @@ logging:
   level: "info"
   log_freq: 20
   save_predictions: true
-  tensorboard: true
-  wandb: false
+  wandb: true
+  log_nonlinearities: false
   
   save_loss_history: true
   save_weight_evolution: true  # 追蹤權重演化

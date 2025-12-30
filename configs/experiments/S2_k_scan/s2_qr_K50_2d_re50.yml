@@ -175,11 +175,11 @@ physics_validation:
     momentum_conservation: 0.01
     periodicity_error: 0.0001
 logging:
+  log_nonlinearities: false
   level: info
   log_freq: 10
   save_predictions: true
-  tensorboard: true
-  wandb: false
+  wandb: true
 output:
   checkpoint_dir: ./checkpoints/experiments/S2_K50
   results_dir: ./results/experiments/S2_K50

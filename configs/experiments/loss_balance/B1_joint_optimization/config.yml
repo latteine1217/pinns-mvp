@@ -226,7 +226,8 @@ curriculum:
 # Logging & Output
 # ====================================================================
 logging:
-  tensorboard: true
+  log_nonlinearities: false
+  wandb: true
   log_level: INFO
 
 output:

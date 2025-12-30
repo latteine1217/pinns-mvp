@@ -112,13 +112,19 @@ model:
   
   # 激活函數
   activation: "swish"  # PirateNet: Swish (= SiLU)
+
+  # PirateNet block (u/v gating + alpha)
+  block_type: "piratenet"
+  res_block_alpha_init: 0.0
+  use_input_projection: true
   
   # Random Fourier Features
   use_fourier: true
   fourier_m: 64
   fourier_sigma: 2.0  # PirateNet: N(0, 2)
   fourier_multiscale: false
-  trainable_fourier: false
+  trainable_fourier: true
+  fourier_use_2pi: false
   
   # Random Weight Factorization
   use_rwf: true
@@ -216,8 +222,8 @@ output:
 logging:
   level: "info"
   log_freq: 10
-  tensorboard: true
-  wandb: false
+  wandb: true
+  log_nonlinearities: true
   
   # 監控指標
   metrics:

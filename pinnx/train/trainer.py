@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.amp.grad_scaler import GradScaler  # 明確導入 GradScaler
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
 from pinnx.losses.priors import PriorLossManager
@@ -146,16 +146,38 @@ class Trainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_interval = self.train_cfg.get('checkpoint_interval', 100)
         
-        # TensorBoard 配置
-        self.use_tensorboard = self.log_cfg.get('tensorboard', False)
-        self.writer: Optional[SummaryWriter] = None
-        if self.use_tensorboard:
-            # TensorBoard 日誌目錄：runs/<experiment_name>
+        # WandB 配置
+        self.use_wandb = self.log_cfg.get('wandb', False)
+        self.wandb_run = None
+        if self.use_wandb:
+            # 讀取 WandB 配置
             exp_name = config.get('experiment', {}).get('name', 'default_experiment')
-            tensorboard_dir = Path(config.get('output', {}).get('tensorboard_dir', f'runs/{exp_name}'))
-            tensorboard_dir.mkdir(parents=True, exist_ok=True)
-            self.writer = SummaryWriter(log_dir=str(tensorboard_dir))
-            logging.info(f"✅ TensorBoard 已啟用，日誌目錄: {tensorboard_dir}")
+            wandb_config_path = Path('.wandb_config')
+            
+            # 載入 API key
+            wandb_api_key = None
+            wandb_project = 'pinns-turbulence-reconstruction'
+            if wandb_config_path.exists():
+                with open(wandb_config_path, 'r') as f:
+                    for line in f:
+                        if line.startswith('WANDB_API_KEY='):
+                            wandb_api_key = line.split('=')[1].strip()
+                        elif line.startswith('WANDB_PROJECT='):
+                            project_value = line.split('=')[1].strip()
+                            if project_value:
+                                wandb_project = project_value
+            
+            # 初始化 WandB
+            if wandb_api_key:
+                os.environ['WANDB_API_KEY'] = wandb_api_key
+            
+            self.wandb_run = wandb.init(
+                project=wandb_project,
+                name=exp_name,
+                config=config,
+                reinit=True
+            )
+            logging.info(f"✅ WandB 已啟用，專案: {wandb_project}, 運行: {exp_name}")
         
         # 訓練資料（待外部設置）
         self.training_data: Dict[str, torch.Tensor] = {}
@@ -580,14 +602,28 @@ class Trainer:
     
     def _setup_adaptive_sampling(self):
         """配置自適應採樣"""
-        adaptive_cfg = self.train_cfg.get('adaptive_sampling', {})
-        self.adaptive_sampling_enabled = adaptive_cfg.get('enabled', False)
+        # 1. 檢查簡單開關（training.sampling.adaptive_sampling）
+        sampling_cfg = self.train_cfg.get('sampling', {})
+        simple_flag = sampling_cfg.get('adaptive_sampling', False)
+        
+        # 2. 檢查詳細配置（adaptive_collocation.enabled）
+        adaptive_cfg = self.config.get('adaptive_collocation', {})
+        detailed_flag = adaptive_cfg.get('enabled', False)
+        
+        # 3. 統一決策（任一為 true 則啟用）
+        self.adaptive_sampling_enabled = simple_flag or detailed_flag
         
         if self.adaptive_sampling_enabled:
-            self.loop_manager = TrainingLoopManager(self.config)
+            from pinnx.train.adaptive_collocation import AdaptiveCollocationSampler
+            self.adaptive_sampler = AdaptiveCollocationSampler(adaptive_cfg)
+            trigger_method = adaptive_cfg.get('trigger', {}).get('method', 'epoch_interval')
+            epoch_interval = adaptive_cfg.get('trigger', {}).get('epoch_interval', 1000)
             logging.info("✅ 自適應採樣啟用")
+            logging.info(f"   觸發方法: {trigger_method}")
+            if trigger_method in ['epoch_interval', 'hybrid']:
+                logging.info(f"   觸發間隔: {epoch_interval} epochs")
         else:
-            self.loop_manager = None
+            self.adaptive_sampler = None
     
     def _setup_fourier_annealing(self):
         """配置 Fourier 特徵退火調度器"""
@@ -670,6 +706,7 @@ class Trainer:
         # 創建 PriorLossManager（Simplified 版本只需 consistency_weight）
         loss_config = {
             'low_fidelity': {
+                'consistency_weight': consistency_weight,  # ← 修復：傳入 consistency_weight
                 'variable_weights': variable_weights,
                 'distance_metric': distance_metric
             }
@@ -1114,7 +1151,7 @@ class Trainer:
         
         # === 初始化訓練配置 ===
         max_epochs, log_freq, checkpoint_freq, validation_freq = self._setup_training_config()
-        loop_helper = TrainingLoopManager(self.config, self.writer)
+        loop_helper = TrainingLoopManager(self.config, self.wandb_run)
         start_time = time.time()
         start_epoch = self.epoch
         
@@ -1139,7 +1176,7 @@ class Trainer:
             
             # 1. 自適應更新（adaptive sampling + fourier annealing）
             self.training_data = loop_helper.coordinate_adaptive_updates(
-                epoch, self.loop_manager, self.fourier_annealing,
+                epoch, self.adaptive_sampler, self.fourier_annealing,
                 self.model, self.physics, self.training_data, self.config,
                 self.device, loop_helper.get_history()
             )
@@ -1154,11 +1191,13 @@ class Trainer:
                     loss_dict['val_loss'] = val_metrics['relative_l2']
                     loss_dict['val_mse'] = val_metrics['mse']
             
-            # 4. 記錄歷史與 TensorBoard 日誌
+            # 4. 記錄歷史與 WandB 日誌
             loop_helper.update_history(loss_dict, epoch)
             if epoch % log_freq == 0:
-                loop_helper.log_losses_to_tensorboard(loss_dict, epoch)
+                loop_helper.log_losses_to_wandb(loss_dict, epoch)
                 loop_helper.log_hyperparameters(self.get_current_lr(), epoch)
+                if self.log_cfg.get('log_nonlinearities', False):
+                    loop_helper.log_nonlinearities(self.model, epoch)
                 self.log_epoch(epoch, loss_dict)
             
             # 5. 記錄梯度與權重統計（降低頻率）
@@ -1344,14 +1383,14 @@ class Trainer:
         final_checkpoint = self.save_checkpoint(final_epoch + 1, loss_dict, is_best=False)
         logging.info(f"💾 最終模型已保存")
         
-        # 關閉 TensorBoard
+        # 關閉 WandB
         hparams = self._build_hparams_dict()
         metrics = {
             'hparam/final_loss': final_loss,
             'hparam/best_loss': self.best_val_loss if self.early_stopping_enabled else final_loss,
             'hparam/epochs': final_epoch + 1,
         }
-        loop_helper.finalize_tensorboard(metrics, hparams)
+        loop_helper.finalize_wandb(metrics, hparams)
         
         return {
             'final_loss': final_loss,

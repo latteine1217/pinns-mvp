@@ -39,7 +39,6 @@ toml
 matplotlib>=3.7
 seaborn>=0.12
 plotly>=5.13
-tensorboard>=2.13
 wandb>=0.16
 rich
 tqdm

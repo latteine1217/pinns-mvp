@@ -235,8 +235,8 @@ losses:
   momentum_x_weight: 1.0              # x 方向動量方程
   momentum_y_weight: 1.0              # y 方向動量方程
   momentum_z_weight: 1.0              # z 方向動量方程
-  div_weight: 1.0                     # 🆕 散度損失權重（獨立控制不可壓縮條件 ∇·u=0）
-                                      # 若未設定，預設回退到 continuity_weight
+  continuity_weight: 1.0              # 散度損失權重（不可壓縮條件 ∇·u=0）
+  # div_weight: 1.0                   # ⚠️ 已廢棄：請使用 continuity_weight
 
   # 物理約束權重
   wall_constraint_weight: 10.0        # 壁面約束增強（⚠️ 重要，防止壁面剪應力歸零）
@@ -273,13 +273,12 @@ losses:
 
   causal_weighting: false             # 因果權重（Causal Training）
                                       # 適用於：瞬態 (Transient) 問題，強制時間因果性
-                                      # 機制：w(t) = exp(-ε * ∫L(τ)dτ)，前期損失高時抑制後期權重
-  causal_eps: 1.0                     # 因果強度 ε (epsilon)
+  # causal_eps: 1.0                   # 因果強度 ε (epsilon, jaxpi 風格)
                                       # 典型範圍：1.0-100.0
                                       #   - 1.0：弱因果（允許後期有些許反饋）
                                       #   - 10.0：強因果（嚴格遵守時間順序）
                                       #   - 100.0：極強因果（逐時間步推進）
-  causal_n_bins: 10                   # 時間分窗數（用於近似積分）
+  # causal_n_bins: 10                 # 時間分塊數（jaxpi: chunk-based）
 
 # ====================================================================
 # 9. 訓練設定
@@ -467,8 +466,8 @@ logging:
   level: "info"                       # 日誌級別：debug / info / warning / error
   log_freq: 50                        # 日誌輸出頻率（每 N epochs）
   save_predictions: true              # 是否保存預測結果
-  tensorboard: true                   # 是否使用 TensorBoard
-  wandb: false                        # 是否使用 Weights & Biases
+  wandb: true                   # 是否使用 TensorBoard
+  log_nonlinearities: false           # 記錄 alpha 非線性係數 (PirateNet/ResNet)
 
 output:
   checkpoint_dir: "./checkpoints/your_experiment_name"  # ⚠️ 檢查點保存目錄

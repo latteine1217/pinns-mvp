@@ -29,7 +29,6 @@ context/
 tasks/
 archive/
 legacy/
-thesis/
 scripts/archive_*/
 scripts/archived_*/
 scripts/archive*/
@@ -71,6 +70,10 @@ deprecated/
 
 # 環境變數（包含敏感憑證）
 .env
+.wandb_config
+
+# WandB logs
+wandb/
 
 # Cache files
 .cache/
@@ -82,9 +85,10 @@ __pycache__/
 log/
 *.log
 
-# TensorBoard logs
+# TensorBoard & WandB logs
 runs/
 tensorboard_logs/
+wandb/
 
 # Process IDs
 *.pid

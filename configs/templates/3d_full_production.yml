@@ -408,8 +408,8 @@ logging:
   level: "info"
   log_freq: 50
   save_predictions: true
-  tensorboard: true
-  wandb: true  # ⚠️ 建議啟用 W&B（長期訓練追蹤）
+  wandb: true
+  log_nonlinearities: false
   
   stage_diagnostics: true
   save_loss_history: true

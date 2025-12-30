@@ -313,8 +313,8 @@ logging:
   level: "info"
   log_freq: 10
   save_predictions: true
-  tensorboard: true
-  wandb: false
+  wandb: true
+  log_nonlinearities: false
 
 output:
   checkpoint_dir: "./checkpoints/2d_quick_baseline_test"

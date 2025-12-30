@@ -1,0 +1,70 @@
+# WandB 快速測試配置
+# 用於驗證 WandB 集成是否正常工作
+
+experiment:
+  name: "wandb_quick_test"
+  version: "v1.0"
+  seed: 42
+  device: "auto"
+  precision: "float32"
+
+# 數據配置（最小化）
+data:
+  source: "synthetic"  # 使用合成數據快速測試
+  
+normalization:
+  type: "none"
+
+# 感測器配置
+sensors:
+  K: 10
+  selection_method: "uniform"
+
+# 模型架構（最小化）
+model:
+  type: "mlp"
+  in_dim: 2
+  out_dim: 3
+  width: 32
+  depth: 2
+  activation: "tanh"
+
+# 物理配置
+physics:
+  type: "navier_stokes"
+  nu: 0.01
+  domain:
+    x_range: [0.0, 1.0]
+    y_range: [0.0, 1.0]
+
+# 損失權重
+losses:
+  data_weight: 1.0
+  boundary_weight: 1.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+
+# 訓練配置（最短）
+training:
+  optimizer:
+    type: "adam"
+    lr: 0.001
+  epochs: 5  # 只訓練 5 個 epoch
+  batch_size: 64
+  validation_freq: 2
+  log_interval: 1
+  sampling:
+    pde_points: 100
+    boundary_points: 20
+
+# 日誌配置 - 啟用 WandB
+logging:
+  level: "info"
+  wandb: true  # ✅ 啟用 WandB
+  log_freq: 1
+  save_predictions: false
+
+output:
+  checkpoint_dir: "./test_checkpoints"
+  results_dir: "./test_results"

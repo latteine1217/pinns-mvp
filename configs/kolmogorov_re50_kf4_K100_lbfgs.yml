@@ -155,8 +155,8 @@ losses:
   prior_weight: 0.0        # ⭐ 完全移除 prior
   periodicity_weight: 10.0
 
-  l2_regularization: 1.0e-6
-  gradient_penalty: 1.0e-5
+#  l2_regularization:  # [未實現功能] 1.0e-6
+#  gradient_penalty:  # [未實現功能] 1.0e-5
 
   normalize_losses: false
   adaptive_weighting: false
@@ -224,10 +224,11 @@ evaluation:
 # Logging
 # ====================================================================
 logging:
+  log_nonlinearities: false
   level: info
   log_freq: 10
   save_predictions: true
-  tensorboard: true
+  wandb: true
   save_stage_checkpoints: false
 
 output:

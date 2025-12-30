@@ -434,9 +434,9 @@ checkpointing:
   save_interval: 500                  # 保存間隔（epochs）
 
 logging:
+  log_nonlinearities: false
   log_dir: "./log"                    # 日誌目錄
-  tensorboard: true                   # 是否使用 TensorBoard
-  wandb: false                        # 是否使用 Weights & Biases
+  wandb: true                         # 是否使用 Weights & Biases
   log_level: "INFO"                   # 日誌級別：DEBUG / INFO / WARNING / ERROR
 
 # ====================================================================

@@ -2,7 +2,7 @@
 訓練循環輔助管理器
 
 負責訓練循環中的輔助功能：
-- TensorBoard 日誌記錄
+- WandB 日誌記錄
 - 訓練歷史管理  
 - 自適應更新協調（adaptive sampling, fourier annealing）
 
@@ -14,7 +14,7 @@ import logging
 from typing import Dict, Optional, Any
 import torch
 import torch.nn as nn
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 
 class TrainingLoopManager:
@@ -22,7 +22,7 @@ class TrainingLoopManager:
     訓練循環輔助管理器
     
     職責：
-    1. TensorBoard 日誌記錄（分類管理所有 scalar/histogram）
+    1. WandB 日誌記錄（分類管理所有 scalar/histogram）
     2. 訓練歷史記錄與查詢
     3. 自適應更新協調（采樣+退火）
     
@@ -33,14 +33,14 @@ class TrainingLoopManager:
     - 早停決策（check_early_stopping）
     """
     
-    def __init__(self, config: Dict, writer: Optional[SummaryWriter]):
+    def __init__(self, config: Dict, wandb_run: Optional[Any]):
         """
         Args:
             config: 訓練配置字典
-            writer: TensorBoard SummaryWriter（若為 None 則不記錄）
+            wandb_run: WandB Run 實例（若為 None 則不記錄）
         """
         self.config = config
-        self.writer = writer
+        self.wandb_run = wandb_run
         
         # 訓練歷史記錄
         self.history = {
@@ -76,125 +76,131 @@ class TrainingLoopManager:
         return self.history
     
     # ========================================================================
-    # TensorBoard 日誌記錄（分類管理）
+    # WandB 日誌記錄（分類管理）
     # ========================================================================
     
-    def log_losses_to_tensorboard(self, loss_dict: Dict, epoch: int):
+    def log_losses_to_wandb(self, loss_dict: Dict, epoch: int):
         """
-        記錄所有損失到 TensorBoard
+        記錄所有損失到 WandB
         
         Args:
             loss_dict: 損失字典
             epoch: 當前 epoch
         """
-        if self.writer is None:
+        if self.wandb_run is None:
             return
         
+        # 準備日誌字典
+        log_dict = {'epoch': epoch}
+        
         # 1. 總損失與主要分量
-        self._log_main_losses(loss_dict, epoch)
+        self._add_main_losses(log_dict, loss_dict)
         
         # 2. PDE 子項（動量方程與連續性方程）
-        self._log_pde_losses(loss_dict, epoch)
+        self._add_pde_losses(log_dict, loss_dict)
         
         # 3. 數據擬合損失（各變量）
-        self._log_data_losses(loss_dict, epoch)
+        self._add_data_losses(log_dict, loss_dict)
         
         # 4. Weighted Loss（分析權重平衡）
-        self._log_weighted_losses(loss_dict, epoch)
+        self._add_weighted_losses(log_dict, loss_dict)
         
         # 5. RANS Prior Loss（低保真先驗）
-        self._log_prior_losses(loss_dict, epoch)
+        self._add_prior_losses(log_dict, loss_dict)
         
         # 6. 邊界條件損失
-        self._log_bc_losses(loss_dict, epoch)
+        self._add_bc_losses(log_dict, loss_dict)
         
         # 7. 正則化項
-        self._log_regularization_losses(loss_dict, epoch)
+        self._add_regularization_losses(log_dict, loss_dict)
         
         # 8. 驗證指標
-        self._log_validation_metrics(loss_dict, epoch)
+        self._add_validation_metrics(log_dict, loss_dict)
+        
+        # 一次性記錄所有指標
+        wandb.log(log_dict)
     
-    def _log_main_losses(self, loss_dict: Dict, epoch: int):
+    def _add_main_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄主要損失（total, data, pde, boundary）"""
-        self.writer.add_scalar('Loss/total', loss_dict.get('total_loss', 0.0), epoch)
-        self.writer.add_scalar('Loss/data', loss_dict.get('data_loss', 0.0), epoch)
-        self.writer.add_scalar('Loss/pde', loss_dict.get('pde_loss', 0.0), epoch)
-        self.writer.add_scalar('Loss/boundary', loss_dict.get('bc_loss', 0.0), epoch)
+        log_dict['Loss/total'] = loss_dict.get('total_loss', 0.0)
+        log_dict['Loss/data'] = loss_dict.get('data_loss', 0.0)
+        log_dict['Loss/pde'] = loss_dict.get('pde_loss', 0.0)
+        log_dict['Loss/boundary'] = loss_dict.get('bc_loss', 0.0)
     
-    def _log_pde_losses(self, loss_dict: Dict, epoch: int):
+    def _add_pde_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄 PDE 子項（momentum, continuity）"""
         if 'momentum_x_loss' in loss_dict:
-            self.writer.add_scalar('Loss/PDE/momentum_x', loss_dict['momentum_x_loss'], epoch)
+            log_dict['Loss/PDE/momentum_x'] = loss_dict['momentum_x_loss']
         if 'momentum_y_loss' in loss_dict:
-            self.writer.add_scalar('Loss/PDE/momentum_y', loss_dict['momentum_y_loss'], epoch)
+            log_dict['Loss/PDE/momentum_y'] = loss_dict['momentum_y_loss']
         if 'momentum_z_loss' in loss_dict:
-            self.writer.add_scalar('Loss/PDE/momentum_z', loss_dict['momentum_z_loss'], epoch)
+            log_dict['Loss/PDE/momentum_z'] = loss_dict['momentum_z_loss']
         if 'continuity_loss' in loss_dict:
-            self.writer.add_scalar('Loss/PDE/continuity', loss_dict['continuity_loss'], epoch)
+            log_dict['Loss/PDE/continuity'] = loss_dict['continuity_loss']
         if 'div_loss' in loss_dict:
-            self.writer.add_scalar('Loss/PDE/divergence', loss_dict['div_loss'], epoch)
+            log_dict['Loss/PDE/divergence'] = loss_dict['div_loss']
     
-    def _log_data_losses(self, loss_dict: Dict, epoch: int):
+    def _add_data_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄數據擬合損失（u, v, w, pressure）"""
         if 'u_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Data/u', loss_dict['u_loss'], epoch)
+            log_dict['Loss/Data/u'] = loss_dict['u_loss']
         if 'v_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Data/v', loss_dict['v_loss'], epoch)
+            log_dict['Loss/Data/v'] = loss_dict['v_loss']
         if 'w_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Data/w', loss_dict['w_loss'], epoch)
+            log_dict['Loss/Data/w'] = loss_dict['w_loss']
         if 'pressure_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Data/pressure', loss_dict['pressure_loss'], epoch)
+            log_dict['Loss/Data/pressure'] = loss_dict['pressure_loss']
     
-    def _log_weighted_losses(self, loss_dict: Dict, epoch: int):
+    def _add_weighted_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄加權後的損失（分析權重平衡）"""
         if 'weighted_data_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Weighted/data', loss_dict['weighted_data_loss'], epoch)
+            log_dict['Loss/Weighted/data'] = loss_dict['weighted_data_loss']
         if 'weighted_pde_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Weighted/pde', loss_dict['weighted_pde_loss'], epoch)
+            log_dict['Loss/Weighted/pde'] = loss_dict['weighted_pde_loss']
         if 'weighted_div_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Weighted/continuity', loss_dict['weighted_div_loss'], epoch)
+            log_dict['Loss/Weighted/continuity'] = loss_dict['weighted_div_loss']
         if 'weighted_bc_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Weighted/boundary', loss_dict['weighted_bc_loss'], epoch)
+            log_dict['Loss/Weighted/boundary'] = loss_dict['weighted_bc_loss']
     
-    def _log_prior_losses(self, loss_dict: Dict, epoch: int):
+    def _add_prior_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄 RANS prior 損失"""
         if 'prior_consistency_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Prior/total', loss_dict['prior_consistency_loss'], epoch)
+            log_dict['Loss/Prior/total'] = loss_dict['prior_consistency_loss']
         if 'prior_loss_u' in loss_dict:
-            self.writer.add_scalar('Loss/Prior/u', loss_dict['prior_loss_u'], epoch)
+            log_dict['Loss/Prior/u'] = loss_dict['prior_loss_u']
         if 'prior_loss_v' in loss_dict:
-            self.writer.add_scalar('Loss/Prior/v', loss_dict['prior_loss_v'], epoch)
+            log_dict['Loss/Prior/v'] = loss_dict['prior_loss_v']
         if 'prior_loss_p' in loss_dict:
-            self.writer.add_scalar('Loss/Prior/p', loss_dict['prior_loss_p'], epoch)
+            log_dict['Loss/Prior/p'] = loss_dict['prior_loss_p']
     
-    def _log_bc_losses(self, loss_dict: Dict, epoch: int):
+    def _add_bc_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄邊界條件損失"""
         if 'periodic_x_loss' in loss_dict:
-            self.writer.add_scalar('Loss/BC/periodic_x', loss_dict['periodic_x_loss'], epoch)
+            log_dict['Loss/BC/periodic_x'] = loss_dict['periodic_x_loss']
         if 'periodic_y_loss' in loss_dict:
-            self.writer.add_scalar('Loss/BC/periodic_y', loss_dict['periodic_y_loss'], epoch)
+            log_dict['Loss/BC/periodic_y'] = loss_dict['periodic_y_loss']
         if 'inlet_loss' in loss_dict:
-            self.writer.add_scalar('Loss/BC/inlet', loss_dict['inlet_loss'], epoch)
+            log_dict['Loss/BC/inlet'] = loss_dict['inlet_loss']
         if 'outlet_loss' in loss_dict:
-            self.writer.add_scalar('Loss/BC/outlet', loss_dict['outlet_loss'], epoch)
+            log_dict['Loss/BC/outlet'] = loss_dict['outlet_loss']
         if 'wall_loss' in loss_dict:
-            self.writer.add_scalar('Loss/BC/wall', loss_dict['wall_loss'], epoch)
+            log_dict['Loss/BC/wall'] = loss_dict['wall_loss']
     
-    def _log_regularization_losses(self, loss_dict: Dict, epoch: int):
+    def _add_regularization_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄正則化損失"""
         if 'regularization_loss' in loss_dict:
-            self.writer.add_scalar('Loss/Regularization/total', loss_dict['regularization_loss'], epoch)
+            log_dict['Loss/Regularization/total'] = loss_dict['regularization_loss']
         if 'l2_reg' in loss_dict:
-            self.writer.add_scalar('Loss/Regularization/l2', loss_dict['l2_reg'], epoch)
+            log_dict['Loss/Regularization/l2'] = loss_dict['l2_reg']
         if 'gradient_penalty' in loss_dict:
-            self.writer.add_scalar('Loss/Regularization/gradient', loss_dict['gradient_penalty'], epoch)
+            log_dict['Loss/Regularization/gradient'] = loss_dict['gradient_penalty']
     
-    def _log_validation_metrics(self, loss_dict: Dict, epoch: int):
+    def _add_validation_metrics(self, log_dict: Dict, loss_dict: Dict):
         """記錄驗證指標"""
         if 'val_loss' in loss_dict:
-            self.writer.add_scalar('Validation/relative_l2', loss_dict['val_loss'], epoch)
+            log_dict['Validation/relative_l2'] = loss_dict['val_loss']
         if 'val_mse' in loss_dict:
-            self.writer.add_scalar('Validation/mse', loss_dict['val_mse'], epoch)
+            log_dict['Validation/mse'] = loss_dict['val_mse']
     
     def log_hyperparameters(self, current_lr: float, epoch: int):
         """
@@ -204,8 +210,8 @@ class TrainingLoopManager:
             current_lr: 當前學習率
             epoch: 當前 epoch
         """
-        if self.writer is not None:
-            self.writer.add_scalar('Training/learning_rate', current_lr, epoch)
+        if self.wandb_run is not None:
+            wandb.log({'Training/learning_rate': current_lr, 'epoch': epoch})
     
     def log_gradients_and_weights(self, model: nn.Module, epoch: int):
         """
@@ -215,31 +221,65 @@ class TrainingLoopManager:
             model: 模型
             epoch: 當前 epoch
         """
-        if self.writer is None:
+        if self.wandb_run is None:
             return
         
+        log_dict = {'epoch': epoch}
         for name, param in model.named_parameters():
             if param.grad is not None:
                 grad_norm = param.grad.norm().item()
-                self.writer.add_scalar(f'Gradients/norm/{name}', grad_norm, epoch)
-                self.writer.add_histogram(f'Gradients/hist/{name}', param.grad, epoch)
-                self.writer.add_histogram(f'Weights/{name}', param, epoch)
-    
-    def finalize_tensorboard(self, final_metrics: Dict, hparams: Dict):
+                log_dict[f'Gradients/norm/{name}'] = grad_norm
+                # WandB 自動處理直方圖
+                log_dict[f'Gradients/hist/{name}'] = wandb.Histogram(param.grad.detach().cpu().numpy())
+                log_dict[f'Weights/{name}'] = wandb.Histogram(param.detach().cpu().numpy())
+        
+        wandb.log(log_dict)
+
+    def log_nonlinearities(self, model: nn.Module, epoch: int):
         """
-        記錄最終超參數並關閉 TensorBoard
+        記錄 PirateNet/ResNet 的 alpha 非線性係數
+
+        Args:
+            model: 模型
+            epoch: 當前 epoch
+        """
+        if self.wandb_run is None:
+            return
+
+        log_dict = {'epoch': epoch}
+        idx = 0
+        for name, module in model.named_modules():
+            alpha = getattr(module, "alpha", None)
+            if alpha is None:
+                continue
+            if not isinstance(alpha, torch.Tensor):
+                continue
+            log_dict[f'Nonlinearity/alpha_{idx}'] = alpha.item()
+            idx += 1
+        
+        if idx > 0:
+            wandb.log(log_dict)
+    
+    def finalize_wandb(self, final_metrics: Dict, hparams: Dict):
+        """
+        記錄最終超參數並完成 WandB 運行
         
         Args:
             final_metrics: 最終指標（hparam/final_loss, hparam/best_loss, etc.）
             hparams: 超參數字典（lr, optimizer, model_width, etc.）
         """
-        if self.writer is None:
+        if self.wandb_run is None:
             return
         
-        self.writer.add_hparams(hparams, final_metrics)
-        self.writer.flush()
-        self.writer.close()
-        logging.info("✅ TensorBoard 日誌已保存並關閉")
+        # 記錄最終指標
+        wandb.log(final_metrics)
+        
+        # 更新運行摘要
+        for key, value in final_metrics.items():
+            wandb.run.summary[key] = value
+        
+        # WandB 會在訓練結束時自動調用 finish()
+        logging.info("✅ WandB 日誌已保存")
     
     # ========================================================================
     # 自適應更新協調
@@ -248,7 +288,7 @@ class TrainingLoopManager:
     def coordinate_adaptive_updates(
         self,
         epoch: int,
-        loop_manager,  # Type: Optional[AdaptiveCollocation]
+        adaptive_sampler,  # Type: Optional[AdaptiveCollocationSampler]
         fourier_annealing,  # Type: Optional[FourierAnnealing]
         model: nn.Module,
         physics,
@@ -262,7 +302,7 @@ class TrainingLoopManager:
         
         Args:
             epoch: 當前 epoch
-            loop_manager: 自適應採樣管理器（可選）
+            adaptive_sampler: 自適應採樣器（可選，AdaptiveCollocationSampler 實例）
             fourier_annealing: Fourier 退火管理器（可選）
             model: 訓練模型
             physics: 物理方程
@@ -275,9 +315,9 @@ class TrainingLoopManager:
             更新後的 training_data
         """
         # 1. 自適應採樣
-        if loop_manager is not None:
+        if adaptive_sampler is not None:
             training_data = self._handle_adaptive_sampling(
-                loop_manager, training_data, epoch, model, physics, config, device, history
+                adaptive_sampler, training_data, epoch, model, physics, config, device, history
             )
         
         # 2. Fourier 退火
@@ -288,7 +328,7 @@ class TrainingLoopManager:
     
     def _handle_adaptive_sampling(
         self,
-        loop_manager,
+        adaptive_sampler,  # Type: AdaptiveCollocationSampler
         training_data: Dict,
         epoch: int,
         model: nn.Module,
@@ -301,7 +341,7 @@ class TrainingLoopManager:
         處理自適應採樣
         
         Args:
-            loop_manager: 自適應採樣管理器
+            adaptive_sampler: 自適應採樣器（AdaptiveCollocationSampler 實例）
             training_data: 訓練數據
             epoch: 當前 epoch
             model: 模型
@@ -313,37 +353,206 @@ class TrainingLoopManager:
         Returns:
             更新後的 training_data
         """
-        # 更新訓練批次
-        training_data = loop_manager.update_training_batch(training_data, epoch)
-        
         # 檢查是否需要重採樣
-        if epoch > 0 and loop_manager.should_resample_collocation_points(
-            epoch,
-            history['total_loss'][-1] if history['total_loss'] else float('inf'),
-            None  # residuals 參數設為 None
-        ):
-            try:
-                # 提取域邊界
-                domain_bounds = {}
-                domain_cfg = config.get('domain', {})
-                
-                if 'x_min' in domain_cfg and 'x_max' in domain_cfg:
-                    domain_bounds['x'] = (domain_cfg['x_min'], domain_cfg['x_max'])
-                if 'y_min' in domain_cfg and 'y_max' in domain_cfg:
-                    domain_bounds['y'] = (domain_cfg['y_min'], domain_cfg['y_max'])
-                if 'z_min' in domain_cfg and 'z_max' in domain_cfg:
-                    domain_bounds['z'] = (domain_cfg['z_min'], domain_cfg['z_max'])
-                if 't_min' in domain_cfg and 't_max' in domain_cfg:
-                    domain_bounds['t'] = (domain_cfg['t_min'], domain_cfg['t_max'])
-                
-                new_points, metrics = loop_manager.resample_collocation_points(
-                    model, physics, domain_bounds, epoch, str(device)
-                )
-                logging.info(f"🔄 重採樣 {len(new_points)} 個配點（epoch {epoch}）")
-                logging.debug(f"   指標: {metrics}")
-            except Exception as e:
-                logging.warning(f"⚠️ 重採樣失敗（epoch {epoch}）: {e}")
+        current_loss = history['total_loss'][-1] if history['total_loss'] else float('inf')
         
+        if adaptive_sampler.should_trigger(epoch, current_loss, residuals=None):
+            try:
+                # 1. 提取當前配點（支持多種數據格式）
+                current_points = self._extract_collocation_points(training_data)
+                if current_points is None:
+                    logging.warning("⚠️ 無法提取配點座標，跳過重採樣")
+                    return training_data
+                
+                # 2. 提取域邊界
+                domain_bounds = self._extract_domain_bounds(config)
+                if not domain_bounds:
+                    logging.warning("⚠️ 無法提取域邊界，跳過重採樣")
+                    return training_data
+                
+                # 3. 定義殘差計算函數
+                def residual_fn(points: torch.Tensor) -> torch.Tensor:
+                    """計算 PDE 殘差"""
+                    points_device = points.to(device).requires_grad_(True)
+                    outputs = model(points_device)
+                    
+                    # 根據 physics 模組計算殘差
+                    if hasattr(physics, 'compute_pde_residuals'):
+                        residuals = physics.compute_pde_residuals(points_device, outputs)
+                    elif hasattr(physics, 'pde_residuals'):
+                        residuals = physics.pde_residuals(points_device, outputs)
+                    else:
+                        # 回退：使用動量+連續性方程
+                        residuals = []
+                        if hasattr(physics, 'momentum_x_residual'):
+                            residuals.append(physics.momentum_x_residual(points_device, outputs))
+                        if hasattr(physics, 'momentum_y_residual'):
+                            residuals.append(physics.momentum_y_residual(points_device, outputs))
+                        if hasattr(physics, 'continuity_residual'):
+                            residuals.append(physics.continuity_residual(points_device, outputs))
+                        
+                        if residuals:
+                            residuals = torch.stack(residuals, dim=-1)
+                        else:
+                            raise AttributeError("Physics 模組缺少殘差計算方法")
+                    
+                    return residuals
+                
+                # 4. 執行重採樣
+                new_points, metrics = adaptive_sampler.resample_collocation_points(
+                    current_points=current_points,
+                    domain_bounds=domain_bounds,
+                    residual_fn=residual_fn,
+                    n_keep=None,  # 使用配置中的 keep_ratio
+                    device=str(device)
+                )
+                
+                # 5. 更新訓練數據（保持原格式）
+                training_data = self._update_collocation_points(training_data, new_points)
+                
+                logging.info(f"🔄 自適應重採樣完成 @ epoch {epoch}")
+                logging.info(f"   配點數: {current_points.shape[0]} → {new_points.shape[0]}")
+                logging.info(f"   保留率: {metrics.get('keep_ratio', 0.0):.2%}")
+                logging.info(f"   新增點: {metrics.get('n_replaced', 0)}")
+                
+            except Exception as e:
+                logging.error(f"❌ 自適應重採樣失敗 @ epoch {epoch}: {e}", exc_info=True)
+        
+        return training_data
+    
+    def _extract_domain_bounds(self, config: Dict) -> Dict[str, tuple]:
+        """
+        從配置中提取域邊界
+        
+        Args:
+            config: 配置字典
+            
+        Returns:
+            domain_bounds: {'x': (xmin, xmax), 'y': (ymin, ymax), ...}
+        """
+        domain_bounds = {}
+        
+        # 嘗試多種配置格式
+        domain_cfg = config.get('domain', config.get('physics', {}).get('domain', {}))
+        
+        # 格式 1: x_range, y_range
+        if 'x_range' in domain_cfg:
+            domain_bounds['x'] = tuple(domain_cfg['x_range'])
+        if 'y_range' in domain_cfg:
+            domain_bounds['y'] = tuple(domain_cfg['y_range'])
+        if 'z_range' in domain_cfg:
+            domain_bounds['z'] = tuple(domain_cfg['z_range'])
+        
+        # 格式 2: x_min/x_max
+        if 'x_min' in domain_cfg and 'x_max' in domain_cfg:
+            domain_bounds['x'] = (domain_cfg['x_min'], domain_cfg['x_max'])
+        if 'y_min' in domain_cfg and 'y_max' in domain_cfg:
+            domain_bounds['y'] = (domain_cfg['y_min'], domain_cfg['y_max'])
+        if 'z_min' in domain_cfg and 'z_max' in domain_cfg:
+            domain_bounds['z'] = (domain_cfg['z_min'], domain_cfg['z_max'])
+        
+        # 時間維度（從 data.kolmogorov_config）
+        time_cfg = config.get('data', {}).get('kolmogorov_config', {})
+        if 'time_range' in time_cfg:
+            domain_bounds['t'] = tuple(time_cfg['time_range'])
+        
+        return domain_bounds
+    
+    def _extract_collocation_points(self, training_data: Dict) -> Optional[torch.Tensor]:
+        """
+        從多種數據格式中提取配點座標
+        
+        支持格式:
+        1. coords_pde: [N, D] 完整座標（包括時間維度）
+        2. coords_pde_spatial: [N, D_spatial] 空間座標（可能需要加上時間）
+        3. x_pde, y_pde, (z_pde), (t_pde): 分開的座標維度
+        
+        Args:
+            training_data: 訓練數據字典
+            
+        Returns:
+            torch.Tensor [N, D] 或 None（無法提取時）
+        """
+        # 格式 1: 直接提供完整座標
+        if 'coords_pde' in training_data:
+            return training_data['coords_pde']
+        
+        # 格式 2: 預拼接的空間座標
+        if 'coords_pde_spatial' in training_data:
+            coords_spatial = training_data['coords_pde_spatial']
+            
+            # 檢查是否需要加上時間維度
+            if 't_pde' in training_data and training_data['t_pde'] is not None:
+                t_pde = training_data['t_pde']
+                if isinstance(t_pde, torch.Tensor) and t_pde.numel() > 0:
+                    return torch.cat([coords_spatial, t_pde], dim=1)
+            
+            return coords_spatial
+        
+        # 格式 3: 分開的座標維度
+        if 'x_pde' in training_data and 'y_pde' in training_data:
+            coords_list = [training_data['x_pde'], training_data['y_pde']]
+            
+            # 3D 問題
+            if 'z_pde' in training_data:
+                coords_list.append(training_data['z_pde'])
+            
+            # 時間維度
+            if 't_pde' in training_data and training_data['t_pde'] is not None:
+                t_pde = training_data['t_pde']
+                if isinstance(t_pde, torch.Tensor) and t_pde.numel() > 0:
+                    coords_list.append(t_pde)
+            
+            return torch.cat(coords_list, dim=1)
+        
+        # 無法提取
+        return None
+    
+    def _update_collocation_points(self, training_data: Dict, new_points: torch.Tensor) -> Dict:
+        """
+        更新訓練數據中的配點（保持原格式）
+        
+        Args:
+            training_data: 原訓練數據字典
+            new_points: 新配點 [N, D]
+        
+        Returns:
+            更新後的 training_data
+        """
+        # 格式 1: coords_pde
+        if 'coords_pde' in training_data:
+            training_data['coords_pde'] = new_points
+            return training_data
+        
+        # 格式 2: coords_pde_spatial + t_pde
+        if 'coords_pde_spatial' in training_data:
+            if 't_pde' in training_data and training_data['t_pde'] is not None:
+                # 分離空間和時間維度
+                D_spatial = training_data['coords_pde_spatial'].shape[1]
+                training_data['coords_pde_spatial'] = new_points[:, :D_spatial]
+                training_data['t_pde'] = new_points[:, D_spatial:]
+            else:
+                training_data['coords_pde_spatial'] = new_points
+            return training_data
+        
+        # 格式 3: x_pde, y_pde, (z_pde), (t_pde)
+        if 'x_pde' in training_data and 'y_pde' in training_data:
+            training_data['x_pde'] = new_points[:, 0:1]
+            training_data['y_pde'] = new_points[:, 1:2]
+            
+            col_idx = 2
+            if 'z_pde' in training_data:
+                training_data['z_pde'] = new_points[:, col_idx:col_idx+1]
+                col_idx += 1
+            
+            if 't_pde' in training_data and training_data['t_pde'] is not None:
+                training_data['t_pde'] = new_points[:, col_idx:]
+            
+            return training_data
+        
+        # 無法更新：創建新鍵
+        training_data['coords_pde'] = new_points
+        logging.warning("⚠️ 無法匹配原數據格式，創建新鍵 'coords_pde'")
         return training_data
     
     def _handle_fourier_annealing(

@@ -408,16 +408,13 @@ logging:
   print_freq: 10
   save_freq: 200
   save_stage_checkpoints: true  # 每階段結束時保存
+  log_nonlinearities: false
 
   wandb:
     enabled: false
     project: "pinns-mvp-curriculum"
     entity: "your-wandb-username"
     tags: ["curriculum", "reynolds_ramp", "channel_flow"]
-
-  tensorboard:
-    enabled: true
-    log_dir: "./runs/curriculum_reynolds_ramp_v1"
 
   curriculum:
     log_stage_transitions: true

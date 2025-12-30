@@ -1,24 +1,28 @@
 # ====================================================================
-# Quick Test: Verify L-BFGS Configuration
+# 實驗 B1.3: Continuity Weight = 20.0
 # ====================================================================
-# Purpose: 100 epochs quick test to verify config loading
+# 目的: 測試將 continuity_weight 從 2.0 提升至 20.0 對散度的影響
+# 基線: A3 (continuity_weight=2.0, total_loss=1.759, div=3.4e-4)
+# 假設: 極高的 continuity_weight 可達到最佳質量守恆（但可能損害其他項）
+# 預期: 散度 ↓↓↓ (target < 1e-5), momentum/data loss 可能 ↑↑
+# 時間: ~20 分鐘 (1000 epochs)
 # ====================================================================
 
 experiment:
-  name: quick_test_lbfgs
-  version: v1.0_test
+  name: loss_balance_B1_continuity_20.0
+  version: v1.0
   seed: 42
   device: auto
   precision: float32
-  description: "Quick test for L-BFGS configuration verification"
+  description: "B1.3: Test continuity_weight=20.0 (↑ 10× from A3's 2.0)"
 
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 2
+  num_workers: 4
 
 # ====================================================================
-# Data Configuration (Minimal)
+# Data Configuration (與 A3 完全相同)
 # ====================================================================
 data:
   source: kolmogorov_dns
@@ -47,16 +51,38 @@ data:
   cache_dir: ./data/kolmogorov_dns_cache
 
 # ====================================================================
-# Low-Fi Prior Configuration
+# Low-Fi Prior (與 A3 完全相同)
 # ====================================================================
 lowfi_prior:
-  enabled: false  # Disable for quick test
+  enabled: true
+  data_path: ./data/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5
+  data_type: leith
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      nu_t: nu_t
+    coord_mapping:
+      x: x
+      y: y
+  
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+  
+  consistency_weight: 5.0        # 與 A3 相同
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.0
 
 # ====================================================================
-# Normalization
+# Normalization (與 A3 完全相同)
 # ====================================================================
 normalization:
   type: training_data_norm
+  variable_order: ['u', 'v', 'p']
   params: {}
   noise_sigma: 0.0
   dropout_prob: 0.0
@@ -65,29 +91,29 @@ normalization:
     time_window: [15.0, 35.0]
 
 # ====================================================================
-# Sensors (Reduced for quick test)
+# Sensors (與 A3 完全相同)
 # ====================================================================
 sensors:
-  K: 50  # Reduced from 100
+  K: 100
   selection_method: precomputed
   sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
 
 # ====================================================================
-# Model Architecture (Smaller for quick test)
+# Model Architecture (與 A3 完全相同)
 # ====================================================================
 model:
   type: fourier_vs_mlp
   in_dim: 3
   out_dim: 3
-  width: 128  # Reduced from 256
-  depth: 4    # Reduced from 6
+  width: 256
+  depth: 6
   activation: swish
   block_type: resnet
 
   fourier_features:
     enabled: true
     type: standard
-    fourier_m: 8  # Reduced from 16
+    fourier_m: 16
     fourier_sigma: 4.0
     include_input: true
 
@@ -97,7 +123,7 @@ model:
     hidden_omega_0: 30.0
 
 # ====================================================================
-# Physics
+# Physics (與 A3 完全相同)
 # ====================================================================
 physics:
   type: kolmogorov_flow_2d
@@ -118,90 +144,72 @@ physics:
     periodic_y: true
 
 # ====================================================================
-# Loss Weights
+# ✅ B1.1 變更: continuity_weight 2.0 → 5.0
 # ====================================================================
 losses:
+  # 與 A3 相同
   data_weight: 10.0
-  momentum_x_weight: 1.0
-  momentum_y_weight: 1.0
-  continuity_weight: 2.0
-  prior_weight: 0.0
+  momentum_x_weight: 0.3
+  momentum_y_weight: 0.3
+  prior_weight: 5.0
   periodicity_weight: 10.0
-
-#  l2_regularization:  # [未實現功能] 1.0e-6
-#  gradient_penalty:  # [未實現功能] 1.0e-5
-
-  normalize_losses: false
+  
+  # ⭐ B1.3 核心變更: continuity_weight 提升 5×
+  continuity_weight: 20.0         # A3: 2.0 → B1.3: 20.0
+  
+  # 與 A3 相同
+  normalize_losses: true
   adaptive_weighting: false
   causal_weighting: false
 
 # ====================================================================
-# Training & Optimizer - TEST L-BFGS DIRECTLY
+# Training (與 A3 完全相同)
 # ====================================================================
 training:
   optimizer:
-    type: lbfgs  # ⭐ 直接測試 L-BFGS
-    lr: 1.0
-    max_iter: 20
-    max_eval: 25
-    tolerance_grad: 1.0e-7
-    tolerance_change: 1.0e-9
-    history_size: 100
-    line_search_fn: "strong_wolfe"
+    type: soap
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
 
   lr_scheduler:
-    type: none  # L-BFGS 不需要 scheduler
+    type: step
+    gamma: 0.5
+    step_size: 500
 
-  epochs: 100
-  max_epochs: 100
-  batch_size: 10000  # Reduced
-  validation_freq: 20
-  checkpoint_freq: 50
+  epochs: 1000
+  max_epochs: 1000
+  batch_size: 20000
+  validation_freq: 50
+  checkpoint_freq: 100
   log_interval: 10
   
   early_stopping:
     enabled: false
 
   sampling:
-    N_pde: 5000  # Reduced from 15000
+    N_pde: 10000
     adaptive_sampling: false
-    boundary_points: 500
+    boundary_points: 1000
   
   gradient_clip: 1.0
   amp:
     enabled: false
 
 # ====================================================================
-# Curriculum - Disabled for quick test
+# Curriculum (與 A3 相同)
 # ====================================================================
 curriculum:
   enable: false
 
 # ====================================================================
-# Evaluation
-# ====================================================================
-evaluation:
-  grid_resolution: [128, 128]  # Reduced
-  metrics:
-    - relative_l2
-    - mass_conservation
-  
-  thresholds:
-    u_l2_error: 0.20
-    p_l2_error: 0.30
-
-# ====================================================================
-# Logging
+# Logging & Output
 # ====================================================================
 logging:
   log_nonlinearities: false
-  level: info
-  log_freq: 10
-  save_predictions: false
-  wandb: false
-  save_stage_checkpoints: false
+  wandb: true
+  log_level: INFO
 
 output:
-  checkpoint_dir: ./checkpoints/quick_test_lbfgs
-  results_dir: ./results/quick_test_lbfgs
-  visualization_dir: ./results/quick_test_lbfgs/visualizations
+  save_dir: ./results/loss_balance/B1_continuity_20.0
+  checkpoint_dir: ./checkpoints/loss_balance/B1_continuity_20.0

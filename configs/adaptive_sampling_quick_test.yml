@@ -1,0 +1,289 @@
+# ====================================================================
+# Adaptive Sampling 快速測試配置
+# ====================================================================
+# 目的: 測試 adaptive sampling 功能是否正確工作
+# 基於: Kolmogorov Flow 2D (Re=50)
+# 預期時間: 10-15 分鐘 (500 epochs, 每 100 epochs 重採樣一次)
+# ====================================================================
+
+experiment:
+  name: adaptive_sampling_quick_test
+  version: v1.0_adaptive_test
+  seed: 42
+  device: auto
+  precision: float32
+  description: "測試 adaptive sampling 功能：Kolmogorov Flow 2D"
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ====================================================================
+# Data Configuration
+# ====================================================================
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    description: "Kolmogorov flow (Re=50, k_f=4)"
+    domain:
+      x: [0.0, 6.283185307179586]
+      y: [0.0, 6.283185307179586]
+    resolution:
+      x: 256
+      y: 256
+    time_range: [15.0, 35.0]
+    dt: 0.001
+    variables: [u, v, p]
+    physics_params:
+      Re: 50.0
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ====================================================================
+# Low-Fi Prior (關閉以簡化測試)
+# ====================================================================
+lowfi_prior:
+  enabled: false
+
+# ====================================================================
+# Normalization
+# ====================================================================
+normalization:
+  type: training_data_norm
+  variable_order: ['u', 'v', 'p']
+  params: {}
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  steady_state:
+    enabled: true
+    time_window: [15.0, 35.0]
+
+# ====================================================================
+# Sensors
+# ====================================================================
+sensors:
+  K: 100
+  selection_method: precomputed
+  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
+
+# ====================================================================
+# Model Architecture (輕量級)
+# ====================================================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 128      # 較小網路（快速測試）
+  depth: 4        # 較淺
+  activation: swish
+  block_type: resnet
+
+  fourier_features:
+    enabled: true
+    type: standard
+    fourier_m: 12    # 減少特徵數
+    fourier_sigma: 4.0
+    include_input: true
+
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+
+# ====================================================================
+# Physics
+# ====================================================================
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ====================================================================
+# Loss Configuration
+# ====================================================================
+losses:
+  # 基本權重
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 2.0
+  periodicity_weight: 10.0
+  prior_weight: 0.0  # 關閉 prior（未啟用 lowfi_prior）
+  
+  # 損失歸一化（建議啟用）
+  normalize_losses: true
+  warmup_epochs: 5
+  
+  # 關閉自適應權重（避免干擾 adaptive sampling 測試）
+  adaptive_weighting: false
+  causal_weighting: false
+
+# ====================================================================
+# ✅ Training Configuration with Adaptive Sampling
+# ====================================================================
+training:
+  optimizer:
+    type: adam  # 使用 Adam 避免 SOAP 在 MPS 上的問題
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-5
+
+  lr_scheduler:
+    type: step
+    gamma: 0.9
+    step_size: 100
+
+  epochs: 500       # 足夠觀察多次重採樣
+  max_epochs: 500
+  batch_size: 20000
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
+  
+  early_stopping:
+    enabled: false
+
+  # ✅ 關鍵：啟用 adaptive sampling（簡單模式）
+  sampling:
+    N_pde: 5000              # 初始配點數（較少以加快測試）
+    adaptive_sampling: true  # ← 啟用自適應採樣
+    boundary_points: 1000
+  
+  gradient_clip: 1.0
+  amp:
+    enabled: false
+
+# ====================================================================
+# ✅ Adaptive Collocation 詳細配置
+# ====================================================================
+adaptive_collocation:
+  enabled: true  # 與 training.sampling.adaptive_sampling 同步
+  
+  # 觸發條件配置
+  trigger:
+    method: epoch_interval  # 固定間隔觸發（最穩定）
+    epoch_interval: 100     # 每 100 epochs 重採樣一次（測試用）
+    stagnation_window: 50   # loss_stagnation 模式參數
+    stagnation_threshold: 0.01
+  
+  # 重採樣策略
+  resampling_strategy: incremental_replace
+  
+  # 增量替換參數
+  incremental_replace:
+    keep_ratio: 0.7         # 保留 70% 舊點
+    replace_ratio: 0.3      # 替換 30%
+    removal_criterion: leverage_score  # 基於槓桿分數移除
+    leverage_threshold: 0.1
+  
+  # 殘差 QR 配置
+  residual_qr:
+    enabled: true
+    candidate_pool_size: 10000  # 候選池大小（減少以加快速度）
+    candidate_sampling: latin_hypercube
+    
+    # 快照配置
+    snapshot_config:
+      n_snapshots: 10       # 減少快照數（加快速度）
+      snapshot_method: batch
+    
+    # SVD 配置
+    svd:
+      energy_threshold: 0.99
+      max_rank: 30          # 減少秩（加快速度）
+      centering: true
+    
+    # QR 配置
+    qr:
+      column_pivoting: true
+      tolerance: 1.0e-10
+    
+    # 空間約束
+    spatial_constraints:
+      enabled: true
+      min_distance: 0.05    # 最小點間距（防止聚集）
+      max_distance: null
+
+# ====================================================================
+# Curriculum: 禁用（簡化測試）
+# ====================================================================
+curriculum:
+  enable: false
+
+# ====================================================================
+# Logging & Output
+# ====================================================================
+logging:
+  log_nonlinearities: false
+  wandb: true
+  log_level: INFO
+
+output:
+  save_dir: ./results/adaptive_sampling_quick_test
+  checkpoint_dir: ./checkpoints/adaptive_sampling_quick_test
+
+# ====================================================================
+# 測試說明
+# ====================================================================
+test_notes: |
+  🎯 測試目標：
+    1. 驗證 adaptive sampling 配置解析正確
+    2. 確認重採樣在指定 epoch 觸發（100, 200, 300, 400）
+    3. 檢查配點數量保持一致（5000 點）
+    4. 觀察 loss 是否在重採樣後有變化
+    5. 確認訓練穩定無錯誤
+  
+  ✅ 預期行為：
+    - Epoch 0: 初始化 5000 個配點
+    - Epoch 100: 觸發重採樣（保留 3500, 替換 1500）
+    - Epoch 200: 觸發重採樣
+    - Epoch 300: 觸發重採樣
+    - Epoch 400: 觸發重採樣
+    - 每次重採樣後日誌顯示：
+      "🔄 自適應重採樣完成 @ epoch XXX"
+      "   配點數: 5000 → 5000"
+      "   保留率: 70.00%"
+      "   新增點: 1500"
+  
+  🔍 檢查要點：
+    1. 訓練日誌中是否出現 "✅ 自適應採樣啟用"
+    2. 觸發方法是否正確（"觸發方法: epoch_interval"）
+    3. 是否在 epoch 100/200/300/400 出現重採樣日誌
+    4. 是否有任何 AttributeError 或其他錯誤
+  
+  🚀 執行指令：
+    PYTORCH_ENABLE_MPS_FALLBACK=1 python scripts/train/train.py \
+      --cfg configs/adaptive_sampling_quick_test.yml
+  
+  📊 預期時間：
+    - 總訓練時間: 10-15 分鐘
+    - 重採樣時間: ~10 秒/次（共 4 次）
+    - 預期 L2 誤差: 50-80%（輕量模型 + 短訓練）
+  
+  ⚠️ 注意事項：
+    - 使用 Adam 優化器（SOAP 在 MPS 上有問題）
+    - 配點數較少（5000）以加快測試
+    - 重採樣頻繁（100 epochs）以觀察行為
+    - 此配置用於功能測試，不追求最佳精度

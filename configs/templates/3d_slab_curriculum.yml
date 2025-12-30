@@ -391,8 +391,8 @@ logging:
   level: "info"
   log_freq: 20
   save_predictions: true
-  tensorboard: true
-  wandb: false
+  wandb: true
+  log_nonlinearities: false
   
   stage_diagnostics: true  # ⭐ 追蹤階段轉換
   save_loss_history: true
