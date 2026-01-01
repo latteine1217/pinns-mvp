@@ -59,7 +59,7 @@ python scripts/train/train.py \
 ```
 
 ### 階段 2：逐步加入特徵
-1. **+Fourier Features**: 修改 `fourier_features.enabled = true`
+1. **+Fourier Features**: 修改 `fourier_features.type = standard`
 2. **+SIREN Init**: 修改 `initialization.type = siren`
 3. **+自適應權重**: 修改 `adaptive_weighting = true`
 4. **+RANS Prior**: 修改 `lowfi_prior.enabled = true`（完整版）
@@ -117,4 +117,3 @@ python scripts/evaluate/evaluate_checkpoint.py \
 1. 先訓練 Vanilla 基線（建立底線）
 2. 訓練 RANS Prior 完整版（展示最佳性能）
 3. 根據需要進行中間版本的消融實驗
-

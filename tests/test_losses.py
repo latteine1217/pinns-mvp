@@ -380,19 +380,16 @@ class TestWeightingStrategies:
             temporal_decay=0.9
         )
         
-        # 模擬時間序列損失
-        time_losses = [
-            torch.tensor(1.0, device=self.device),
-            torch.tensor(0.8, device=self.device),
-            torch.tensor(0.6, device=self.device),
-            torch.tensor(0.9, device=self.device),
-            torch.tensor(0.7, device=self.device)
-        ]
+        # 模擬時間序列損失（已平方）
+        time_losses = torch.tensor(
+            [1.0, 0.8, 0.6, 0.9, 0.7], device=self.device
+        ).unsqueeze(1)
+        time_points = torch.arange(len(time_losses), device=self.device).float().unsqueeze(1)
         
-        weights = causal.compute_causal_weights(time_losses)
+        weights = causal.compute_weights(time_losses, time_points)
         
-        assert len(weights) == len(time_losses)
-        assert all(w > 0 for w in weights)
+        assert weights.shape == time_losses.shape
+        assert torch.all(weights > 0)
         
         # 早期時間點通常有更高權重
         assert weights[0] >= weights[-1]

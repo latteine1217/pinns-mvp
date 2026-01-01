@@ -58,7 +58,7 @@
 1.  **配置載入**: `scripts/train.py` 作為使用者入口，負責解析指定的 YAML 配置文件。
 2.  **組件初始化**: 腳本調用 `pinnx/train/factory.py` 中的工廠函數，根據配置實例化 `model`, `physics`, `optimizer` 等核心組件。
 3.  **訓練器設置**: 這些組件被傳遞給 `pinnx/train/trainer.py` 中的 `Trainer` 物件，`Trainer` 初始化時會：
-    - 設置數據標準化器（`DataNormalizer`）
+    - 設置數據標準化器（`OutputTransform`）
     - 配置物理驗證器（`PhysicsValidator`）
     - 初始化 TensorBoard 日誌管理（`TrainingLoopManager`）
     - 設置檢查點管理與早停機制

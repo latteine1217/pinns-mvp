@@ -18,7 +18,7 @@ sys.path.insert(0, '.')
 from pinnx.physics.vs_pinn_channel_flow import VSPINNChannelFlow
 from pinnx.physics.gradient_cache import GradientCache
 from pinnx.train.loss_manager import LossManager
-from pinnx.models.fourier_mlp import FourierMLP
+from pinnx.models.fourier_mlp import PINNNet
 
 
 @pytest.fixture
@@ -44,33 +44,34 @@ def setup_vs_pinn():
     )
     
     # 建立簡單模型（用於測試）
-    model = FourierMLP(
+    model = PINNNet(
         in_dim=3,
         out_dim=4,  # [u, v, w, p]
-        hidden_dim=64,
-        num_layers=3,
-        fourier_features_config={'m': 6, 'sigma': 2.0}
+        width=64,
+        depth=3,
+        fourier_m=6,
+        fourier_sigma=2.0
     ).to(device)
     
     # 建立 LossManager
     config = {
-        'loss': {
-            'weights': {
-                'data': 1.0,
-                'momentum_x': 1.0,
-                'momentum_y': 1.0,
-                'momentum_z': 1.0,
-                'continuity': 1.0
-            }
+        'losses': {
+            'data_weight': 1.0,
+            'momentum_x_weight': 1.0,
+            'momentum_y_weight': 1.0,
+            'momentum_z_weight': 1.0,
+            'continuity_weight': 1.0
         },
         'adaptive_weighting': {'enabled': False},
         'curriculum': {'enabled': False}
     }
     
     loss_manager = LossManager(
-        physics=physics,
         config=config,
-        device=device
+        physics=physics,
+        model=model,
+        device=device,
+        data_normalizer=None
     )
     
     return {
@@ -107,9 +108,7 @@ def test_gradient_cache_in_loss_manager(setup_vs_pinn):
     
     # 構建 data_batch
     data_batch = {
-        'x_pde': x,
-        'y_pde': y,
-        'z_pde': z,
+        'coords_pde_spatial': coords,
         't_pde': None
     }
     
@@ -168,50 +167,6 @@ def test_gradient_cache_in_loss_manager(setup_vs_pinn):
         assert diff < 1e-5, f"{key} 誤差過大: {diff:.6e}"
     
     print("\n✅ 所有損失項一致！GradientCache 整合成功。")
-
-
-def test_backward_compatibility(setup_vs_pinn):
-    """
-    測試 2: 向後相容性
-    
-    驗證：
-    - gradients=None 時正常工作（回退到原始計算）
-    """
-    loss_manager = setup_vs_pinn['loss_manager']
-    model = setup_vs_pinn['model']
-    device = setup_vs_pinn['device']
-    
-    # 生成測試數據
-    N = 64
-    x = torch.rand(N, 1, device=device, requires_grad=True)
-    y = torch.rand(N, 1, device=device, requires_grad=True) * 2.0 - 1.0
-    z = torch.rand(N, 1, device=device, requires_grad=True)
-    coords = torch.cat([x, y, z], dim=1)
-    
-    with torch.no_grad():
-        predictions = model(coords)
-    predictions.requires_grad_(True)
-    
-    data_batch = {'x_pde': x, 'y_pde': y, 'z_pde': z, 't_pde': None}
-    
-    # 不傳 gradients 參數（向後相容）
-    try:
-        loss_dict = loss_manager.compute_pde_loss(
-            coords_pde_physical=coords,
-            model_coords_pde=coords,
-            u_pred_pde_physical=predictions,
-            data_batch=data_batch,
-            epoch=0,
-            is_vs_pinn=True
-            # 注意：沒有傳 gradients 參數
-        )
-        
-        print("\n=== Backward Compatibility Test ===")
-        print("✅ gradients=None 時正常工作（向後相容）")
-        print(f"Loss keys: {list(loss_dict.keys())}")
-        
-    except Exception as e:
-        pytest.fail(f"向後相容性測試失敗: {e}")
 
 
 def test_gradient_cache_memory_efficiency(setup_vs_pinn):

@@ -59,7 +59,7 @@ def save_checkpoint(
     
     Examples
     --------
-    >>> model = FourierMLP(...)
+    >>> model = PINNNet(...)
     >>> optimizer = torch.optim.Adam(model.parameters())
     >>> config = {'experiment': {'name': 'test_run'}}
     >>> path = save_checkpoint(model, optimizer, epoch=100, loss=0.01, config=config)
@@ -145,7 +145,7 @@ def load_checkpoint(
     
     Examples
     --------
-    >>> model = FourierMLP(...)
+    >>> model = PINNNet(...)
     >>> optimizer = torch.optim.Adam(model.parameters())
     >>> epoch, loss, config = load_checkpoint(
     ...     "checkpoints/test_run_latest.pth", 

@@ -335,7 +335,7 @@ def _denormalize_training_data(
     logger.info(f"  - 條件檢查: len(variable_order) == out_dim = {len(variable_order) == out_dim if variable_order else 'N/A'}")
     logger.info(f"  - 預測範圍（標準化）: [{predictions.min():.6f}, {predictions.max():.6f}]")
     
-    # 🆕 使用 variable_order 動態處理（如果可用）
+    # 🆕 使用 variable_order 動態處理
     if variable_order is not None and len(variable_order) == out_dim:
         logger.info(f"✅ 使用 variable_order 動態分支: {variable_order}")
         var_map = {'u': (u_mean, u_std), 'v': (v_mean, v_std), 
@@ -349,32 +349,12 @@ def _denormalize_training_data(
                 logger.info(f"  - 變數 {i} ({var_name}): {before_val:.6f} * {std:.6f} + {mean:.6f} = {after_val:.6f}")
             # 其他變數（如 S）不處理
     
-    # 回退到硬編碼順序（向後相容）
-    elif out_dim == 3:
-        logger.warning(f"⚠️ 使用硬編碼順序 (u, v, p)（可能不正確！）")
-        # (u, v, p) - 2D 通道流
-        result[:, 0] = result[:, 0] * u_std + u_mean
-        result[:, 1] = result[:, 1] * v_std + v_mean
-        result[:, 2] = result[:, 2] * p_std + p_mean
-        
-    elif out_dim == 4:
-        logger.warning(f"⚠️ 使用硬編碼順序 (u, v, w, p)（可能不正確！）")
-        # (u, v, w, p) - 3D 通道流（預設順序）
-        result[:, 0] = result[:, 0] * u_std + u_mean
-        result[:, 1] = result[:, 1] * v_std + v_mean
-        result[:, 2] = result[:, 2] * w_std + w_mean
-        result[:, 3] = result[:, 3] * p_std + p_mean
-        
-    elif out_dim == 5:
-        # (u, v, w, p, S) - 含源項
-        result[:, 0] = result[:, 0] * u_std + u_mean
-        result[:, 1] = result[:, 1] * v_std + v_mean
-        result[:, 2] = result[:, 2] * w_std + w_mean
-        result[:, 3] = result[:, 3] * p_std + p_mean
-        # 源項 S 不標準化
-        
     else:
-        raise ValueError(f"不支持的輸出維度: {out_dim} (預期 3, 4, 或 5)")
+        raise ValueError(
+            "缺少有效的 variable_order，無法安全反標準化。"
+            "請在 checkpoint metadata 或配置中提供 variable_order，"
+            f"且其長度需等於輸出維度 ({out_dim})."
+        )
     
     # 🔍 DEBUG: 強制輸出反標準化後的統計
     logger.info(f"🔍 反標準化後範圍: [{result.min():.6f}, {result.max():.6f}]")

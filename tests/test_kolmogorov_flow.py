@@ -39,8 +39,8 @@ def device():
 def kolmogorov_flow():
     """基礎 Kolmogorov flow 實例"""
     return create_kolmogorov_flow_2d(
-        A=1.0,
-        k_f=4,
+        forcing_amplitude=1.0,
+        forcing_wavenumber=4,
         nu=0.01,
         rho=1.0,
     )
@@ -74,24 +74,24 @@ class TestKolmogorovFlowInitialization:
 
         assert torch.isclose(model.amplitude, torch.tensor(1.0), atol=1e-5)
         assert torch.isclose(model.wavenumber, torch.tensor(4.0), atol=1e-5)
-        assert torch.isclose(model.nu, torch.tensor(0.01), atol=1e-5)
-        assert torch.isclose(model.rho, torch.tensor(1.0), atol=1e-5)
+        assert model.nu == pytest.approx(0.01)
+        assert model.rho == pytest.approx(1.0)
         assert model.normalize_losses is True
         assert model.warmup_epochs == 5
 
     def test_custom_initialization(self):
         """測試自訂初始化"""
         model = create_kolmogorov_flow_2d(
-            A=2.0,
-            k_f=8,
+            forcing_amplitude=2.0,
+            forcing_wavenumber=8,
             nu=0.05,
             rho=2.0,
         )
 
         assert torch.isclose(model.amplitude, torch.tensor(2.0), atol=1e-5)
         assert torch.isclose(model.wavenumber, torch.tensor(8.0), atol=1e-5)
-        assert torch.isclose(model.nu, torch.tensor(0.05), atol=1e-5)
-        assert torch.isclose(model.rho, torch.tensor(2.0), atol=1e-5)
+        assert model.nu == pytest.approx(0.05)
+        assert model.rho == pytest.approx(2.0)
 
     def test_domain_bounds(self):
         """測試域邊界設定"""
@@ -212,7 +212,8 @@ class TestContinuityResidual:
         """測試連續方程殘差形狀"""
         coords, predictions = sample_data
 
-        continuity = kolmogorov_flow.compute_continuity_residual(coords, predictions)
+        u, v, _ = kolmogorov_flow.parse_velocity_pressure(predictions)
+        continuity = kolmogorov_flow.compute_continuity_residual(coords, [u, v])
 
         assert continuity.shape == (coords.shape[0], 1)
         assert continuity.requires_grad
@@ -234,7 +235,7 @@ class TestContinuityResidual:
         predictions = torch.cat([u, v, p], dim=1)
         predictions.requires_grad_(True)
 
-        continuity = kolmogorov_flow.compute_continuity_residual(coords, predictions)
+        continuity = kolmogorov_flow.compute_continuity_residual(coords, [u, v])
 
         # 不可壓縮場的連續方程殘差應接近零
         assert torch.allclose(continuity, torch.zeros_like(continuity), atol=1e-4)
@@ -308,63 +309,11 @@ class TestVorticityAndEnstrophy:
         """測試動能為非負值"""
         coords, predictions = sample_data
 
-        kinetic_energy = kolmogorov_flow.compute_kinetic_energy(predictions)
+        u, v, _ = kolmogorov_flow.parse_velocity_pressure(predictions)
+        kinetic_energy = kolmogorov_flow.compute_kinetic_energy([u, v])
 
         assert kinetic_energy >= 0.0
         assert isinstance(kinetic_energy, torch.Tensor)
-
-
-class TestLossNormalization:
-    """測試損失歸一化"""
-
-    def test_warmup_phase(self, kolmogorov_flow, sample_data):
-        """測試 warmup 階段（不歸一化）"""
-        coords, predictions = sample_data
-
-        residuals = kolmogorov_flow.compute_momentum_residuals(coords, predictions)
-        loss_dict = {
-            'momentum_x': residuals['momentum_x'].mean(),
-            'momentum_y': residuals['momentum_y'].mean(),
-        }
-
-        # Warmup 階段（epoch < warmup_epochs）
-        normalized = kolmogorov_flow.normalize_loss_dict(loss_dict, epoch=2)
-
-        # Warmup 期間應保持原值
-        assert torch.allclose(normalized['momentum_x'], loss_dict['momentum_x'])
-        assert torch.allclose(normalized['momentum_y'], loss_dict['momentum_y'])
-
-        # 檢查統計已收集
-        assert len(kolmogorov_flow.loss_normalizers) > 0
-
-    def test_training_phase_normalization(self, kolmogorov_flow, sample_data):
-        """測試訓練階段歸一化"""
-        coords, predictions = sample_data
-
-        residuals = kolmogorov_flow.compute_momentum_residuals(coords, predictions)
-        loss_dict = {
-            'momentum_x': residuals['momentum_x'].mean(),
-            'momentum_y': residuals['momentum_y'].mean(),
-        }
-
-        # 手動設置 normalizers
-        kolmogorov_flow.loss_normalizers = {
-            'momentum_x': 10.0,
-            'momentum_y': 5.0,
-        }
-
-        # 訓練階段（epoch >= warmup_epochs）
-        normalized = kolmogorov_flow.normalize_loss_dict(loss_dict, epoch=10)
-
-        # 檢查歸一化
-        assert torch.isclose(
-            normalized['momentum_x'],
-            loss_dict['momentum_x'] / 10.0
-        )
-        assert torch.isclose(
-            normalized['momentum_y'],
-            loss_dict['momentum_y'] / 5.0
-        )
 
 
 class TestPhysicsInfo:
@@ -375,15 +324,16 @@ class TestPhysicsInfo:
         info = kolmogorov_flow.get_physics_info()
 
         # 檢查必要鍵存在
-        assert 'forcing_parameters' in info
+        assert 'forcing_amplitude' in info
+        assert 'forcing_wavenumber' in info
         assert 'physics_parameters' in info
         assert 'domain_bounds' in info
         assert 'boundary_conditions' in info
         assert 'loss_normalization' in info
 
         # 檢查強迫參數
-        assert abs(info['forcing_parameters']['amplitude'] - 1.0) < 1e-5
-        assert abs(info['forcing_parameters']['wavenumber'] - 4) < 1e-5
+        assert abs(info['forcing_amplitude'] - 1.0) < 1e-5
+        assert abs(info['forcing_wavenumber'] - 4) < 1e-5
 
         # 檢查物理參數
         assert abs(info['physics_parameters']['nu'] - 0.01) < 1e-5

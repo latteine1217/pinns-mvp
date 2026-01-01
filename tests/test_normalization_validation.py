@@ -282,7 +282,7 @@ class TestTrainerIntegration:
     手動測試步驟:
     1. 創建包含無效統計量的配置 (v_std=0)
     2. 嘗試創建 Trainer
-    3. 應該看到 RuntimeError: "DataNormalizer 統計量無效"
+    3. 應該看到 RuntimeError: "OutputTransform 統計量無效"
     """
     
     def test_validation_called_on_init(self):
@@ -297,7 +297,7 @@ class TestTrainerIntegration:
         
         assert 'has_valid_stats()' in content, \
             "Trainer.__init__ 應該調用 has_valid_stats()"
-        assert 'DataNormalizer 統計量無效' in content, \
+        assert 'OutputTransform 統計量無效' in content, \
             "Trainer 應該包含統計量無效的錯誤訊息"
     
     def test_error_message_contains_solutions(self):

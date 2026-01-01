@@ -72,7 +72,7 @@ model:
   activation: tanh
   block_type: standard
   fourier_features:
-    enabled: false
+    type: disabled
   initialization:
     type: xavier_normal
 physics:

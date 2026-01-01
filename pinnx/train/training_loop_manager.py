@@ -463,9 +463,7 @@ class TrainingLoopManager:
         從多種數據格式中提取配點座標
         
         支持格式:
-        1. coords_pde: [N, D] 完整座標（包括時間維度）
-        2. coords_pde_spatial: [N, D_spatial] 空間座標（可能需要加上時間）
-        3. x_pde, y_pde, (z_pde), (t_pde): 分開的座標維度
+        1. coords_pde_spatial: [N, D_spatial] 空間座標（可能需要加上時間）
         
         Args:
             training_data: 訓練數據字典
@@ -473,11 +471,7 @@ class TrainingLoopManager:
         Returns:
             torch.Tensor [N, D] 或 None（無法提取時）
         """
-        # 格式 1: 直接提供完整座標
-        if 'coords_pde' in training_data:
-            return training_data['coords_pde']
-        
-        # 格式 2: 預拼接的空間座標
+        # 預拼接的空間座標
         if 'coords_pde_spatial' in training_data:
             coords_spatial = training_data['coords_pde_spatial']
             
@@ -488,22 +482,6 @@ class TrainingLoopManager:
                     return torch.cat([coords_spatial, t_pde], dim=1)
             
             return coords_spatial
-        
-        # 格式 3: 分開的座標維度
-        if 'x_pde' in training_data and 'y_pde' in training_data:
-            coords_list = [training_data['x_pde'], training_data['y_pde']]
-            
-            # 3D 問題
-            if 'z_pde' in training_data:
-                coords_list.append(training_data['z_pde'])
-            
-            # 時間維度
-            if 't_pde' in training_data and training_data['t_pde'] is not None:
-                t_pde = training_data['t_pde']
-                if isinstance(t_pde, torch.Tensor) and t_pde.numel() > 0:
-                    coords_list.append(t_pde)
-            
-            return torch.cat(coords_list, dim=1)
         
         # 無法提取
         return None
@@ -519,12 +497,7 @@ class TrainingLoopManager:
         Returns:
             更新後的 training_data
         """
-        # 格式 1: coords_pde
-        if 'coords_pde' in training_data:
-            training_data['coords_pde'] = new_points
-            return training_data
-        
-        # 格式 2: coords_pde_spatial + t_pde
+        # coords_pde_spatial + t_pde
         if 'coords_pde_spatial' in training_data:
             if 't_pde' in training_data and training_data['t_pde'] is not None:
                 # 分離空間和時間維度
@@ -535,24 +508,7 @@ class TrainingLoopManager:
                 training_data['coords_pde_spatial'] = new_points
             return training_data
         
-        # 格式 3: x_pde, y_pde, (z_pde), (t_pde)
-        if 'x_pde' in training_data and 'y_pde' in training_data:
-            training_data['x_pde'] = new_points[:, 0:1]
-            training_data['y_pde'] = new_points[:, 1:2]
-            
-            col_idx = 2
-            if 'z_pde' in training_data:
-                training_data['z_pde'] = new_points[:, col_idx:col_idx+1]
-                col_idx += 1
-            
-            if 't_pde' in training_data and training_data['t_pde'] is not None:
-                training_data['t_pde'] = new_points[:, col_idx:]
-            
-            return training_data
-        
-        # 無法更新：創建新鍵
-        training_data['coords_pde'] = new_points
-        logging.warning("⚠️ 無法匹配原數據格式，創建新鍵 'coords_pde'")
+        raise KeyError("training_data 缺少必要鍵: coords_pde_spatial")
         return training_data
     
     def _handle_fourier_annealing(

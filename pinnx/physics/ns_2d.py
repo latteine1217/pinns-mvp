@@ -13,7 +13,6 @@ Navier-Stokes 2D 方程式模組
 """
 
 import torch
-import torch.autograd as autograd
 from typing import Tuple, Optional, Dict, Any
 import warnings
 
@@ -22,16 +21,15 @@ from .base.gradient_ops import compute_gradient, compute_all_gradients
 
 
 # ============================================================================
-# Legacy Residual Functions (Preserved for Backward Compatibility)
+# Residual Functions
 # ============================================================================
 
-def ns_residual_2d(coords: torch.Tensor, 
+def ns_residual_2d(coords: torch.Tensor,
                    pred_full: torch.Tensor,
-                   viscosity: Optional[float] = None,
+                   viscosity: float = 1e-3,
                    time: Optional[torch.Tensor] = None,
                    nu_t: Optional[torch.Tensor] = None,
-                   use_grad_nut: bool = False,
-                   nu: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                   use_grad_nut: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     2D N-S 方程式殘差計算（支援 RANS 湍流黏度）
     
@@ -44,21 +42,14 @@ def ns_residual_2d(coords: torch.Tensor,
     Args:
         coords: 空間座標 [batch_size, 2]
         pred_full: 預測張量 [batch_size, 4] -> [u, v, p, S]
-        viscosity: 分子黏度 ν (優先)
+        viscosity: 分子黏度 ν
         time: 時間座標 [batch_size, 1] (可選)
         nu_t: RANS 湍流黏度 [batch_size, 1] (可選)
         use_grad_nut: 是否計算 ∇ν_t·∇u 交叉項
-        nu: 分子黏度 ν (向後兼容參數名)
         
     Returns:
         (momentum_x_residual, momentum_y_residual, continuity_residual)
     """
-    # 向後兼容：支持 nu 參數名
-    if viscosity is None and nu is not None:
-        viscosity = nu
-    elif viscosity is None:
-        viscosity = 1e-3  # 默認值
-    
     u = pred_full[:, 0:1]
     v = pred_full[:, 1:2]
     p = pred_full[:, 2:3]
@@ -119,41 +110,6 @@ def ns_residual_2d(coords: torch.Tensor,
         momentum_y += v_t
     
     return momentum_x, momentum_y, continuity
-
-
-def incompressible_ns_2d(coords: torch.Tensor, 
-                         pred: torch.Tensor,
-                         viscosity: Optional[float] = None,
-                         nu: Optional[float] = None,
-                         **kwargs) -> torch.Tensor:
-    """
-    簡化的 2D 不可壓縮 N-S 方程（向後兼容）
-    
-    ⚠️ DEPRECATED: 請使用 ns_residual_2d() 或 NSEquations2D 類
-    
-    Returns:
-        總殘差 [batch_size, 1] (所有方程殘差的加權和)
-    """
-    # 向後兼容：支持 nu 參數名
-    if viscosity is None and nu is not None:
-        viscosity = nu
-    elif viscosity is None:
-        viscosity = 1e-3
-    
-    # 補齊源項
-    if pred.shape[1] == 3:
-        source_term = torch.zeros(pred.shape[0], 1, device=pred.device, dtype=pred.dtype)
-        pred_full = torch.cat([pred, source_term], dim=1)
-    else:
-        pred_full = pred
-    
-    # 計算各方程殘差
-    mom_x, mom_y, cont = ns_residual_2d(coords, pred_full, viscosity, **kwargs)
-    
-    # 加權組合所有殘差（可調整權重）
-    total_residual = mom_x**2 + mom_y**2 + cont**2
-    
-    return total_residual
 
 
 # ============================================================================
@@ -265,7 +221,6 @@ def check_conservation_laws(coords: torch.Tensor,
     
     return {
         'mass_conservation': mass_conservation,
-        'mass': mass_conservation,  # 向後兼容舊名稱
         'momentum_conservation': momentum_conservation,
         'momentum_x': momentum_x,
         'momentum_y': momentum_y,
@@ -403,12 +358,10 @@ class NSEquations2D(NavierStokesBase):
     - RANS 湍流黏度支援
     - 守恆律檢查
     - 邊界條件處理
-    - 向後兼容的 API
     
     重構改進：
     - 消除重複代碼（梯度/拉普拉斯計算）
     - 繼承通用 N-S 功能
-    - 保持完整向後兼容性
     """
     
     def __init__(self, 
@@ -423,7 +376,7 @@ class NSEquations2D(NavierStokesBase):
             viscosity: 運動黏度 ν (m²/s)
             density: 流體密度 ρ (kg/m³)
             domain_bounds: 域邊界 {'x': [x_min, x_max], 'y': [y_min, y_max]}
-            **kwargs: 其他參數（向後兼容）
+            **kwargs: 其他參數
         """
         # 構造 physics_params
         physics_params = {
@@ -443,10 +396,6 @@ class NSEquations2D(NavierStokesBase):
             spatial_dim=2
         )
         
-        # 向後兼容屬性
-        self.viscosity = viscosity
-        self.density = density
-        self.kinematic_viscosity = kwargs.get('kinematic_viscosity', viscosity)
     
     def residual(self, 
                 coords: torch.Tensor, 
@@ -562,18 +511,6 @@ class NSEquations2D(NavierStokesBase):
                 'continuity': zero_residual
             }
     
-    def residual_unified(self, 
-                        coords: torch.Tensor, 
-                        pred_full: torch.Tensor,
-                        time: Optional[torch.Tensor] = None,
-                        nu_t: Optional[torch.Tensor] = None,
-                        use_grad_nut: bool = False) -> Dict[str, torch.Tensor]:
-        """
-        統一的殘差計算接口（向後兼容）
-        
-        ⚠️ DEPRECATED: 請使用 residual() 方法
-        """
-        return self.residual(coords, pred_full, time, nu_t=nu_t, use_grad_nut=use_grad_nut)
     
     def check_conservation(self, 
                           coords: torch.Tensor,
@@ -641,35 +578,3 @@ class NSEquations2D(NavierStokesBase):
             'kinematic_viscosity': self.nu,
             'reynolds_number': self.Re
         }
-
-
-# ============================================================================
-# Backward Compatibility Aliases
-# ============================================================================
-
-def _deprecation_warning(old_name: str, new_name: str):
-    """發出棄用警告"""
-    warnings.warn(
-        f"{old_name} is deprecated and will be removed in v2.0. "
-        f"Please use {new_name} instead.",
-        DeprecationWarning,
-        stacklevel=3
-    )
-
-# 向後相容別名：NavierStokes2D → NSEquations2D
-class NavierStokes2D(NSEquations2D):
-    """
-    [DEPRECATED] Backward compatibility wrapper for NSEquations2D.
-    
-    This class will be removed in v2.0. Please update your code to use
-    NSEquations2D instead:
-    
-        # Old (deprecated)
-        from pinnx.physics.ns_2d import NavierStokes2D
-        
-        # New (recommended)
-        from pinnx.physics.ns_2d import NSEquations2D
-    """
-    def __init__(self, *args, **kwargs):
-        _deprecation_warning('NavierStokes2D', 'NSEquations2D')
-        super().__init__(*args, **kwargs)

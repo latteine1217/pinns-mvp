@@ -282,35 +282,6 @@ class TestCheckpointNormalizationRoundtrip:
             assert np.isfinite(std_val), f"{var_name} 的 std 不是有限值"
             assert std_val > 0, f"{var_name} 的 std 必須為正值"
     
-    def test_backward_compatibility_with_old_checkpoints(self, tmp_path):
-        """測試與舊格式 checkpoint 的向後相容性"""
-        
-        # 模擬舊格式 checkpoint（可能缺少某些欄位）
-        old_checkpoint = {
-            'normalization': {
-                'norm_type': 'training_data_norm',
-                'means': {'u': 10.0, 'v': 0.0, 'p': -40.0},
-                'stds': {'u': 4.5, 'v': 0.33, 'p': 28.0}
-                # 缺少 'variable_order'（應使用預設順序）
-            }
-        }
-        
-        checkpoint_path = tmp_path / "old_format.pth"
-        torch.save(old_checkpoint, checkpoint_path)
-        
-        # 載入應該成功
-        loaded = torch.load(checkpoint_path)
-        normalizer = OutputTransform.from_metadata(loaded['normalization'])
-        
-        # 驗證功能正常
-        assert normalizer.norm_type == 'training_data_norm'
-        assert normalizer.variable_order is not None  # 應有預設順序
-        
-        test_value = 12.5
-        normalized = normalizer.normalize(test_value, 'u')
-        recovered = normalizer.denormalize(normalized, 'u')
-        assert abs(float(recovered) - test_value) < 1e-6
-
 
 class TestCheckpointNormalizationEdgeCases:
     """測試邊界情況和錯誤處理"""

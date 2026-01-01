@@ -414,10 +414,21 @@ def create_model(
             f"✅ Created ResNet-style PINN via PINNNet (block=resnet, depth={res_cfg.get('depth')})"
         )
 
+    elif model_type == 'piratenet':
+        pirate_cfg = dict(model_cfg)
+        pirate_cfg['type'] = 'fourier_vs_mlp'
+        pirate_cfg.setdefault('block_type', 'piratenet')
+        pirate_cfg.setdefault('res_block_alpha_init', 0.0)
+        pirate_cfg.setdefault('use_input_projection', True)
+        base_model = create_pinn_model(pirate_cfg).to(device)
+        logging.info(
+            f"✅ Created PirateNet-style PINN via PINNNet (block=piratenet, depth={pirate_cfg.get('depth')})"
+        )
+
     else:
         raise ValueError(
             f"Unsupported model type: '{model_type}'. "
-            f"Supported types: 'fourier_vs_mlp', 'resnet', 'axis_selective_fourier_mlp'"
+            f"Supported types: 'fourier_vs_mlp', 'resnet', 'piratenet', 'axis_selective_fourier_mlp'"
         )
     
     # === 4. 應用手動標準化包裝器（若配置啟用且非 VS-PINN）===
@@ -864,7 +875,7 @@ def create_physics(config: Dict[str, Any], device: torch.device):
 
         # 損失配置（用於歸一化與 momentum merging）
         # 注意：配置文件使用 'losses' (複數)
-        loss_cfg = config.get('losses', config.get('loss', {}))
+        loss_cfg = config.get('losses', {})
 
         physics = KolmogorovFlow2D(
             forcing_params=forcing_params,

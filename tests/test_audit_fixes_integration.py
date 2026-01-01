@@ -92,7 +92,7 @@ class TestAuditFixesIntegration:
                 'pressure_driven': True,  # ✅ 聲明壓力驅動
             },
             'model': {
-                'type': 'FourierMLP',
+                'type': 'fourier_vs_mlp',
                 'enable_vs_pinn': False,  # ✅ 2D 模式
             },
             'data': {
@@ -120,7 +120,7 @@ class TestAuditFixesIntegration:
                 'pressure_driven': True,  # ⚠️ 壓力驅動
             },
             'model': {
-                'type': 'FourierMLP',
+                'type': 'fourier_vs_mlp',
                 'enable_vs_pinn': True,  # ✅ 3D 模式
             },
             'data': {

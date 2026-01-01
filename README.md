@@ -3,7 +3,8 @@
 基於物理資訊神經網路 (PINNs) 的湍流逆問題求解器，從極少量感測器觀測 (K ≤ 100) 重建高保真流場。
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.9.1-orange)](https://pytorch.org/)
-[![硬體](https://img.shields.io/badge/硬體-CUDA%20%7C%20MPS%20%7C%20CPU-yellow)](A100_DEPLOYMENT_GUIDE.md)
+[![WandB](https://img.shields.io/badge/WandB-Logging-yellow)](https://wandb.ai/)
+[![硬體](https://img.shields.io/badge/硬體-CUDA%20%7C%20MPS%20%7C%20CPU-green)](docs/QUICK_START.md)
 [![狀態](https://img.shields.io/badge/狀態-積極開發-success)](README.md)
 
 **應用場景**: 工程實務中僅有低保真模擬 (RANS/LES) 與稀疏測量，需重建全場流動。
@@ -12,6 +13,29 @@
 ---
 
 ## 🔄 重要更新
+
+### ✅ v1.2.1 (2026-01-02): 標準化清理與感測資料一致化 ✅
+
+**改動**: 移除向後相容分支，統一標準鍵名與輸入格式  
+**影響**: `coords_*_spatial` 需完整提供；`losses` 為唯一 loss 設定入口  
+**感測檔**: 讀取 `u_sensors/v_sensors/w_sensors/p_sensors` 與 `sensor_*` 皆支援  
+**快速驗證**: `configs/main_quick_validate.yml` (小量資料/短 epochs)
+
+---
+
+### 🚀 v1.2.0 (2025-12-30): WandB 遷移完成 ✅
+
+**改動**: 完全遷移至 Weights & Biases (WandB)，移除所有 TensorBoard 支援  
+**優勢**: 雲端實驗管理 | 超參數追蹤 | 團隊協作 | 進階視覺化  
+**配置**: 需要 `.wandb_config` 檔案 (含 API key，已 gitignore)  
+**向下相容**: ❌ 無向下相容，所有 `logging.tensorboard` 已移除  
+**測試**: 100% 通過 (自動化測試腳本已建立)
+
+📖 **遷移指南**: [WANDB_MIGRATION_GUIDE.md](docs/WANDB_MIGRATION_GUIDE.md)  
+🧪 **測試工具**: `scripts/tools/test_wandb_integration.py`  
+📊 **統計**: 55 檔案修改 | +3,135/-2,285 行 | 已推送至 GitHub (commit: af3c67f)
+
+---
 
 ### 🚨 v1.1.1 (2025-12-18): Channel Flow 標準化修復 ✅
 
@@ -61,6 +85,7 @@
 - **優化**: GradNorm 動態權重 + Curriculum Learning + 因果訓練
 - **先驗整合**: RANS 低保真場作為軟約束 (`lowfi_prior` 配置)
 - **感測器**: QR-Pivot 離線優化佈局 (K ≤ 100)
+- **實驗管理**: WandB 雲端追蹤 (超參數、指標、視覺化)
 - **配置驅動**: YAML 控制實驗，自動裝置選擇 (CUDA/MPS/CPU)
 
 ---
@@ -71,16 +96,24 @@
 # 1. 環境設置
 conda env create -f environment.yml && conda activate pinns-mvp
 
-# 2. 訓練 (使用現有 DNS 數據)
+# 2. 配置 WandB (必須，僅需一次)
+echo "WANDB_API_KEY=your_key_here" > .wandb_config
+python scripts/tools/test_wandb_integration.py  # 驗證配置
+
+# 3. 訓練 (使用現有 DNS 數據)
 python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 
-# 3. 評估
+# 4. 評估
 python scripts/evaluate/evaluate_checkpoint.py \
   --checkpoint checkpoints/<exp>/best_model.pth \
   --config configs/<exp>.yml
+
+# 5. 查看結果 (WandB Dashboard)
+# 訪問: https://wandb.ai/<your-entity>/pinns-turbulence-reconstruction
 ```
 
-**完整工作流程** (DNS 生成 → 感測器優化 → 訓練 → 評估): 參見 [QUICK_START.md](docs/QUICK_START.md)
+**完整工作流程** (DNS 生成 → 感測器優化 → 訓練 → 評估): 參見 [QUICK_START.md](docs/QUICK_START.md)  
+**WandB 設定**: 參見 [WANDB_MIGRATION_GUIDE.md](docs/WANDB_MIGRATION_GUIDE.md)
 
 ---
 
@@ -110,6 +143,7 @@ DNS 數據 → QR-Pivot 感測點 → Fourier-SIREN+RWF → VS-PINN 物理殘差
 - 📖 [快速入門](docs/QUICK_START.md) - 完整工作流程
 - 📚 [技術文檔](docs/TECHNICAL_DOCUMENTATION.md) - 系統架構
 - ⚙️ [配置參考](docs/CONFIG_REFERENCE.md) - YAML 配置
+- 📊 [WandB 遷移指南](docs/WANDB_MIGRATION_GUIDE.md) - 實驗追蹤設定
 - 🔧 [腳本參考](scripts/README.md) - 工具使用
 - 🐛 [疑難排解](docs/TROUBLESHOOTING.md) - 問題診斷
 
@@ -124,7 +158,8 @@ DNS 生成 · 感測器優化 · 雷諾數計算 · 課程學習 · A100 部署 
 ## ⚠️ 已知限制
 
 - **記憶體**: MPS (Apple Silicon) 在 10K PDE 點時可能 OOM (20GB 限制)，建議降至 5K 或使用 CUDA GPU
-- **兼容性**: v1.1.0 移除多項已棄用功能，詳見 [CHANGELOG.md](CHANGELOG.md)
+- **兼容性**: v1.2.0 完全移除 TensorBoard，必須使用 WandB
+- **向下相容**: v1.1.0 移除多項已棄用功能，詳見 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 

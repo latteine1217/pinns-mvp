@@ -948,7 +948,7 @@ pinns-mvp/
    - 資料標準化
    ↓
 3. 模型初始化
-   - 創建 FourierMLP (RWF + SIREN)
+   - 創建 PINNNet (Fourier-VS MLP, RWF + SIREN)
    - 包裝 VS-PINN 尺度化
    - 應用物理約束
    ↓

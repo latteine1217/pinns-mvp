@@ -119,7 +119,7 @@ model:
     type: "standard"
     fourier_m: 64  # 增加 Fourier 特徵數以捕捉高頻
     fourier_sigma: 3.0  # 推薦範圍中間值 (2-5)
-    fourier_trainable: false
+    trainable_fourier: false
 
   scaling:
     learnable: true

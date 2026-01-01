@@ -46,7 +46,6 @@ import hashlib
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.dataio.jhtdb_client import JHTDBManager, JHTDBConfig
-from pinnx.sensors import FieldSensorSelector
 from pinnx.dataio.lowfi_loader import LowFiData
 
 
@@ -792,135 +791,33 @@ class ChannelFlowDataFetcher:
                               use_periodic: bool = False,
                               min_dist_factor: float = 0.5) -> Dict[str, np.ndarray]:
         """
-        生成稀疏感測點資料（向後相容包裝器）
+        生成稀疏感測點資料
 
         Args:
             field_data: 完整場資料
             K: 感測點數量
-            method: 感測點選擇方法 ('qr_pivot', 'random')
+            method: 感測點選擇方法（僅支援 'qr_pivot'）
             noise_sigma: 高斯噪聲標準差
             dropout_prob: 隨機遺失比例
-            use_periodic: 是否啟用週期性處理（預設 False 保持向後相容）
+            use_periodic: 是否啟用週期性處理
 
         Returns:
             感測點資料與位置
         """
-        if method == "qr_pivot" and use_periodic:
-            # 使用週期性處理的新函數
-            return self.generate_sensor_points_with_periodicity(
-                field_data=field_data,
-                K=K,
-                periodic_axes=[0],  # 2D 切片 x 方向週期
-                use_periodic=True,
-                n_wrap_layers=2,
-                noise_sigma=noise_sigma,
-                dropout_prob=dropout_prob,
-                min_dist_factor=min_dist_factor
-            )
+        if method != "qr_pivot":
+            raise ValueError(f"不支援的感測點方法: {method}（僅支援 'qr_pivot'）")
 
-        # ============ 舊版邏輯（向後相容）============
-        self.logger.info(f"生成 {K} 個感測點，方法: {method}（標準模式）")
-
-        # 兼容性處理：優先使用平鋪的 x/y，否則從 coordinates 還原
-        if 'x' in field_data and 'y' in field_data:
-            x = np.asarray(field_data['x'])
-            y = np.asarray(field_data['y'])
-        else:
-            coordinates = field_data.get('coordinates')
-            if coordinates is None:
-                raise KeyError("field_data 缺少 x/y 與 coordinates")
-            if isinstance(coordinates, dict):
-                coord_dict = coordinates
-            elif isinstance(coordinates, np.ndarray):
-                try:
-                    coord_dict = coordinates.item()
-                except Exception as e:
-                    raise TypeError(f"無法從 coordinates 還原字典，型別: {type(coordinates)}") from e
-            else:
-                raise TypeError(f"不支援的 coordinates 型別: {type(coordinates)}")
-            x = np.asarray(coord_dict['x'])
-            y = np.asarray(coord_dict['y'])
-
-        # 建立完整網格
-        X, Y = np.meshgrid(x, y, indexing='ij')
-        points_full = np.stack([X.ravel(), Y.ravel()], axis=-1)
-
-        # 感測點選擇
-        if method == "qr_pivot":
-            selector = FieldSensorSelector(
-                strategy='qr_pivot',
-                feature_scaling='standard',
-                nan_policy='raise'
-            )
-            selection = selector.select(field_data, n_sensors=K)
-            sensor_indices = selection.indices
-            selection_info = dict(selection.metrics)
-            selection_info['strategy'] = 'qr_pivot'
-            sensor_points = selection.coordinates()
-            if sensor_points is None:
-                sensor_points = points_full[sensor_indices]
-        elif method == "random":
-            np.random.seed(42)
-            sensor_indices = np.random.choice(len(points_full), K, replace=False)
-            selection_info = {"method": "random"}
-            sensor_points = points_full[sensor_indices]
-        else:
-            raise ValueError(f"未支援的感測點選擇方法: {method}")
-
-        # 提取感測點座標與數值
-        sensor_data = {}
-
-        for var in ['u', 'v', 'w', 'p']:
-            if var in field_data:
-                if method == "qr_pivot":
-                    component_values = selection.component_values.get(var)
-                    if component_values is None:
-                        continue
-                    field_values = component_values
-                else:
-                    full_values = field_data[var].reshape(-1)
-                    field_values = full_values[sensor_indices]
-
-                if field_values.ndim == 2 and field_values.shape[1] == 1:
-                    field_values = field_values[:, 0]
-
-                # 添加噪聲
-                if noise_sigma > 0:
-                    if field_values.ndim == 1:
-                        noise_scale = np.std(field_values)
-                        noise = np.random.normal(0, noise_sigma * noise_scale, len(field_values))
-                        field_values = field_values + noise
-                    else:
-                        noise_scale = np.std(field_values, axis=0, keepdims=True)
-                        noise = np.random.normal(0, noise_sigma, size=field_values.shape) * noise_scale
-                        field_values = field_values + noise
-
-                # 隨機遺失
-                if dropout_prob > 0:
-                    n_dropout = int(dropout_prob * len(field_values))
-                    dropout_indices = np.random.choice(len(field_values), n_dropout, replace=False)
-                    if field_values.ndim == 1:
-                        field_values[dropout_indices] = np.nan
-                    else:
-                        field_values[dropout_indices, :] = np.nan
-
-                sensor_data[var] = field_values
-
-        result = {
-            'sensor_points': sensor_points,
-            'sensor_data': sensor_data,
-            'sensor_indices': sensor_indices,
-            'selection_info': selection_info,
-            'noise_sigma': noise_sigma,
-            'dropout_prob': dropout_prob
-        }
-
-        # 快取感測點資料
-        cache_file = self.cache_dir / f"sensors_K{K}_{method}.npz"
-        np.savez_compressed(cache_file, **result)
-        self.logger.info(f"感測點資料已快取至: {cache_file}")
-
-        return result
+        periodic_axes = [0] if use_periodic else None
+        return self.generate_sensor_points_with_periodicity(
+            field_data=field_data,
+            K=K,
+            periodic_axes=periodic_axes,
+            use_periodic=use_periodic,
+            n_wrap_layers=2,
+            noise_sigma=noise_sigma,
+            dropout_prob=dropout_prob,
+            min_dist_factor=min_dist_factor
+        )
     
     def generate_lowfi_prior(self, 
                            resolution: Tuple[int, int] = (128, 64),

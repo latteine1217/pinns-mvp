@@ -33,10 +33,10 @@ def analyze_field_quality(checkpoint_path, reference_h5, time_index=250, output_
     # 加載 checkpoint
     ckpt = torch.load(checkpoint_path, map_location=device)
     
-    # 重建模型（簡化版，假設使用 FourierMLP）
-    from pinnx.models.fourier_mlp import FourierMLP
+    # 重建模型（簡化版，使用 PINNNet）
+    from pinnx.models.fourier_mlp import PINNNet
     model_config = ckpt['config']['model']
-    model = FourierMLP(
+    model = PINNNet(
         input_dim=2,
         output_dim=3,  # u, v, p
         hidden_dim=model_config.get('hidden_dim', 256),

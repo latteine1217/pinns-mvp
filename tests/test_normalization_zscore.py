@@ -344,22 +344,6 @@ class TestZScoreNormalization:
             assert abs(mean) < 0.05, f"{var_name}: mean = {mean:.4f}"
             assert abs(std - 1.0) < 0.05, f"{var_name}: std = {std:.4f}"
     
-    def test_zscore_backward_compatibility(self):
-        """測試向後兼容：舊格式（僅 scales）應該能載入"""
-        # 模擬舊格式 metadata（只有 stds，沒有 means）
-        old_config = OutputNormConfig(
-            norm_type='training_data_norm',
-            stds={'u': 4.5, 'v': 0.33, 'w': 3.8, 'p': 28.0},
-            means={}  # 空 means
-        )
-        
-        # 應該能載入（自動使用零均值）
-        normalizer = OutputTransform(old_config)
-        
-        # 檢查降級為僅縮放模式（均值為 0）
-        assert normalizer.means.get('u', 0.0) == 0.0
-        assert normalizer.means.get('v', 0.0) == 0.0
-    
     def test_correct_zscore_formula(self, jhtdb_stats):
         """明確驗證 Z-score 公式：(x - μ) / σ"""
         config = OutputNormConfig(

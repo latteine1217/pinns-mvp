@@ -228,7 +228,6 @@ losses:
   # 基礎損失權重
   data_weight: 10.0                   # 資料監督損失（sensor points）
                                       # 典型範圍：5.0-20.0
-  boundary_weight: 10.0               # 邊界條件損失（壁面無滑移）
                                       # 典型範圍：5.0-20.0
 
   # PDE 殘差權重（Navier-Stokes 方程）
@@ -236,7 +235,6 @@ losses:
   momentum_y_weight: 1.0              # y 方向動量方程
   momentum_z_weight: 1.0              # z 方向動量方程
   continuity_weight: 1.0              # 散度損失權重（不可壓縮條件 ∇·u=0）
-  # div_weight: 1.0                   # ⚠️ 已廢棄：請使用 continuity_weight
 
   # 物理約束權重
   wall_constraint_weight: 10.0        # 壁面約束增強（⚠️ 重要，防止壁面剪應力歸零）

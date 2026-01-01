@@ -41,25 +41,16 @@ def load_checkpoint(checkpoint_path, device='cpu'):
     # 處理兩種配置格式：嵌套結構 (RANS prior) vs 扁平結構 (vanilla)
     if 'fourier_features' in model_config and isinstance(model_config['fourier_features'], dict):
         ff_config = model_config['fourier_features']
-        # 檢查是否有完整的嵌套配置
-        if 'fourier_m' in ff_config:
-            # 完整嵌套結構 (新格式)
-            use_fourier = ff_config['enabled']
-            fourier_m = ff_config['fourier_m']
-            fourier_sigma = ff_config['fourier_sigma']
-            trainable_fourier = ff_config.get('trainable', False)
-        else:
-            # 部分嵌套結構 (混合格式) - fourier_m 在頂層
-            use_fourier = model_config.get('use_fourier', False)
-            fourier_m = model_config.get('fourier_m', 16)
-            fourier_sigma = model_config.get('fourier_sigma', 4.0)
-            trainable_fourier = model_config.get('fourier_trainable', False)
+        ff_type = ff_config.get('type', 'standard')
+        use_fourier = ff_type != 'disabled'
+        fourier_m = ff_config.get('fourier_m', 16)
+        fourier_sigma = ff_config.get('fourier_sigma', 4.0)
+        trainable_fourier = ff_config.get('trainable_fourier', False)
     else:
-        # 扁平結構 (舊格式)
         use_fourier = model_config.get('use_fourier', False)
         fourier_m = model_config.get('fourier_m', 16)
         fourier_sigma = model_config.get('fourier_sigma', 4.0)
-        trainable_fourier = model_config.get('fourier_trainable', False)
+        trainable_fourier = model_config.get('trainable_fourier', False)
     
     model = PINNNet(
         in_dim=model_config['in_dim'],

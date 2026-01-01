@@ -159,9 +159,9 @@ class TestRANSCrossTerms:
         pred = torch.cat([u, v, p, S], dim=1)
         nu_t = 0.05 + 0.1 * torch.sin(coords[:, 0:1])
         
-        # 測試 residual_unified 接受 use_grad_nut 參數
+        # 測試 residual 接受 use_grad_nut 參數
         try:
-            residuals = ns_eq.residual_unified(
+            residuals = ns_eq.residual(
                 coords, pred, nu_t=nu_t, use_grad_nut=True
             )
             assert 'momentum_x' in residuals

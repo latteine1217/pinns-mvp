@@ -8,25 +8,37 @@ experiment:
   device: "cuda"
 
 model:
-  type: "FourierMLP"
-  hidden_dims: [128, 128, 128, 128]
+  type: "fourier_vs_mlp"
+  in_dim: 3
+  out_dim: 4
+  width: 256
+  depth: 8
   activation: "sine"
-  fourier:
-    n_frequencies: 8
-    omega_0: 30.0
+  fourier_features:
+    type: "standard"
+    fourier_m: 32
+    fourier_sigma: 5.0
+    trainable_fourier: false
+    fourier_use_2pi: true
 
-optimizer:
-  type: "SOAP"
-  lr: 0.001
-  lbfgs_switch:
-    enabled: true
-    switch_epoch: 800
+training:
+  optimizer:
+    type: "SOAP"
+    lr: 0.001
+    lbfgs_switch:
+      enabled: true
+      switch_epoch: 800
 
-lr_scheduler:
-  type: "CosineAnnealingWarmRestarts"
-  T_0: 200
-  T_mult: 2
-  eta_min: 1.0e-6
+  lr_scheduler:
+    type: "CosineAnnealingWarmRestarts"
+    T_0: 200
+    T_mult: 2
+    eta_min: 1.0e-6
+  epochs: 1000
+  batch_size: 1024
+  n_collocation: 20000
+  gradient_clip: 1.0
+  enforce_pressure_data: true  # 壓力驅動流是否強制要求壓力場資料（新增）
 
 data:
   dns:
@@ -37,30 +49,20 @@ data:
     path: "./data/kolmogorov_dns/rans_re50_kf4.h5"
 
 losses:
-  data:
-    weight: 1.0
-  pde:
-    weight: 0.01
-    normalization: "adaptive"
-  prior_consistency:
-    weight: 0.1
-  normalization:
-    method: "sum_to_one"
-
-training:
-  epochs: 1000
-  batch_size: 1024
-  n_collocation: 20000
-  gradient_clip: 1.0
-  enforce_pressure_data: true  # 壓力驅動流是否強制要求壓力場資料（新增）
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  wall_constraint_weight: 10.0
+  prior_weight: 0.1
 ```
 
 ## 關鍵參數說明
 
 ### 模型架構
-- `hidden_dims`: [128, 128, 128, 128] 適用於 Re < 100
+- `width` / `depth`: 256×8 適用於高維度流場
 - `activation`: "sine"（SIREN）對高階導數敏感
-- `n_frequencies`: 8 適用於週期問題
+- `fourier_m`: 32–128 適用於週期問題
 
 ### 優化器
 - **SOAP**: 前期穩定收斂
@@ -76,15 +78,19 @@ training:
 ### 損失權重
 ```yaml
 # 推薦配置（Re=50-100）
-data: 1.0          # 基準
-pde: 0.01-0.1      # 逐步增強
-prior: 0.1-0.5     # 軟約束
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  wall_constraint_weight: 10.0
+  prior_weight: 0.1
 ```
 
 **權重調整原則**：
-1. 確保 `sum_to_one` 權重守恆
-2. data loss 優先收斂
-3. prior weight < 0.5 避免過度依賴
+1. data loss 優先收斂
+2. prior_weight < 0.5 避免過度依賴
+3. 牆面約束過小會導致壁面剪應力偏差
 
 ### 標準化方法
 | 方法 | 輸入 | 輸出 |
@@ -111,12 +117,15 @@ curriculum:
 ### Kolmogorov Flow 物理參數
 ```yaml
 physics:
-  Re: 50
-  k_f: 4            # 強迫波數
+  type: "kolmogorov_flow_2d"
   nu: 0.0125        # 動力黏度
-  f0: 1.0           # 強迫振幅
-  domain: [0, 6.283185307179586]  # [0, 2π]
-  pressure_driven: false  # 是否為壓力驅動流（Kolmogorov 為體積力驅動）
+  rho: 1.0
+  forcing:
+    k_f: 4          # 強迫波數
+    amplitude: 1.0  # 強迫振幅
+  domain:
+    x_range: [0.0, 6.283185307179586]  # [0, 2π]
+    y_range: [0.0, 6.283185307179586]
 ```
 
 **雷諾數定義**：
@@ -128,13 +137,14 @@ L = 2π/k_f
 ### Channel Flow 物理參數
 ```yaml
 physics:
-  type: "channel_flow"
-  Re_tau: 1000      # 摩擦雷諾數
+  type: "vs_pinn_channel_flow"
+  nu: 1.0e-3        # 運動黏度
+  rho: 1.0
   pressure_driven: true  # ⚠️ 必須設為 true（壓力梯度驅動）
-  domain:
-    x: [0, 12.56]   # 流向（2π）
-    y: [0, 2.0]     # 壁面法向
-    z: [0, 6.28]    # 展向（π）
+  domain_bounds:
+    x: [0.0, 12.56] # 流向（2π）
+    y: [-1.0, 1.0] # 壁面法向
+    z: [0.0, 6.28] # 展向（π）
 ```
 
 **⚠️ 新增配置（v2025-12-17）**：

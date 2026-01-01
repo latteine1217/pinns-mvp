@@ -58,7 +58,6 @@ model:
   activation: swish
   
   fourier_features:
-    enabled: true
     type: standard
     fourier_m: 6
     fourier_sigma: 4.0

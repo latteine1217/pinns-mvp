@@ -167,6 +167,13 @@ class SensorDataReader(NPZReader):
                 key_sensor = f'sensor_{field}'
                 if key_sensor in data:
                     fields[field] = np.asarray(data[key_sensor]).reshape(-1)
+
+            # 兼容新的 *_sensors 格式 (e.g., u_sensors)
+            if not fields:
+                for field in ['u', 'v', 'w', 'p']:
+                    key_sensors = f'{field}_sensors'
+                    if key_sensors in data:
+                        fields[field] = np.asarray(data[key_sensors]).reshape(-1)
             
             # 若無 'sensor_*'，嘗試直接鍵名
             if not fields:
@@ -567,7 +574,7 @@ class ChannelFlowLoader:
             if 'w' in available_fields:
                 target_fields = ['u', 'v', 'w', 'p']  # 3D 或含 w 的 2D 切片
             else:
-                target_fields = ['u', 'v', 'p']  # 舊版 2D（向後兼容）
+                target_fields = ['u', 'v', 'p']
             logger.info(f"Auto-detected target_fields: {target_fields}")
         bundle = channel_data.to_flow_bundle()
         bundle.metadata['has_lowfi_prior'] = channel_data.has_lowfi_prior()

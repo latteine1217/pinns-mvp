@@ -204,7 +204,7 @@ class VSPINNChannelFlow(nn.Module):
 
         # === 損失歸一化參數 ===
         self.loss_normalizers: Dict[str, float] = {}  # 存儲每個損失項的參考值
-        self.normalize_losses = True  # 損失歸一化開關（可通過配置控制）
+        self.normalize_losses = (loss_config or {}).get('normalize_losses', True)  # 損失歸一化開關（從配置讀取）
         # 🔴 修正：從配置讀取 warmup_epochs，默認 5
         self.warmup_epochs = (loss_config or {}).get('warmup_epochs', 5)
         self.normalizer_momentum = 0.9  # 滑動平均動量（平滑更新）
@@ -487,7 +487,7 @@ class VSPINNChannelFlow(nn.Module):
                 w_grads = {'x': gradients['w_x'], 'y': gradients['w_y'], 'z': gradients['w_z']}
                 p_grads = {'x': gradients['p_x'], 'y': gradients['p_y'], 'z': gradients['p_z']}
         else:
-            # 原始路徑：逐一計算梯度（向後相容）
+            # 後備路徑：逐一計算梯度
             u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
             v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
             w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)
@@ -523,7 +523,7 @@ class VSPINNChannelFlow(nn.Module):
                 laplacian_v = gradients['v_xx'] + gradients['v_yy'] + gradients['v_zz']
                 laplacian_w = gradients['w_xx'] + gradients['w_yy'] + gradients['w_zz']
         else:
-            # 原始路徑：逐一計算 Laplacian（向後相容）
+            # 後備路徑：逐一計算 Laplacian
             laplacian_u = self.compute_laplacian(u, coords, scaled_coords=scaled_coords)
             laplacian_v = self.compute_laplacian(v, coords, scaled_coords=scaled_coords)
             laplacian_w = self.compute_laplacian(w, coords, scaled_coords=scaled_coords)
@@ -591,7 +591,7 @@ class VSPINNChannelFlow(nn.Module):
             
             divergence = u_x + v_y + w_z
         else:
-            # 原始路徑：逐一計算梯度（向後相容）
+            # 後備路徑：逐一計算梯度
             u_grads = self.compute_gradients(u, coords, order=1, scaled_coords=scaled_coords)
             v_grads = self.compute_gradients(v, coords, order=1, scaled_coords=scaled_coords)
             w_grads = self.compute_gradients(w, coords, order=1, scaled_coords=scaled_coords)

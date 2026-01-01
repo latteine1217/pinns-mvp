@@ -25,7 +25,7 @@ from pinnx.losses.priors import PriorLossManager
 from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
 from pinnx.train.loop import TrainingLoopManager, apply_point_weights_to_loss
 from pinnx.train.loss_manager import LossManager  # type: ignore
-from pinnx.utils.normalization import InputNormalizer, NormalizationConfig, DataNormalizer
+from pinnx.utils.normalization import InputTransform, OutputTransform
 from pinnx.evals.metrics import relative_L2
 from pinnx.physics.turbulence_utils import preprocess_rans_prior, preprocess_rans_prior_from_config  # type: ignore
 from pinnx.physics.gradient_cache import GradientCache  # type: ignore
@@ -52,7 +52,7 @@ class Trainer:
         optimizer (torch.optim.Optimizer): 優化器
         lr_scheduler: 學習率調度器（可選）
         weight_scheduler: 權重調度器（可選）
-        input_normalizer (InputNormalizer): 輸入標準化器（可選）
+        input_normalizer (InputTransform): 輸入標準化器（可選）
         
         epoch (int): 當前訓練 epoch
         history (Dict[str, List]): 訓練歷史記錄
@@ -66,7 +66,7 @@ class Trainer:
         config: Dict[str, Any],
         device: torch.device,
         weighters: Optional[Dict[str, Any]] = None,
-        input_normalizer: Optional[InputNormalizer] = None,
+        input_normalizer: Optional[InputTransform] = None,
         channel_data_cache: Optional[Dict[str, Any]] = None,
         training_data: Optional[Dict[str, torch.Tensor]] = None,
     ):
@@ -105,13 +105,13 @@ class Trainer:
         logging.info(f"🔍 檢測到模型輸入維度: {self.model_input_dim}D")
         
         # ✅ TASK-008: 初始化輸出變量標準化器（傳遞 training_data 以支援自動計算統計量）
-        self.data_normalizer = DataNormalizer.from_config(config, training_data=training_data)
-        logging.info(f"📐 DataNormalizer 初始化: {self.data_normalizer}")
+        self.data_normalizer = OutputTransform.from_config(config, training_data=training_data)
+        logging.info(f"📐 OutputTransform 初始化: {self.data_normalizer}")
         
         # 🛡️ 驗證標準化統計量有效性（Risk #3 from audit）
         if not self.data_normalizer.has_valid_stats():
             raise RuntimeError(
-                "❌ DataNormalizer 統計量無效！\n"
+                "❌ OutputTransform 統計量無效！\n"
                 "   可能原因:\n"
                 "   1. 標準化類型為 'training_data_norm' 但未提供 training_data\n"
                 "   2. training_data 中某些變量為常數（std ≈ 0）\n"
@@ -328,7 +328,7 @@ class Trainer:
         Returns:
             (coords_physical, coords_norm, model_coords):
             - coords_physical: 物理坐標（用於 PDE 自動微分）
-            - coords_norm: 標準化坐標（若有 InputNormalizer）
+            - coords_norm: 標準化坐標（若有 InputTransform）
             - model_coords: 最終模型輸入（可能包含 VS-PINN 縮放）
         """
         # 1. 物理坐標（可選梯度追蹤）
@@ -746,44 +746,25 @@ class Trainer:
         self.optimizer.zero_grad()
     
         # ==================== 0. 前置準備 ====================
-        # 檢查是否為 VS-PINN（支持預拼接座標和原始座標兩種格式）
-        has_3d_coords = ('z_pde' in data_batch) or ('coords_pde_spatial' in data_batch and data_batch['coords_pde_spatial'].shape[1] >= 3)
+        # 檢查是否為 VS-PINN（標準格式：預拼接空間座標）
+        if 'coords_pde_spatial' not in data_batch:
+            raise KeyError("data_batch 缺少必要鍵: coords_pde_spatial")
+        has_3d_coords = data_batch['coords_pde_spatial'].shape[1] >= 3
         is_vs_pinn = has_3d_coords and hasattr(self.physics, 'compute_momentum_residuals')
     
         # ==================== 1. PDE 點前向傳播 ====================
         # ==================== 🚀 Wave 1-2 優化：使用預拼接空間座標 ====================
-        # 優先使用預拼接的空間座標（如果可用），否則回退到原始拼接邏輯
-        if 'coords_pde_spatial' in data_batch:
-            # 使用預拼接空間座標（已在數據載入時完成拼接）
-            coords_spatial = data_batch['coords_pde_spatial'].to(self.device).requires_grad_(True)
-            t_pde = data_batch.get('t_pde')
-            if t_pde is not None:
-                t_pde = t_pde.to(self.device).requires_grad_(True)
-            
-            # 如果需要時間維度，加上 t_pde
-            if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
-                coords_full = torch.cat([coords_spatial, t_pde], dim=1)
-            else:
-                coords_full = coords_spatial
+        # 使用預拼接空間座標（已在數據載入時完成拼接）
+        coords_spatial = data_batch['coords_pde_spatial'].to(self.device).requires_grad_(True)
+        t_pde = data_batch.get('t_pde')
+        if t_pde is not None:
+            t_pde = t_pde.to(self.device).requires_grad_(True)
+        
+        # 如果需要時間維度，加上 t_pde
+        if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
+            coords_full = torch.cat([coords_spatial, t_pde], dim=1)
         else:
-            # 向後相容：回退到原始拼接邏輯
-            x_pde, y_pde = data_batch['x_pde'], data_batch['y_pde']
-            z_pde = data_batch.get('z_pde')
-            t_pde = data_batch.get('t_pde')
-        
-            if t_pde is not None:
-                t_pde = t_pde.to(self.device).requires_grad_(True)
-        
-            # 構建輸入張量
-            spatial_components = [x_pde, y_pde]
-            if z_pde is not None:
-                spatial_components.append(z_pde)
-            coords_spatial = torch.cat(spatial_components, dim=1)
-        
-            if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
-                coords_full = torch.cat([coords_spatial, t_pde], dim=1)
-            else:
-                coords_full = coords_spatial
+            coords_full = coords_spatial
     
         # 準備模型輸入（使用實例方法）
         coords_full_physical, coords_full_norm, model_coords_pde = self._prepare_model_coords(
@@ -798,26 +779,14 @@ class Trainer:
         u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)
     
         # ==================== 2. 邊界條件點前向傳播 ====================
-        # 使用預拼接空間座標（如果可用）
-        if 'coords_bc_spatial' in data_batch:
-            coords_bc = data_batch['coords_bc_spatial'].to(self.device)
-            t_bc = data_batch.get('t_bc')
-            if t_bc is not None:
-                t_bc = t_bc.to(self.device)
-            
-            final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
-        else:
-            # 向後相容：原始拼接邏輯
-            spatial_bc = [data_batch['x_bc'], data_batch['y_bc']]
-            if 'z_bc' in data_batch:
-                spatial_bc.append(data_batch['z_bc'])
-            coords_bc = torch.cat(spatial_bc, dim=1)
+        if 'coords_bc_spatial' not in data_batch:
+            raise KeyError("data_batch 缺少必要鍵: coords_bc_spatial")
+        coords_bc = data_batch['coords_bc_spatial'].to(self.device)
+        t_bc = data_batch.get('t_bc')
+        if t_bc is not None:
+            t_bc = t_bc.to(self.device)
         
-            t_bc = data_batch.get('t_bc')
-            if t_bc is not None:
-                t_bc = t_bc.to(self.device)
-        
-            final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
+        final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
         coords_bc_physical, coords_bc_norm, model_coords_bc = self._prepare_model_coords(
             final_bc_input, require_grad=False, is_vs_pinn=is_vs_pinn
         )
@@ -828,26 +797,14 @@ class Trainer:
         u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)
     
         # ==================== 3. 感測器點前向傳播 ====================
-        # 使用預拼接空間座標（如果可用）
-        if 'coords_sensors_spatial' in data_batch:
-            coords_sensors = data_batch['coords_sensors_spatial'].to(self.device)
-            t_sensors = data_batch.get('t_sensors')
-            if t_sensors is not None:
-                t_sensors = t_sensors.to(self.device)
-            
-            final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
-        else:
-            # 向後相容：原始拼接邏輯
-            spatial_sensors = [data_batch['x_sensors'], data_batch['y_sensors']]
-            if 'z_sensors' in data_batch:
-                spatial_sensors.append(data_batch['z_sensors'])
-            coords_sensors = torch.cat(spatial_sensors, dim=1)
+        if 'coords_sensors_spatial' not in data_batch:
+            raise KeyError("data_batch 缺少必要鍵: coords_sensors_spatial")
+        coords_sensors = data_batch['coords_sensors_spatial'].to(self.device)
+        t_sensors = data_batch.get('t_sensors')
+        if t_sensors is not None:
+            t_sensors = t_sensors.to(self.device)
         
-            t_sensors = data_batch.get('t_sensors')
-            if t_sensors is not None:
-                t_sensors = t_sensors.to(self.device)
-        
-            final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
+        final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
         coords_sensors_physical, coords_sensors_norm, model_coords_sensors = self._prepare_model_coords(
             final_sensor_input, require_grad=False, is_vs_pinn=is_vs_pinn
         )
@@ -1675,22 +1632,20 @@ class Trainer:
         self.epoch = checkpoint['epoch']
         self.history = checkpoint.get('history', self.history)
         
-        # 恢復 physics 的 state_dict（VS-PINN 縮放參數等）- 向後相容舊檢查點
-        if self.physics is not None and 'physics_state_dict' in checkpoint:
-            if hasattr(self.physics, 'load_state_dict'):
-                self.physics.load_state_dict(checkpoint['physics_state_dict'])
-                logging.info(f"✅ Physics state restored: {list(checkpoint['physics_state_dict'].keys())}")
-            else:
-                logging.warning("⚠️  Physics module does not support load_state_dict(), skipping")
-        elif self.physics is not None:
-            logging.warning("⚠️  Checkpoint missing 'physics_state_dict' (old format), skipping physics restoration")
+        # 恢復 physics 的 state_dict（VS-PINN 縮放參數等）
+        if self.physics is not None:
+            if 'physics_state_dict' not in checkpoint:
+                raise KeyError("checkpoint 缺少必要欄位: physics_state_dict")
+            if not hasattr(self.physics, 'load_state_dict'):
+                raise AttributeError("Physics module does not support load_state_dict()")
+            self.physics.load_state_dict(checkpoint['physics_state_dict'])
+            logging.info(f"✅ Physics state restored: {list(checkpoint['physics_state_dict'].keys())}")
         
-        # 恢復標準化器（向後相容舊檢查點）
-        if 'normalization' in checkpoint:
-            self.data_normalizer = DataNormalizer.from_metadata(checkpoint['normalization'])
-            logging.info(f"✅ DataNormalizer restored: {self.data_normalizer}")
-        else:
-            logging.warning("⚠️  Checkpoint missing 'normalization' metadata (old format), keeping current normalizer")
+        # 恢復標準化器
+        if 'normalization' not in checkpoint:
+            raise KeyError("checkpoint 缺少必要欄位: normalization")
+        self.data_normalizer = OutputTransform.from_metadata(checkpoint['normalization'])
+        logging.info(f"✅ OutputTransform restored: {self.data_normalizer}")
         
         # 恢復 GradScaler 狀態（AMP）
         if self.use_amp:

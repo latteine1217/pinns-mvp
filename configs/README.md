@@ -15,7 +15,7 @@
 | 參數分類 | 參數 | 新預設值 |
 |---|---|---|
 | **優化器** | `optimizer.type` | `soap` |
-| **損失權重** | `data_weight`, `boundary_weight` | `10.0` |
+| **損失權重** | `data_weight`, `wall_constraint_weight` | `10.0` |
 | | `momentum_*`, `continuity_weight` | `1.0` |
 | **採樣點數** | `sampling.pde_points` | `10000` |
 | | `sampling.boundary_points` | `5000` |

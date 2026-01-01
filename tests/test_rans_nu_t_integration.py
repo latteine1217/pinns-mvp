@@ -123,11 +123,11 @@ class TestRANSNuTIntegration:
         pred.requires_grad_(True)
         
         # 測試無 nu_t
-        residuals_no_nut = ns_eq.residual_unified(coords, pred, nu_t=None)
+        residuals_no_nut = ns_eq.residual(coords, pred, nu_t=None)
         
         # 測試有 nu_t
         nu_t = torch.ones(coords.shape[0], 1) * 0.05
-        residuals_with_nut = ns_eq.residual_unified(coords, pred, nu_t=nu_t)
+        residuals_with_nut = ns_eq.residual(coords, pred, nu_t=nu_t)
         
         # 驗證殘差不同
         diff_x = torch.abs(

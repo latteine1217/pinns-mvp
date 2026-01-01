@@ -14,15 +14,8 @@ import torch
 import numpy as np
 
 # 模擬 data_batch 包含預拼接座標
-data_batch_preconcat = {
+data_batch = {
     'coords_pde_spatial': torch.randn(100, 3, requires_grad=True),  # 3D 座標
-    't_pde': None
-}
-
-data_batch_original = {
-    'x_pde': torch.randn(100, 1),
-    'y_pde': torch.randn(100, 1),
-    'z_pde': torch.randn(100, 1),  # 3D
     't_pde': None
 }
 
@@ -30,25 +23,19 @@ print("="*80)
 print("🔍 測試 is_vs_pinn 檢測邏輯")
 print("="*80)
 
-# 測試 1: 原始邏輯（Wave 1 之前）
-print("\n1️⃣ 原始邏輯: 'z_pde' in data_batch")
-print(f"   Original format: {'z_pde' in data_batch_original}")  # True
-print(f"   Preconcat format: {'z_pde' in data_batch_preconcat}")  # False ❌
-
-# 測試 2: 修復後的邏輯
-print("\n2️⃣ 修復後邏輯: has_3d_coords check")
+# 測試: 3D 座標檢測
+print("\n1️⃣ 3D 座標檢測")
 def check_has_3d_coords(data_batch):
-    return ('z_pde' in data_batch) or ('coords_pde_spatial' in data_batch and data_batch['coords_pde_spatial'].shape[1] >= 3)
+    return ('coords_pde_spatial' in data_batch and data_batch['coords_pde_spatial'].shape[1] >= 3)
 
-print(f"   Original format: {check_has_3d_coords(data_batch_original)}")  # True ✅
-print(f"   Preconcat format: {check_has_3d_coords(data_batch_preconcat)}")  # True ✅
+print(f"   Preconcat format: {check_has_3d_coords(data_batch)}")  # True ✅
 
 print("\n" + "="*80)
-print("✅ 修復成功：兩種格式都能正確檢測 3D 座標")
+print("✅ 檢測成功：預拼接座標正確識別 3D")
 print("="*80)
 
-# 測試 3: 驗證 gradient cache 計算
-print("\n3️⃣ 測試 Gradient Cache 功能")
+# 測試 2: 驗證 gradient cache 計算
+print("\n2️⃣ 測試 Gradient Cache 功能")
 from pinnx.physics.gradient_cache import GradientCache
 
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')

@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.train.checkpointing import validate_physics_before_save
-from pinnx.models.fourier_mlp import FourierMLP
+from pinnx.models.fourier_mlp import PINNNet
 
 
 class TestCheckpointPhysicsValidation:
@@ -26,7 +26,7 @@ class TestCheckpointPhysicsValidation:
         torch.manual_seed(42)
 
         # 創建簡單的測試模型
-        self.model = FourierMLP(
+        self.model = PINNNet(
             in_dim=2,
             out_dim=3,  # u, v, p
             width=32,
@@ -89,7 +89,7 @@ class TestCheckpointPhysicsValidation:
     def test_validate_physics_3d_model(self):
         """測試 3D 模型的物理驗證"""
         # 創建 3D 模型
-        model_3d = FourierMLP(
+        model_3d = PINNNet(
             in_dim=3,
             out_dim=4,  # u, v, w, p
             width=32,
@@ -186,7 +186,7 @@ class TestTrainerPhysicsValidationIntegration:
         # 此測試需要完整的 Trainer 設置
         # 由於複雜度，這裡僅測試驗證邏輯本身
 
-        model = FourierMLP(
+        model = PINNNet(
             in_dim=2, out_dim=3, width=16, depth=2,
             activation='tanh', use_fourier=False  # Updated parameter name
         ).to(self.device)

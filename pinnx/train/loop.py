@@ -240,7 +240,7 @@ class TrainingLoopManager:
         更新訓練批次（在每個 epoch 開始時調用）
         
         更新內容：
-        1. 如果有新的殘差點，更新 x_pde, y_pde (和 z_pde)
+        1. 如果有新的殘差點，更新 coords_pde_spatial（以及 t_pde）
         2. 計算並附加點權重（如果啟用）
         
         Args:
@@ -254,17 +254,14 @@ class TrainingLoopManager:
         
         # 如果有當前殘差點，更新到批次中
         if self.current_pde_points is not None:
-            dim = self.current_pde_points.shape[1]
-            
-            if dim == 2:  # 2D
-                updated_batch['x_pde'] = self.current_pde_points[:, 0:1]
-                updated_batch['y_pde'] = self.current_pde_points[:, 1:2]
-            elif dim == 3:  # 3D
-                updated_batch['x_pde'] = self.current_pde_points[:, 0:1]
-                updated_batch['y_pde'] = self.current_pde_points[:, 1:2]
-                updated_batch['z_pde'] = self.current_pde_points[:, 2:3]
-            else:
-                logger.warning(f"不支援的點維度: {dim}")
+            if 'coords_pde_spatial' not in updated_batch:
+                raise KeyError("data_batch 缺少必要鍵: coords_pde_spatial")
+            spatial_dim = updated_batch['coords_pde_spatial'].shape[1]
+            if self.current_pde_points.shape[1] < spatial_dim:
+                raise ValueError("current_pde_points 維度不足以更新 coords_pde_spatial")
+            updated_batch['coords_pde_spatial'] = self.current_pde_points[:, :spatial_dim]
+            if 't_pde' in updated_batch and updated_batch['t_pde'] is not None:
+                updated_batch['t_pde'] = self.current_pde_points[:, spatial_dim:]
         
         # 附加點權重
         point_weights = self.get_point_weights(epoch)

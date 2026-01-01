@@ -35,7 +35,7 @@ class LossManager:
     
     Attributes:
         config: 訓練配置字典
-        loss_cfg: 損失配置（從 config['loss'] 提取）
+        loss_cfg: 損失配置（從 config['losses'] 提取）
         physics: 物理方程模組
         model: PINN 模型
         device: 計算設備
@@ -70,7 +70,7 @@ class LossManager:
             losses: 額外損失函數字典（可選）
         """
         self.config = config
-        self.loss_cfg = config.get('loss', {})
+        self.loss_cfg = config.get('losses', {})
         self.physics = physics
         self.model = model
         self.device = device
@@ -156,8 +156,8 @@ class LossManager:
                     logging.info(f"ℹ️  coords_pde_physical 維度: {coords_pde_physical.shape[1]}")
                 
                 # 檢查 physics 模組是否支援時間參數
-                if hasattr(self.physics, 'residual_unified'):
-                    residual_fn = self.physics.residual_unified
+                if hasattr(self.physics, 'residual'):
+                    residual_fn = self.physics.residual
                     sig = inspect.signature(residual_fn)
                     if 'time' in sig.parameters:
                         logging.info("✅ Physics 模組支援 'time' 參數（透過 kwargs 傳遞）")
@@ -192,12 +192,20 @@ class LossManager:
                 }
             else:
                 # 標準 NS 2D 或 Kolmogorov Flow
-                residual_fn = self.physics.residual_unified
+                if not hasattr(self.physics, 'residual'):
+                    raise AttributeError("Physics module must implement residual()")
+                residual_fn = self.physics.residual
                 sig = inspect.signature(residual_fn)
                 
                 kwargs = {}
                 if 'time' in sig.parameters and t_pde is not None:
                     kwargs['time'] = t_pde
+                supports_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in sig.parameters.values()
+                )
+                if supports_kwargs or 'epoch' in sig.parameters:
+                    kwargs['epoch'] = epoch
                 
                 # 添加 RANS 湍流黏度（如果存在）
                 if 'nu_t' in sig.parameters:
@@ -746,12 +754,17 @@ class LossManager:
         w_momentum_x = scaled_weight('momentum_x', loss_cfg.get('momentum_x_weight', base_pde_weight))
         w_momentum_y = scaled_weight('momentum_y', loss_cfg.get('momentum_y_weight', base_pde_weight))
         w_momentum_z = scaled_weight('momentum_z', loss_cfg.get('momentum_z_weight', base_pde_weight)) if is_vs_pinn else 0.0
-        w_div = scaled_weight('divergence', loss_cfg.get('div_weight', loss_cfg.get('continuity_weight', base_pde_weight)))
+        w_div = scaled_weight('divergence', loss_cfg.get('continuity_weight', base_pde_weight))
         
         # 邊界條件權重
         if hasattr(self.physics, 'compute_periodic_loss'):
-            w_periodic_x = scaled_weight('periodic_x', loss_cfg.get('periodic_x_weight', base_bc_weight))
-            w_periodic_y = scaled_weight('periodic_y', loss_cfg.get('periodic_y_weight', base_bc_weight))
+            # Periodic weight handling:
+            # - Prefer explicit per-direction keys: periodic_x_weight / periodic_y_weight
+            # - Fall back to periodicity_weight if provided
+            # - Finally fall back to bc_weight (or its default)
+            periodicity_weight = loss_cfg.get('periodicity_weight', base_bc_weight)
+            w_periodic_x = scaled_weight('periodic_x', loss_cfg.get('periodic_x_weight', periodicity_weight))
+            w_periodic_y = scaled_weight('periodic_y', loss_cfg.get('periodic_y_weight', periodicity_weight))
             w_bc = 0.0
         else:
             w_periodic_x = 0.0

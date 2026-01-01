@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-生成 Leith 模型相對誤差隨雷諾數變化的 scaling 圖
+Generate Leith model error scaling using instantaneous DNS snapshots.
 
-用於論文：比較 Leith SGS 模型與 DNS 的誤差趨勢
+Compares DNS snapshot at t_eval with Leith mean field.
 """
 
 import h5py
@@ -11,23 +11,25 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import zoom
 from pathlib import Path
 
-def compute_leith_error(re_val):
-    """計算指定 Re 的 Leith vs DNS 誤差"""
+def compute_leith_error(re_val, t_eval):
+    """Compute Leith vs DNS error for a DNS snapshot at t_eval."""
     dns_file = f'data/kolmogorov_dns/dns_re{re_val}_t100.h5'
-    leith_file = f'data/lowfi/kolmogorov_rans/rans_re{re_val}_kf4_leith.h5'
-    
-    # 載入 DNS (時間平均)
+    leith_file = f'data/lowfi/kolmogorov_leith/rans_re{re_val}_kf4_leith.h5'
+
+    # Load DNS snapshot nearest to t_eval
     with h5py.File(dns_file, 'r') as f:
-        u_dns = np.array(f['u']).mean(axis=0)  # Average over time
-        v_dns = np.array(f['v']).mean(axis=0)
-    
-    # 載入 Leith
+        t = np.array(f['time'])
+        t_idx = int(np.argmin(np.abs(t - t_eval)))
+        u_dns = np.array(f['u'][t_idx])
+        v_dns = np.array(f['v'][t_idx])
+
+    # Load Leith mean field
     with h5py.File(leith_file, 'r') as f:
         u_leith = np.array(f['mean_field/u'])
         v_leith = np.array(f['mean_field/v'])
         C_L = f['metadata'].attrs.get('C_L', 0.2)
-    
-    # 插值 Leith 到 DNS 網格
+
+    # Interpolate Leith to DNS grid
     zoom_factor = u_dns.shape[0] / u_leith.shape[0]
     if zoom_factor != 1.0:
         u_leith_interp = zoom(u_leith, zoom_factor, order=3)
@@ -35,18 +37,20 @@ def compute_leith_error(re_val):
     else:
         u_leith_interp = u_leith
         v_leith_interp = v_leith
-    
-    # 計算相對 L2 誤差
+
+    # Relative L2 errors
     error_u = np.linalg.norm(u_leith_interp - u_dns) / np.linalg.norm(u_dns)
     error_v = np.linalg.norm(v_leith_interp - v_dns) / np.linalg.norm(v_dns)
-    error_overall = np.sqrt(error_u**2 + error_v**2) / np.sqrt(2)
-    
-    # 計算動能比
+    speed_dns = np.sqrt(u_dns**2 + v_dns**2)
+    speed_leith = np.sqrt(u_leith_interp**2 + v_leith_interp**2)
+    error_speed = np.linalg.norm(speed_leith - speed_dns) / np.linalg.norm(speed_dns)
+
+    # KE ratio (Leith mean vs DNS snapshot)
     ke_dns = 0.5 * (u_dns**2 + v_dns**2).mean()
     ke_leith = 0.5 * (u_leith**2 + v_leith**2).mean()
     ke_ratio = ke_leith / ke_dns
-    
-    return error_u * 100, error_v * 100, error_overall * 100, ke_ratio, C_L
+
+    return error_u * 100, error_v * 100, error_speed * 100, ke_ratio, C_L
 
 def main():
     print("=" * 70)
@@ -54,23 +58,26 @@ def main():
     print("=" * 70)
     
     # 計算各 Re 的誤差
+    t_eval = 25.0
     re_values = [50, 100, 500]
     errors_u = []
     errors_v = []
-    errors_overall = []
+    errors_speed = []
     ke_ratios = []
     C_L_values = []
     
     for re_val in re_values:
         print(f"\n計算 Re={re_val}...")
         try:
-            err_u, err_v, err_overall, ke_ratio, C_L = compute_leith_error(re_val)
+            err_u, err_v, err_speed, ke_ratio, C_L = compute_leith_error(
+                re_val, t_eval
+            )
             errors_u.append(err_u)
             errors_v.append(err_v)
-            errors_overall.append(err_overall)
+            errors_speed.append(err_speed)
             ke_ratios.append(ke_ratio)
             C_L_values.append(C_L)
-            print(f"  u: {err_u:.1f}%, v: {err_v:.1f}%, overall: {err_overall:.1f}%")
+            print(f"  u: {err_u:.1f}%, v: {err_v:.1f}%, |u|: {err_speed:.1f}%")
             print(f"  KE/DNS: {ke_ratio:.2%}, C_L: {C_L:.2f}")
         except Exception as e:
             print(f"  ❌ 錯誤: {e}")
@@ -85,17 +92,17 @@ def main():
     # 主 Y 軸：誤差
     color_u = '#1f77b4'
     color_v = '#ff7f0e'
-    color_overall = '#d62728'
+    color_speed = '#d62728'
     
     ax1.plot(re_values, errors_u, 'o-', linewidth=2.5, markersize=9, 
             label='$u$ velocity', color=color_u, alpha=0.85)
     ax1.plot(re_values, errors_v, 's-', linewidth=2.5, markersize=9, 
             label='$v$ velocity', color=color_v, alpha=0.85)
-    ax1.plot(re_values, errors_overall, '^-', linewidth=3, markersize=11, 
-            label='Overall', color=color_overall, alpha=0.9, zorder=3)
+    ax1.plot(re_values, errors_speed, '^-', linewidth=3, markersize=11,
+            label='Speed |u|', color=color_speed, alpha=0.9, zorder=3)
     
     ax1.set_xlabel('Reynolds Number', fontsize=13, fontweight='bold')
-    ax1.set_ylabel('Relative $L_2$ Error (%)', fontsize=13, 
+    ax1.set_ylabel('Relative $L_2$ Error (%)', fontsize=13,
                    fontweight='bold', color='black')
     ax1.tick_params(axis='y', labelcolor='black', labelsize=11)
     ax1.tick_params(axis='x', labelsize=11)
@@ -122,8 +129,8 @@ def main():
               edgecolor='gray', fancybox=True, shadow=False)
     
     # 簡潔標題
-    ax1.set_title('Leith Model Error Scaling with Reynolds Number' + 
-                 f' ($C_L$={C_L_values[0]:.2f})', 
+    ax1.set_title('Leith Model Error Scaling with Reynolds Number' +
+                 f' ($C_L$={C_L_values[0]:.2f}, t={t_eval:g}$)',
                  fontsize=14, fontweight='bold', pad=12)
     
     plt.tight_layout()
@@ -141,23 +148,20 @@ def main():
     print("\n" + "=" * 70)
     print("📊 Leith Model Error Summary")
     print("=" * 70)
-    print(f"{'Re':<8} {'U Err%':<10} {'V Err%':<10} {'Total%':<10} {'KE/DNS':<10} {'C_L':<8}")
+    print(f"{'Re':<8} {'U Err%':<10} {'V Err%':<10} {'|U|%':<10} {'KE/DNS':<10} {'C_L':<8}")
     print("-" * 70)
     for i, re in enumerate(re_values):
         print(f"{re:<8} {errors_u[i]:<10.1f} {errors_v[i]:<10.1f} "
-              f"{errors_overall[i]:<10.1f} {ke_ratios[i]:<10.2%} {C_L_values[i]:<8.2f}")
+              f"{errors_speed[i]:<10.1f} {ke_ratios[i]:<10.2%} {C_L_values[i]:<8.2f}")
     
     print("\n" + "=" * 70)
     print("🔍 Key Observations:")
     print("=" * 70)
-    print(f"1. Re=50:  Error {errors_overall[0]:.0f}%, KE {ke_ratios[0]:.0%} DNS")
-    print(f"   → 網格 N=128 可能過度解析（實際只需 N=64）")
-    print(f"\n2. Re=100: Error {errors_overall[1]:.0f}%, KE {ke_ratios[1]:.0%} DNS")
-    print(f"   → 轉換區異常高誤差（比 Re=500 更差）")
-    print(f"   → U-分量誤差 {errors_u[1]:.0f}% 遠高於 V-分量 {errors_v[1]:.0f}%")
-    print(f"\n3. Re=500: Error {errors_overall[2]:.0f}%, KE {ke_ratios[2]:.0%} DNS")
-    print(f"   → 嚴重能量耗散（僅 20% DNS），但誤差反而較低")
-    print(f"   → 可能因 under-resolved (N=128 不足) 導致人工黏性")
+    print(f"1. Re=50:  |U| Error {errors_speed[0]:.0f}%, KE {ke_ratios[0]:.0%} DNS")
+    print(f"\n2. Re=100: |U| Error {errors_speed[1]:.0f}%, KE {ke_ratios[1]:.0%} DNS")
+    print(f"   → 轉換區誤差較高")
+    print(f"\n3. Re=500: |U| Error {errors_speed[2]:.0f}%, KE {ke_ratios[2]:.0%} DNS")
+    print(f"   → 嚴重能量耗散（僅 20% DNS）")
     
     print("\n" + "=" * 70)
     print("💡 Conclusion:")
@@ -165,8 +169,7 @@ def main():
     print("Leith model with uniform C_L=0.20 provides:")
     print("  ✅ Stable under-prediction (KE ~ 20-56% DNS)")
     print("  ✅ Consistent behavior across Re range")
-    print("  ⚠️  Re=100 transition regime shows anomalous high error")
-    print("  ⚠️  Re=500 requires higher resolution (N=256) for accuracy")
+    print("  ⚠️  Re=100 transition regime shows elevated error")
     print("\nThis conservative baseline is suitable for PINN correction,")
     print("as stable under-prediction is preferable to unstable over-prediction.")
     print("=" * 70)

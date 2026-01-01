@@ -11,8 +11,8 @@
 主要功能:
 - LowFidelityConsistencyLoss: 核心低保真場一致性損失 (ACTIVE)
 
-=== 已棄用 (DEPRECATED - Retained for backward compatibility) ===
-以下類別保留用於向後相容,但不在當前專案範圍內:
+=== 已棄用 (DEPRECATED) ===
+以下類別不在當前專案範圍內:
 - StatisticalConsistencyLoss: 統計矩約束由 PDE residuals 處理
 - ConservationLoss: 守恆定律由 PDE residuals 處理
 - SymmetryConsistencyLoss: 對稱性由 boundary conditions 處理

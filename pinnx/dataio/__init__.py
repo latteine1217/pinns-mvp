@@ -10,7 +10,7 @@ DataIO 模組 (Simplified)
 ✅ JHTDBClient: JHTDB 資料客戶端
 ✅ ChannelFlowLoader: 通道流專用載入器
 
-=== 已棄用 (DEPRECATED - Retained for backward compatibility) ===
+=== 已棄用 (DEPRECATED) ===
 ⚠️ NetCDFReader: 專案僅支援 HDF5 格式
 ⚠️ LESReader: LES 模型不在專案範圍內
 ⚠️ DownsampledDNSProcessor: DNS 下採樣不使用

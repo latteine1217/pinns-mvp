@@ -112,7 +112,9 @@ model:
   
   # Fourier Features 配置
   fourier_features:
-    enabled: true
+    type: axis_selective
+    fourier_m: 32
+    fourier_sigma: 5.0
     axes_config:
       x: [1, 2, 4, 8]                 # x 軸頻率（循環數 K）
       y: []                           # y 軸不使用 Fourier（壁面法向）
@@ -121,7 +123,7 @@ model:
       x: 25.13                        # 域長度（用於頻率縮放）
       y: 2.0
       z: 9.42
-    trainable: false                  # 是否訓練 Fourier 權重（通常 false）
+    trainable_fourier: false          # 是否訓練 Fourier 權重（通常 false）
   
   # VS-PINN 縮放（若使用 VS-PINN）
   scaling:
@@ -245,7 +247,6 @@ lowfi_prior:
 losses:
   # 基礎權重
   data_weight: 10.0                   # 資料監督損失權重（sensor points）
-  boundary_weight: 10.0               # 邊界條件權重（壁面無滑移）
   
   # PDE 殘差權重
   momentum_x_weight: 1.0              # x 方向動量方程

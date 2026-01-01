@@ -38,7 +38,7 @@ class TestLoadConfig:
                 'use_fourier': True,
                 'fourier_m': 64,
             },
-            'loss': {
+            'losses': {
                 'data_weight': 20.0
             }
         }
@@ -51,7 +51,7 @@ class TestLoadConfig:
         
         assert result['model']['use_fourier'] is True
         assert result['model']['fourier_m'] == 64
-        assert result['loss']['data_weight'] == 20.0
+        assert result['losses']['data_weight'] == 20.0
     
     def test_load_nested_fourier_config(self, tmp_path):
         """舊版嵌套 Fourier 配置應立即拒絕"""
@@ -143,47 +143,7 @@ class TestNormalizeConfigStructure:
         assert result['model']['use_fourier'] is True  # 預設啟用
         assert result['model']['fourier_m'] == 32
         assert result['model']['fourier_sigma'] == 1.0
-        assert result['model']['fourier_trainable'] is False
-
-    def test_normalize_fourier_features_enabled_false_disables_fourier(self):
-        """舊版 fourier_features.enabled=false 應確實禁用 Fourier（向後相容）"""
-        config = {
-            'model': {
-                'fourier_features': {
-                    'enabled': False,
-                    'type': 'standard',
-                    'fourier_m': 128,
-                    'fourier_sigma': 3.0,
-                }
-            }
-        }
-
-        result = normalize_config_structure(config)
-
-        assert result['model']['use_fourier'] is False
-        assert result['model']['fourier_m'] == 0
-        assert result['model']['fourier_sigma'] == 0.0
-        # 同步修正矛盾狀態，避免 enabled=False 但 type=standard
-        assert result['model']['fourier_features']['type'] == 'disabled'
-
-    def test_normalize_fourier_features_enabled_true_uses_type(self):
-        """enabled=true 時沿用 type（預設 standard）"""
-        config = {
-            'model': {
-                'fourier_features': {
-                    'enabled': True,
-                    'type': 'standard',
-                    'fourier_m': 64,
-                    'fourier_sigma': 2.5,
-                }
-            }
-        }
-
-        result = normalize_config_structure(config)
-
-        assert result['model']['use_fourier'] is True
-        assert result['model']['fourier_m'] == 64
-        assert result['model']['fourier_sigma'] == 2.5
+        assert result['model']['trainable_fourier'] is False
     
     def test_normalize_empty_config(self):
         """測試空配置（應建立預設結構）"""
@@ -280,22 +240,6 @@ class TestDeriveLossWeights:
         assert 'prior' in adaptive_terms
         assert weights['prior'] == 0.5
     
-    def test_derive_weights_with_boundary_weight_compat(self):
-        """測試舊配置 boundary_weight 兼容性（應合併到 wall_constraint）"""
-        loss_cfg = {
-            'wall_constraint_weight': 10.0,
-            'boundary_weight': 5.0,  # 舊配置
-        }
-        
-        weights, _ = derive_loss_weights(
-            loss_cfg=loss_cfg,
-            prior_weight=0.0,
-            is_vs_pinn=False
-        )
-        
-        # boundary_weight 應加到 wall_constraint
-        assert weights['wall_constraint'] == 15.0
-    
     def test_derive_weights_from_config_priority(self):
         """測試配置優先於預設值"""
         loss_cfg = {
@@ -370,7 +314,7 @@ class TestIntegration:
             'physics': {
                 'type': 'vs_pinn_channel_flow'
             },
-            'loss': {
+            'losses': {
                 'data_weight': 50.0,
                 'momentum_z_weight': 10.0,  # VS-PINN 專屬
                 'prior_weight': 0.2,
@@ -391,7 +335,7 @@ class TestIntegration:
         # 3. 推導損失權重
         is_vs_pinn = config['physics']['type'] == 'vs_pinn_channel_flow'
         weights, adaptive_terms = derive_loss_weights(
-            loss_cfg=config['loss'],
+            loss_cfg=config['losses'],
             prior_weight=0.1,  # 應被配置覆蓋
             is_vs_pinn=is_vs_pinn
         )

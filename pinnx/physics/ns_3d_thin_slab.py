@@ -15,36 +15,33 @@ Navier-Stokes 3D Thin-Slab 方程式模組
 
 重構記錄：
 - Phase 4-3 (2025-12-15): 重構為繼承 NavierStokesBase，消除重複代碼
-- 保留向後兼容接口，所有測試無需修改
 """
 
 import torch
-import torch.autograd as autograd
 from typing import Tuple, Optional, Dict, Any, List, Union
 import warnings
 
 # Import base class
 from .base.ns_base import NavierStokesBase
 from .base.gradient_ops import compute_gradient, compute_second_derivative
-from .base.laplacian_ops import compute_laplacian
 
 # ============================================================================
-# 向後兼容梯度工具（Wrapper for Base Module）
+# 梯度工具（Wrapper for Base Module）
 # ============================================================================
 
 def compute_derivatives_3d(f: torch.Tensor, coords: torch.Tensor, 
                           order: int = 1, 
                           keep_graph: bool = True) -> torch.Tensor:
     """
-    3D梯度計算（向後兼容接口）
+    3D 梯度計算
     
-    **重構說明**: 此函數現在委派給 `gradient_ops.compute_gradient()` 和 `compute_second_derivative()`
+    **重構說明**: 此函數委派給 `gradient_ops.compute_gradient()` 和 `compute_second_derivative()`
     
     Args:
         f: 待微分的標量場 [batch_size, 1]
         coords: 座標變數 [batch_size, 3] -> [x, y, z]
         order: 微分階數 (1 或 2)
-        keep_graph: 是否保持計算圖（向後兼容參數，已無使用）
+        keep_graph: 是否保持計算圖
         
     Returns:
         一階: [batch_size, 3] -> [∂f/∂x, ∂f/∂y, ∂f/∂z]
@@ -73,91 +70,6 @@ def compute_derivatives_3d(f: torch.Tensor, coords: torch.Tensor,
     else:
         raise ValueError(f"不支援的微分階數: {order}")
 
-
-def compute_laplacian_3d(f: torch.Tensor, coords: torch.Tensor, 
-                        stabilize: bool = True,
-                        max_value: float = 1e4) -> torch.Tensor:
-    """
-    計算3D拉普拉斯算子（向後兼容接口）
-    
-    **重構說明**: 此函數現在委派給 `laplacian_ops.compute_laplacian()`
-    
-    Args:
-        f: 標量場 [batch_size, 1]
-        coords: 座標 [batch_size, 3] -> [x, y, z]
-        stabilize: 是否啟用數值穩定性保護
-        max_value: 梯度裁剪上限（防止爆炸）
-        
-    Returns:
-        拉普拉斯算子結果 [batch_size, 1]
-    """
-    laplacian_result = compute_laplacian(f, coords, spatial_dim=3)
-    
-    # 數值穩定性保護
-    if stabilize:
-        laplacian_result = torch.clamp(laplacian_result, -max_value, max_value)
-    
-    return laplacian_result
-
-
-# ============================================================================
-# 3D NS 方程殘差計算（向後兼容接口）
-# ============================================================================
-
-def ns_residual_3d_thin_slab(
-    coords: torch.Tensor,
-    pred: torch.Tensor,
-    nu: float,
-    time: Optional[torch.Tensor] = None,
-    source_term: Optional[torch.Tensor] = None,
-    stabilize: bool = True
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    計算3D不可壓縮Navier-Stokes方程殘差（thin-slab配置）
-    
-    **重構說明**: 此函數現在是 `NSEquations3DThinSlab.residual()` 的向後兼容 wrapper
-    
-    控制方程（壁面單位）：
-    ∂u/∂t + u∂u/∂x + v∂u/∂y + w∂u/∂z = -∂p/∂x + (1/Re_τ)∇²u  (x-動量)
-    ∂v/∂t + u∂v/∂x + v∂v/∂y + w∂v/∂z = -∂p/∂y + (1/Re_τ)∇²v  (y-動量)
-    ∂w/∂t + u∂w/∂x + v∂w/∂y + w∂w/∂z = -∂p/∂z + (1/Re_τ)∇²w  (z-動量)
-    ∂u/∂x + ∂v/∂y + ∂w/∂z = 0                                  (連續方程)
-    
-    Args:
-        coords: 空間座標 [batch_size, 3] -> [x, y, z]
-        pred: 預測結果 [batch_size, 4] -> [u, v, w, p]
-        nu: 運動黏度 (= 1/Re_τ for normalized equations)
-        time: 時間座標 [batch_size, 1] (非定常流場)
-        source_term: 外部源項 [batch_size, 3] -> [S_x, S_y, S_z] (可選)
-        stabilize: 是否啟用數值穩定性保護
-        
-    Returns:
-        Tuple of (x_momentum_residual, y_momentum_residual, 
-                  z_momentum_residual, continuity_residual)
-        每個都是 [batch_size, 1]
-        
-    物理一致性檢查：
-    - 量綱一致性: ✅ (已驗證於 physics_review.md)
-    - 邊界條件兼容: ✅ 週期性(x,z) + 無滑移(y)
-    - 守恆定律: ✅ 質量、動量守恆
-    """
-    # 創建臨時實例（使用傳入的參數）
-    ns_eq = NSEquations3DThinSlab(viscosity=nu, stabilize=stabilize)
-    
-    # 解析速度和壓力
-    velocity = pred[:, :3]  # [u, v, w]
-    pressure = pred[:, 3:4]  # [p]
-    
-    # 調用類方法
-    res_dict = ns_eq.residual(coords, velocity, pressure, time=time, source_term=source_term)
-    
-    # 返回與原接口一致的元組
-    return (
-        res_dict['momentum_x'],
-        res_dict['momentum_y'],
-        res_dict['momentum_z'],
-        res_dict['continuity']
-    )
 
 
 # ============================================================================
@@ -415,16 +327,18 @@ def check_conservation_3d(coords: torch.Tensor,
     """
     results = {}
     
-    # 構建完整預測張量 [u, v, w, p]
-    pred = torch.cat([velocity, pressure], dim=1)
-    
+    ns_eq = NSEquations3DThinSlab(viscosity=nu)
+    res_dict = ns_eq.residual(coords, velocity, pressure)
+
     # 質量守恆（連續方程）
-    _, _, _, continuity = ns_residual_3d_thin_slab(coords, pred, nu)
+    continuity = res_dict['continuity']
     mass_conservation_error = torch.mean(torch.abs(continuity))
     results['mass_conservation'] = mass_conservation_error
     
     # 動量守恆（動量方程殘差）
-    mom_x, mom_y, mom_z, _ = ns_residual_3d_thin_slab(coords, pred, nu)
+    mom_x = res_dict['momentum_x']
+    mom_y = res_dict['momentum_y']
+    mom_z = res_dict['momentum_z']
     momentum_conservation_error = torch.mean(
         torch.abs(mom_x) + torch.abs(mom_y) + torch.abs(mom_z)
     )
@@ -617,7 +531,7 @@ class NSEquations3DThinSlab(NavierStokesBase):
                           velocity: torch.Tensor,
                           pressure: torch.Tensor) -> Dict[str, Any]:
         """
-        守恆律檢查（向後兼容接口）
+        守恆律檢查
         
         Returns:
             包含數值指標與通過/失敗判定的字典
@@ -665,7 +579,7 @@ class NSEquations3DThinSlab(NavierStokesBase):
             {'dissipation': ε, 'enstrophy': Ω², 'q_criterion': Q}
         """
         return {
-            'dissipation': compute_dissipation_3d(coords, velocity, self.viscosity),
+            'dissipation': compute_dissipation_3d(coords, velocity, self.nu),
             'enstrophy': compute_enstrophy_3d(coords, velocity),
             'q_criterion': compute_q_criterion_3d(coords, velocity)
         }
@@ -682,47 +596,3 @@ class NSEquations3DThinSlab(NavierStokesBase):
         })
         return base_props
     
-    # ========================================================================
-    # 向後兼容屬性（測試期望 self.viscosity 存在）
-    # ========================================================================
-    @property
-    def viscosity(self) -> float:
-        """向後兼容: 返回 self.nu"""
-        return self.nu
-    
-    @property
-    def density(self) -> float:
-        """向後兼容: 返回 self.rho"""
-        return self.rho
-
-
-# ============================================================================
-# Backward Compatibility Aliases
-# ============================================================================
-
-def _deprecation_warning(old_name: str, new_name: str):
-    """發出棄用警告"""
-    warnings.warn(
-        f"{old_name} is deprecated and will be removed in v2.0. "
-        f"Please use {new_name} instead.",
-        DeprecationWarning,
-        stacklevel=3
-    )
-
-# 向後相容別名：NavierStokes3DThinSlab → NSEquations3DThinSlab
-class NavierStokes3DThinSlab(NSEquations3DThinSlab):
-    """
-    [DEPRECATED] Backward compatibility wrapper for NSEquations3DThinSlab.
-    
-    This class will be removed in v2.0. Please update your code to use
-    NSEquations3DThinSlab instead:
-    
-        # Old (deprecated)
-        from pinnx.physics.ns_3d_thin_slab import NavierStokes3DThinSlab
-        
-        # New (recommended)
-        from pinnx.physics.ns_3d_thin_slab import NSEquations3DThinSlab
-    """
-    def __init__(self, *args, **kwargs):
-        _deprecation_warning('NavierStokes3DThinSlab', 'NSEquations3DThinSlab')
-        super().__init__(*args, **kwargs)

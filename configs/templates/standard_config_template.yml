@@ -148,7 +148,6 @@ model:
     type: "standard"                  # Fourier 類型 (預設: "standard" | "axis_selective" | "disabled")
     fourier_m: 32                     # Fourier 模數 (預設: 32, 0=禁用)
     fourier_sigma: 5.0                # Fourier 標準差 (預設: 5.0)
-    enabled: true                     # 啟用 Fourier (預設: true, 向後相容)
     trainable_fourier: false          # Fourier kernel 是否可訓練 (jaxpi 對齊: true)
     fourier_use_2pi: true             # 是否乘上 2π (jaxpi 對齊: false)
     
@@ -238,7 +237,6 @@ physics:
 losses:
   # === 基礎損失權重 (Base Loss Weights) ===
   data_weight: 10.0                   # 資料損失權重 (預設: 10.0)
-  boundary_weight: 10.0               # 邊界損失權重 (預設: 10.0)
   
   # === PDE 損失權重 (PDE Loss Weights) ===
   momentum_x_weight: 1.0              # x 動量方程權重 (預設: 2.0)
@@ -429,9 +427,9 @@ output:
 #     momentum_y_weight: 0.3
 # 
 # 程式碼行為：
-#   - loss_manager.py (line 73): config.get('losses', config.get('loss', {}))
+#   - loss_manager.py (line 73): config.get('losses', {})
 #   - trainer.py (line 98):      config.get('losses', {})
-#   - factory.py (line 867):     config.get('losses', config.get('loss', {}))
+#   - factory.py (line 867):     config.get('losses', {})
 # 
 # 結論：統一使用 'losses' (複數) 作為標準鍵名
 # 

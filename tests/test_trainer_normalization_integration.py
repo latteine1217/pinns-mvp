@@ -27,7 +27,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pinnx.train.trainer import Trainer
-from pinnx.utils.normalization import DataNormalizer
+from pinnx.utils.normalization import OutputTransform
 from pinnx.losses.weighting import GradNormWeighter
 
 
@@ -129,24 +129,33 @@ def basic_config():
 @pytest.fixture
 def training_data_physical(device):
     """物理空間的訓練資料（JHTDB 範圍）"""
+    x_pde = torch.rand(50, 1, device=device) * 25.13
+    y_pde = torch.rand(50, 1, device=device) * 2.0 - 1.0
+    z_pde = torch.rand(50, 1, device=device) * 9.42
+    coords_pde_spatial = torch.cat([x_pde, y_pde, z_pde], dim=1)
+
+    x_bc = torch.rand(20, 1, device=device) * 25.13
+    y_bc = torch.cat([
+        torch.ones(10, 1, device=device),
+        -torch.ones(10, 1, device=device),
+    ], dim=0)
+    z_bc = torch.rand(20, 1, device=device) * 9.42
+    coords_bc_spatial = torch.cat([x_bc, y_bc, z_bc], dim=1)
+
+    x_sensors = torch.rand(10, 1, device=device) * 25.13
+    y_sensors = torch.rand(10, 1, device=device) * 2.0 - 1.0
+    z_sensors = torch.rand(10, 1, device=device) * 9.42
+    coords_sensors_spatial = torch.cat([x_sensors, y_sensors, z_sensors], dim=1)
+
     return {
         # PDE 殘差點（物理座標）
-        'x_pde': torch.rand(50, 1, device=device) * 25.13,
-        'y_pde': torch.rand(50, 1, device=device) * 2.0 - 1.0,
-        'z_pde': torch.rand(50, 1, device=device) * 9.42,
+        'coords_pde_spatial': coords_pde_spatial,
         
         # 壁面邊界（y=±1）
-        'x_bc': torch.rand(20, 1, device=device) * 25.13,
-        'y_bc': torch.cat([
-            torch.ones(10, 1, device=device),
-            -torch.ones(10, 1, device=device),
-        ], dim=0),
-        'z_bc': torch.rand(20, 1, device=device) * 9.42,
+        'coords_bc_spatial': coords_bc_spatial,
         
         # 感測點（物理量）
-        'x_sensors': torch.rand(10, 1, device=device) * 25.13,
-        'y_sensors': torch.rand(10, 1, device=device) * 2.0 - 1.0,
-        'z_sensors': torch.rand(10, 1, device=device) * 9.42,
+        'coords_sensors_spatial': coords_sensors_spatial,
         
         # 真實值（物理量，JHTDB 統計範圍）
         'u_sensors': torch.randn(10, 1, device=device) * 4.59 + 9.92,
@@ -268,11 +277,7 @@ class TestValidationDenormalization:
         )
         
         # 準備驗證資料（設置 validation_data 屬性）
-        val_coords = torch.cat([
-            training_data_physical['x_sensors'],
-            training_data_physical['y_sensors'],
-            training_data_physical['z_sensors']
-        ], dim=1)
+        val_coords = training_data_physical['coords_sensors_spatial']
         
         val_targets = torch.cat([
             training_data_physical['u_sensors'],
@@ -303,11 +308,7 @@ class TestValidationDenormalization:
         )
         
         # 準備驗證資料
-        val_coords = torch.cat([
-            training_data_physical['x_sensors'],
-            training_data_physical['y_sensors'],
-            training_data_physical['z_sensors']
-        ], dim=1)
+        val_coords = training_data_physical['coords_sensors_spatial']
         
         val_targets = torch.cat([
             training_data_physical['u_sensors'],
@@ -443,21 +444,28 @@ class TestBoundaryConditions:
         )
         
         # 準備壁面點（y=±1）
+        x_pde = torch.rand(10, 1, device=device) * 25.13
+        y_pde = torch.rand(10, 1, device=device) * 2.0 - 1.0
+        z_pde = torch.rand(10, 1, device=device) * 9.42
+        coords_pde_spatial = torch.cat([x_pde, y_pde, z_pde], dim=1)
+
+        x_bc = torch.rand(20, 1, device=device) * 25.13
+        y_bc = torch.cat([
+            torch.ones(10, 1, device=device),      # 上壁面
+            -torch.ones(10, 1, device=device),     # 下壁面
+        ], dim=0)
+        z_bc = torch.rand(20, 1, device=device) * 9.42
+        coords_bc_spatial = torch.cat([x_bc, y_bc, z_bc], dim=1)
+
+        x_sensors = torch.rand(5, 1, device=device) * 25.13
+        y_sensors = torch.rand(5, 1, device=device) * 2.0 - 1.0
+        z_sensors = torch.rand(5, 1, device=device) * 9.42
+        coords_sensors_spatial = torch.cat([x_sensors, y_sensors, z_sensors], dim=1)
+
         wall_data = {
-            'x_pde': torch.rand(10, 1, device=device) * 25.13,
-            'y_pde': torch.rand(10, 1, device=device) * 2.0 - 1.0,
-            'z_pde': torch.rand(10, 1, device=device) * 9.42,
-            
-            'x_bc': torch.rand(20, 1, device=device) * 25.13,
-            'y_bc': torch.cat([
-                torch.ones(10, 1, device=device),      # 上壁面
-                -torch.ones(10, 1, device=device),     # 下壁面
-            ], dim=0),
-            'z_bc': torch.rand(20, 1, device=device) * 9.42,
-            
-            'x_sensors': torch.rand(5, 1, device=device) * 25.13,
-            'y_sensors': torch.rand(5, 1, device=device) * 2.0 - 1.0,
-            'z_sensors': torch.rand(5, 1, device=device) * 9.42,
+            'coords_pde_spatial': coords_pde_spatial,
+            'coords_bc_spatial': coords_bc_spatial,
+            'coords_sensors_spatial': coords_sensors_spatial,
             'u_sensors': torch.randn(5, 1, device=device) * 4.59 + 9.92,
             'v_sensors': torch.randn(5, 1, device=device) * 0.33,
             'w_sensors': torch.randn(5, 1, device=device) * 3.87,

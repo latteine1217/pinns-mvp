@@ -92,21 +92,22 @@ def mock_physics() -> VSPINNChannelFlow:
 def sample_batch(device: torch.device) -> Dict[str, torch.Tensor]:
     """生成樣本訓練批次"""
     batch_size = 64
+    coords_pde_spatial = torch.randn(batch_size, 3, device=device)
+    coords_bc_spatial = torch.cat([
+        torch.randn(32, 1, device=device),
+        torch.ones(32, 1, device=device),
+        torch.randn(32, 1, device=device),
+    ], dim=1)
+    coords_sensors_spatial = torch.randn(16, 3, device=device)
     return {
         # PDE 點
-        'x_pde': torch.randn(batch_size, 1, device=device),
-        'y_pde': torch.randn(batch_size, 1, device=device),
-        'z_pde': torch.randn(batch_size, 1, device=device),
+        'coords_pde_spatial': coords_pde_spatial,
         
         # 邊界點
-        'x_bc': torch.randn(32, 1, device=device),
-        'y_bc': torch.ones(32, 1, device=device),  # 壁面 y=1
-        'z_bc': torch.randn(32, 1, device=device),
+        'coords_bc_spatial': coords_bc_spatial,
         
         # 感測點
-        'x_sensors': torch.randn(16, 1, device=device),
-        'y_sensors': torch.randn(16, 1, device=device),
-        'z_sensors': torch.randn(16, 1, device=device),
+        'coords_sensors_spatial': coords_sensors_spatial,
         'u_sensors': torch.randn(16, 1, device=device),
         'v_sensors': torch.randn(16, 1, device=device),
         'w_sensors': torch.randn(16, 1, device=device),
@@ -209,16 +210,17 @@ def test_amp_numerical_stability(minimal_config, simple_model, mock_physics):
     # 生成測試批次（固定 seed）
     torch.manual_seed(42)
     batch_size = 32
+    coords_pde_spatial = torch.randn(batch_size, 3)
+    coords_bc_spatial = torch.cat([
+        torch.randn(16, 1),
+        torch.ones(16, 1),
+        torch.randn(16, 1),
+    ], dim=1)
+    coords_sensors_spatial = torch.randn(8, 3)
     sample_batch = {
-        'x_pde': torch.randn(batch_size, 1),
-        'y_pde': torch.randn(batch_size, 1),
-        'z_pde': torch.randn(batch_size, 1),
-        'x_bc': torch.randn(16, 1),
-        'y_bc': torch.ones(16, 1),
-        'z_bc': torch.randn(16, 1),
-        'x_sensors': torch.randn(8, 1),
-        'y_sensors': torch.randn(8, 1),
-        'z_sensors': torch.randn(8, 1),
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
         'u_sensors': torch.randn(8, 1) * 0.1,
         'v_sensors': torch.randn(8, 1) * 0.01,
         'w_sensors': torch.randn(8, 1) * 0.01,
@@ -232,11 +234,7 @@ def test_amp_numerical_stability(minimal_config, simple_model, mock_physics):
         
         # 對比策略：比較模型輸出（前向傳播）而非 loss
         # 因為 step() 內部有隨機性（梯度計算、優化器更新等）
-        test_input = torch.cat([
-            sample_batch['x_pde'], 
-            sample_batch['y_pde'], 
-            sample_batch['z_pde']
-        ], dim=1)
+        test_input = sample_batch['coords_pde_spatial']
         
         output_fp32 = trainer_fp32.model(test_input)
         output_amp = trainer_amp.model(test_input)
@@ -310,16 +308,17 @@ def test_amp_memory_saving_gpu(minimal_config, simple_model, mock_physics):
     
     # 生成較大批次測試
     batch_size = 1024
+    coords_pde_spatial = torch.randn(batch_size, 3, device=device)
+    coords_bc_spatial = torch.cat([
+        torch.randn(512, 1, device=device),
+        torch.ones(512, 1, device=device),
+        torch.randn(512, 1, device=device),
+    ], dim=1)
+    coords_sensors_spatial = torch.randn(128, 3, device=device)
     sample_batch = {
-        'x_pde': torch.randn(batch_size, 1, device=device),
-        'y_pde': torch.randn(batch_size, 1, device=device),
-        'z_pde': torch.randn(batch_size, 1, device=device),
-        'x_bc': torch.randn(512, 1, device=device),
-        'y_bc': torch.ones(512, 1, device=device),
-        'z_bc': torch.randn(512, 1, device=device),
-        'x_sensors': torch.randn(128, 1, device=device),
-        'y_sensors': torch.randn(128, 1, device=device),
-        'z_sensors': torch.randn(128, 1, device=device),
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
         'u_sensors': torch.randn(128, 1, device=device),
         'v_sensors': torch.randn(128, 1, device=device),
         'w_sensors': torch.randn(128, 1, device=device),
@@ -383,16 +382,17 @@ def test_amp_speed_impact_gpu(minimal_config, simple_model, mock_physics):
     
     # 生成測試批次
     batch_size = 512
+    coords_pde_spatial = torch.randn(batch_size, 3, device=device)
+    coords_bc_spatial = torch.cat([
+        torch.randn(256, 1, device=device),
+        torch.ones(256, 1, device=device),
+        torch.randn(256, 1, device=device),
+    ], dim=1)
+    coords_sensors_spatial = torch.randn(64, 3, device=device)
     sample_batch = {
-        'x_pde': torch.randn(batch_size, 1, device=device),
-        'y_pde': torch.randn(batch_size, 1, device=device),
-        'z_pde': torch.randn(batch_size, 1, device=device),
-        'x_bc': torch.randn(256, 1, device=device),
-        'y_bc': torch.ones(256, 1, device=device),
-        'z_bc': torch.randn(256, 1, device=device),
-        'x_sensors': torch.randn(64, 1, device=device),
-        'y_sensors': torch.randn(64, 1, device=device),
-        'z_sensors': torch.randn(64, 1, device=device),
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
         'u_sensors': torch.randn(64, 1, device=device),
         'v_sensors': torch.randn(64, 1, device=device),
         'w_sensors': torch.randn(64, 1, device=device),
@@ -495,16 +495,17 @@ def test_amp_does_not_break_existing_training(minimal_config, simple_model, mock
     )
     
     # 訓練應能正常執行
+    coords_pde_spatial = torch.randn(32, 3)
+    coords_bc_spatial = torch.cat([
+        torch.randn(16, 1),
+        torch.ones(16, 1),
+        torch.randn(16, 1),
+    ], dim=1)
+    coords_sensors_spatial = torch.randn(8, 3)
     batch = {
-        'x_pde': torch.randn(32, 1),
-        'y_pde': torch.randn(32, 1),
-        'z_pde': torch.randn(32, 1),
-        'x_bc': torch.randn(16, 1),
-        'y_bc': torch.ones(16, 1),
-        'z_bc': torch.randn(16, 1),
-        'x_sensors': torch.randn(8, 1),
-        'y_sensors': torch.randn(8, 1),
-        'z_sensors': torch.randn(8, 1),
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
         'u_sensors': torch.randn(8, 1),
         'v_sensors': torch.randn(8, 1),
         'w_sensors': torch.randn(8, 1),

@@ -9,7 +9,7 @@ import yaml
 import sys
 sys.path.insert(0, '/Users/latteine/Documents/coding/pinns-mvp')
 
-from pinnx.models.fourier_mlp import FourierMLP
+from pinnx.models.fourier_mlp import PINNNet
 from pinnx.physics.kolmogorov_flow_2d import KolmogorovFlow2D
 
 # 載入檢查點
@@ -21,7 +21,7 @@ with open('configs/kolmogorov_2d_baseline.yml', 'r') as f:
     config = yaml.safe_load(f)
 
 # 重建模型
-model = FourierMLP(
+model = PINNNet(
     input_dim=2,
     output_dim=3,
     hidden_layers=[256] * 6,

@@ -23,7 +23,7 @@ from pinnx.losses.priors import PriorLossManager
 from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
 from pinnx.losses import MeanConstraintLoss  # ⭐ Phase 6C: 均值約束損失
 from pinnx.train.trainer import Trainer  # 新的訓練器類
-from pinnx.utils.normalization import InputNormalizer, NormalizationConfig
+from pinnx.utils.normalization import InputTransform, InputNormConfig, OutputTransform
 
 # 從重構模組導入配置、檢查點與工廠函數
 from pinnx.train.config_loader import (
@@ -307,8 +307,26 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     x_pde = x_pde[sort_idx].reshape(-1, 1)
     y_pde = y_pde[sort_idx].reshape(-1, 1)
     
+    x_bc = torch.empty(0, 1, device=device)
+    y_bc = torch.empty(0, 1, device=device)
+    x_ic = torch.empty(0, 1, device=device)
+    y_ic = torch.empty(0, 1, device=device)
+    t_bc = torch.empty(0, 1, device=device)
+    t_ic = torch.empty(0, 1, device=device)
+
+    coords_pde_spatial = torch.cat([x_pde, y_pde], dim=1)
+    coords_bc_spatial = torch.empty(0, 2, device=device)
+    coords_sensors_spatial = torch.cat([x_sensors, y_sensors], dim=1)
+    coords_ic_spatial = torch.empty(0, 2, device=device)
+
     # 構建訓練資料字典
     training_data = {
+        # 預拼接座標
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
+        'coords_ic_spatial': coords_ic_spatial,
+
         # 感測點 (固定位置 x 時間序列)
         'x_sensors': x_sensors,
         'y_sensors': y_sensors,
@@ -323,15 +341,15 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
         't_pde': t_pde,
         
         # 邊界條件 (Kolmogorov 是週期性的，這裡留空或設為空集合)
-        'x_bc': torch.empty(0, 1, device=device),
-        'y_bc': torch.empty(0, 1, device=device),
-        't_bc': torch.empty(0, 1, device=device),
+        'x_bc': x_bc,
+        'y_bc': y_bc,
+        't_bc': t_bc,
         
         # 初始條件 (t=0 全場快照，可選)
         # 若需要強 IC 約束，可在此添加 t=t_start 的全場數據
-        'x_ic': torch.empty(0, 1, device=device),
-        'y_ic': torch.empty(0, 1, device=device),
-        't_ic': torch.empty(0, 1, device=device),
+        'x_ic': x_ic,
+        'y_ic': y_ic,
+        't_ic': t_ic,
     }
     
     logging.info(f"✅ Kolmogorov 訓練數據準備完成 (Fixed Sensors):")
@@ -526,15 +544,18 @@ def load_rans_prior_data(
 def _collect_coordinate_tensors(training_data: Dict[str, torch.Tensor]) -> List[torch.Tensor]:
     prefixes = ['sensors', 'pde', 'bc', 'ic']
     coords: List[torch.Tensor] = []
-    axes = ['x', 'y', 'z']
     for prefix in prefixes:
-        components = []
-        for axis in axes:
-            key = f'{axis}_{prefix}'
-            if key in training_data and training_data[key].numel() > 0:
-                components.append(training_data[key])
-        if components:
-            coords.append(torch.cat(components, dim=1))
+        spatial_key = f'coords_{prefix}_spatial'
+        if spatial_key not in training_data:
+            continue
+        spatial = training_data[spatial_key]
+        if not isinstance(spatial, torch.Tensor) or spatial.numel() == 0:
+            continue
+        t_key = f't_{prefix}'
+        if t_key in training_data and training_data[t_key] is not None and training_data[t_key].numel() > 0:
+            coords.append(torch.cat([spatial, training_data[t_key]], dim=1))
+        else:
+            coords.append(spatial)
     return coords
 
 
@@ -543,7 +564,7 @@ def create_input_normalizer(
     training_data: Dict[str, torch.Tensor],
     is_vs_pinn: bool,
     device: torch.device
-) -> Optional[InputNormalizer]:
+) -> Optional[InputTransform]:
     scaling_cfg = config.get('model', {}).get('scaling', {})
     norm_type = scaling_cfg.get('input_norm', 'none')
     if norm_type is None:
@@ -570,12 +591,12 @@ def create_input_normalizer(
             bounds_tensor = torch.tensor(bounds, dtype=torch.float32, device=device)
 
     feature_range = tuple(scaling_cfg.get('input_norm_range', [-1.0, 1.0]))
-    config_obj = NormalizationConfig(
+    config_obj = InputNormConfig(
         norm_type=norm_type,
         feature_range=(float(feature_range[0]), float(feature_range[1])),
         bounds=bounds_tensor
     )
-    normalizer = InputNormalizer(config_obj)
+    normalizer = InputTransform(config_obj)
 
     coord_tensors = _collect_coordinate_tensors(training_data)
     if coord_tensors:
@@ -1040,31 +1061,15 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         if loss_cfg.get('adaptive_weighting', False) and weighters['staged'] is not None:
             logging.info("⚠️  adaptive_weighting disabled (using staged_weights)")
     
-    # 因果權重器
+    # 因果權重器（jaxpi: chunk-based, 僅依時間排序）
     if loss_cfg.get('causal_weighting', False):
-        # 🆕 從配置中提取時間範圍（支援 Kolmogorov 和其他數據源）
-        time_range = config.get('data', {}).get('kolmogorov_config', {}).get('time_range')
-        if time_range is None:
-            # 回退：嘗試從 JHTDB 配置提取
-            time_range = config.get('data', {}).get('jhtdb_config', {}).get('time_range')
-        if time_range is None:
-            # 默認範圍
-            time_range = [0.0, 1.0]
-            logging.warning(
-                f"⚠️ Causal weighting enabled but no time_range found in config, "
-                f"using default {time_range}"
-            )
-        
         weighters['causal'] = CausalWeighter(
             epsilon=loss_cfg.get('causal_eps', 1.0),
-            n_time_bins=loss_cfg.get('causal_n_bins', 10),
-            t_min=float(time_range[0]),
-            t_max=float(time_range[1])
+            n_time_bins=loss_cfg.get('causal_n_bins', 10)
         )
         logging.info(
             f"✅ Causal weighting enabled: ε={loss_cfg.get('causal_eps', 1.0):.2f}, "
-            f"bins={loss_cfg.get('causal_n_bins', 10)}, "
-            f"t_range=[{time_range[0]}, {time_range[1]}]"
+            f"chunks={loss_cfg.get('causal_n_bins', 10)}"
         )
     else:
         weighters['causal'] = None
@@ -1273,7 +1278,14 @@ def prepare_mock_training_data(config: Dict[str, Any], device: torch.device) -> 
     
     logging.info(f"Mock training data generated: K={K} sensors, {sampling['pde_points']} PDE points, {n_bc} BC points")
     
+    coords_pde_spatial = torch.cat([x_pde, y_pde], dim=1)
+    coords_bc_spatial = torch.cat([x_bc, y_bc], dim=1)
+    coords_sensors_spatial = torch.cat([x_sensors, y_sensors], dim=1)
+
     training_dict = {
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
         'x_pde': x_pde, 'y_pde': y_pde, 't_pde': t_pde,
         'x_bc': x_bc, 'y_bc': y_bc, 't_bc': t_bc,
         'x_sensors': x_sensors, 'y_sensors': y_sensors, 't_sensors': t_sensors,
@@ -1791,7 +1803,7 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
     # 注意：我們只拼接空間座標，不包含時間維度
     # 原因：(1) 大多數配置是穩態（時間維度不需要）
     #      (2) 時間維度是否加入取決於 model_input_dim，應由 trainer 決定
-    #      (3) 保持向後相容性
+    #      (3) 保持時間維度由 trainer 決定
     
     # 構建 PDE 點預拼接座標（僅空間維度）
     spatial_pde = [x_pde, y_pde]
@@ -1829,11 +1841,17 @@ def prepare_channel_flow_training_data(config: Dict[str, Any], device: torch.dev
         'coords_sensors_spatial': coords_sensors_spatial,
         'coords_ic_spatial': coords_ic_spatial,
         
-        # 原始分量座標（向後相容）
-        'x_pde': x_pde, 'y_pde': y_pde, 'z_pde': z_pde, 't_pde': t_pde,  # 🆕 添加 z_pde
-        'x_bc': x_bc, 'y_bc': y_bc, 'z_bc': z_bc, 't_bc': t_bc,  # 🆕 添加 z_bc
-        'x_sensors': x_sensors, 'y_sensors': y_sensors, 'z_sensors': z_sensors, 't_sensors': t_sensors,  # 🆕 添加 z_sensors
-        'x_ic': x_ic, 'y_ic': y_ic, 'z_ic': z_ic, 't_ic': t_ic,  # 🆕 添加 z_ic
+        # 分量座標（供內部工具使用）
+        'x_pde': x_pde, 'y_pde': y_pde, 'z_pde': z_pde,
+        'x_bc': x_bc, 'y_bc': y_bc, 'z_bc': z_bc,
+        'x_sensors': x_sensors, 'y_sensors': y_sensors, 'z_sensors': z_sensors,
+        'x_ic': x_ic, 'y_ic': y_ic, 'z_ic': z_ic,
+
+        # 時間座標（可選）
+        't_pde': t_pde,
+        't_bc': t_bc,
+        't_sensors': t_sensors,
+        't_ic': t_ic,
         
         # 感測器數據
         'u_sensors': u_sensors,
@@ -2048,9 +2066,9 @@ def main():
                         if isinstance(data, np.ndarray):
                             logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
                     
-                    from pinnx.utils.normalization import DataNormalizer
+                    from pinnx.utils.normalization import OutputTransform
                     # 🔧 FIX: 傳遞 variable_order 參數以確保正確的變量順序
-                    trainer.data_normalizer = DataNormalizer.from_data(
+                    trainer.data_normalizer = OutputTransform.from_data(
                         normalization_data,
                         norm_type='training_data_norm',
                         variable_order=variable_order  # 🔧 FIX: 明確指定 variable_order
@@ -2117,7 +2135,7 @@ def main():
                         f"Required variables: {variable_order}\n"
                         f"Missing in training_data: {missing_vars}\n"
                         f"\n"
-                        f"Please ensure your data preparation function creates all required '{var}_sensors' fields.\n"
+                        f"Please ensure your data preparation function creates all required '<var>_sensors' fields.\n"
                         f"For 2D problems, set normalization.variable_order: ['u', 'v', 'p']\n"
                         f"For 3D problems, set normalization.variable_order: ['u', 'v', 'w', 'p']\n"
                     )
@@ -2131,9 +2149,9 @@ def main():
                     if isinstance(data, np.ndarray):
                         logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
                 
-                from pinnx.utils.normalization import DataNormalizer
+                from pinnx.utils.normalization import OutputTransform
                 # 🔧 FIX: 傳遞 variable_order 參數以確保正確的變量順序
-                trainer.data_normalizer = DataNormalizer.from_data(
+                trainer.data_normalizer = OutputTransform.from_data(
                     normalization_data,
                     norm_type='training_data_norm',
                     variable_order=variable_order  # 🔧 FIX: 明確指定 variable_order

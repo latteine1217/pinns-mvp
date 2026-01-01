@@ -27,20 +27,16 @@ Kolmogorov flow 是二維不可壓縮流體在週期性域上受正弦強迫驅�
 重構改進：
 - 繼承 NavierStokesBase 以消除重複代碼
 - 保留 Kolmogorov 特有的強迫項計算
-- 保持完整向後兼容性
 
 作者：PINNs-MVP 團隊
 日期：2025-12-15 (重構)
 """
 
 import torch
-import torch.nn as nn
-from typing import Tuple, Dict, Optional, Any, Union
+from typing import Tuple, Dict, Optional, Any
 import numpy as np
-import logging
 
 from .base.ns_base import NavierStokesBase
-from .base.gradient_ops import compute_gradient
 
 
 # ==============================================================================
@@ -56,7 +52,6 @@ class KolmogorovFlow2D(NavierStokesBase):
     - Kolmogorov 特有的正弦強迫項：f_x = A sin(k_f y)
     - 雙週期性邊界條件
     - 雷諾數計算（Kolmogorov 定義）
-    - 向後兼容的 API
 
     物理特性：
     - 雙週期性邊界條件（x, y 方向）
@@ -117,18 +112,9 @@ class KolmogorovFlow2D(NavierStokesBase):
         self.register_buffer('amplitude', torch.tensor(float(self.forcing_params['amplitude'])))
         self.register_buffer('wavenumber', torch.tensor(float(self.forcing_params['wavenumber'])))
         
-        # 將物理參數也轉為 tensor 以保持向後兼容（測試期望 tensor 類型）
-        # 保存原始 float 值，刪除 float 屬性，並創建 tensor buffer
-        nu_value = float(self.nu)
-        rho_value = float(self.rho)
-        delattr(self, 'nu')
-        delattr(self, 'rho')
-        self.register_buffer('nu', torch.tensor(nu_value))
-        self.register_buffer('rho', torch.tensor(rho_value))
-
-        # === 損失歸一化參數（向後兼容） ===
+        # === 損失歸一化參數 ===
         self.loss_normalizers: Dict[str, float] = {}
-        self.normalize_losses = True
+        self.normalize_losses = (loss_config or {}).get('normalize_losses', True)
         self.warmup_epochs = (loss_config or {}).get('warmup_epochs', 5)
         self.normalizer_momentum = 0.9
         
@@ -171,7 +157,7 @@ class KolmogorovFlow2D(NavierStokesBase):
 
     def compute_reynolds_number(self) -> float:
         """
-        計算 Kolmogorov Flow 的雷諾數（向後兼容方法）
+        計算 Kolmogorov Flow 的雷諾數
 
         Returns:
             Re: 雷諾數（無量綱）
@@ -206,39 +192,6 @@ class KolmogorovFlow2D(NavierStokesBase):
         forcing = self.amplitude * torch.sin(self.wavenumber * y)
         return forcing
 
-    def compute_gradients(
-        self,
-        field: torch.Tensor,
-        coords: torch.Tensor,
-        order: int = 1
-    ) -> Dict[str, torch.Tensor]:
-        """
-        計算物理場對物理座標的梯度（向後兼容方法）
-
-        Args:
-            field: 標量場 [batch, 1]（如 u, v, p）
-            coords: 物理坐標 [batch, 2] = [x, y]
-            order: 微分階數 (1 或 2)
-
-        Returns:
-            梯度字典：
-                order=1 → {'x': ∂f/∂x, 'y': ∂f/∂y}
-                order=2 → {'xx': ∂²f/∂x², 'yy': ∂²f/∂y²}
-        """
-        if order == 1:
-            grad_x = self.compute_gradient(field, coords, component=0)
-            grad_y = self.compute_gradient(field, coords, component=1)
-            return {'x': grad_x, 'y': grad_y}
-
-        elif order == 2:
-            from .base.gradient_ops import compute_second_derivative
-            grad_xx = compute_second_derivative(field, coords, component=0)
-            grad_yy = compute_second_derivative(field, coords, component=1)
-            return {'xx': grad_xx, 'yy': grad_yy}
-
-        else:
-            raise ValueError(f"不支持的微分階數: {order}")
-
     def compute_laplacian(
         self,
         field: torch.Tensor,
@@ -246,7 +199,7 @@ class KolmogorovFlow2D(NavierStokesBase):
         stabilize: bool = False
     ) -> torch.Tensor:
         """
-        計算 Laplacian（向後兼容方法，委派給基類）
+        計算 Laplacian（委派給基類）
 
         Args:
             field: 標量場 [batch, 1]
@@ -330,42 +283,19 @@ class KolmogorovFlow2D(NavierStokesBase):
         if self.merge_momentum:
             # 將 X/Y 動量合併為向量範數：||[residual_x, residual_y]||
             momentum_vector = torch.stack([residual_x, residual_y], dim=-1)  # [N, 2]
-            return {
+            residuals = {
                 'momentum': momentum_vector,
                 'continuity': continuity
             }
         else:
             # 標準模式：分開返回
-            return {
+            residuals = {
                 'momentum_x': residual_x,
                 'momentum_y': residual_y,
                 'continuity': continuity
             }
 
-    def residual_unified(
-        self,
-        coords: torch.Tensor,
-        predictions: torch.Tensor,
-        time: Optional[torch.Tensor] = None,
-        epoch: int = 0,
-        **kwargs
-    ) -> Dict[str, torch.Tensor]:
-        """
-        統一的殘差計算接口（向後兼容）
-
-        Args:
-            coords: [batch, 2] = [x, y] 物理坐標
-            predictions: [batch, 3] = [u, v, p] 預測值
-            time: [batch, 1] 時間坐標（可選）
-            epoch: 當前訓練 epoch（用於損失歸一化）
-
-        Returns:
-            殘差字典 {'momentum_x', 'momentum_y', 'continuity'}
-        """
-        # 調用新接口
-        residuals = self.residual(coords, predictions, time, **kwargs)
-
-        # 損失歸一化（向後兼容功能）
+        epoch = kwargs.get('epoch', 0)
         if self.normalize_losses and epoch >= self.warmup_epochs:
             residuals = self._normalize_residuals(residuals, epoch)
 
@@ -377,7 +307,7 @@ class KolmogorovFlow2D(NavierStokesBase):
         epoch: int
     ) -> Dict[str, torch.Tensor]:
         """
-        損失歸一化（向後兼容功能）
+        損失歸一化
 
         使用移動平均更新歸一化因子
         """
@@ -463,7 +393,7 @@ class KolmogorovFlow2D(NavierStokesBase):
         }
 
     # ========================================================================
-    # Backward Compatibility Methods (for tests)
+    # Residual Helpers
     # ========================================================================
 
     def compute_momentum_residuals(
@@ -472,7 +402,7 @@ class KolmogorovFlow2D(NavierStokesBase):
         predictions: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        向後兼容：計算動量方程殘差
+        計算動量方程殘差
 
         Args:
             coords: [batch, 2] = [x, y]
@@ -487,32 +417,6 @@ class KolmogorovFlow2D(NavierStokesBase):
             'momentum_y': residuals['momentum_y']
         }
 
-    def compute_continuity_residual(
-        self,
-        coords: torch.Tensor,
-        velocity_fields_or_predictions: Union[list, torch.Tensor]
-    ) -> torch.Tensor:
-        """
-        向後兼容：計算連續方程殘差（支持兩種調用方式）
-
-        Args:
-            coords: [batch, 2] = [x, y]
-            velocity_fields_or_predictions: 
-                - list [u, v]: 速度分量列表（基類接口）
-                - tensor [batch, 3]: [u, v, p]（測試接口）
-
-        Returns:
-            continuity: [batch, 1]
-        """
-        # 判斷輸入類型
-        if isinstance(velocity_fields_or_predictions, list):
-            # 基類接口：直接調用
-            return super().compute_continuity_residual(coords, velocity_fields_or_predictions)
-        else:
-            # 測試接口：先解析再調用
-            u, v, _ = self.parse_velocity_pressure(velocity_fields_or_predictions)
-            return super().compute_continuity_residual(coords, [u, v])
-
     def compute_periodic_loss(
         self,
         coords: torch.Tensor,
@@ -520,7 +424,7 @@ class KolmogorovFlow2D(NavierStokesBase):
         boundary_band_width: float = 0.1
     ) -> Dict[str, torch.Tensor]:
         """
-        向後兼容：計算週期邊界損失
+        計算週期邊界損失
 
         Args:
             coords: [batch, 2] = [x, y]
@@ -575,84 +479,24 @@ class KolmogorovFlow2D(NavierStokesBase):
         
         return {'periodic_x': loss_x, 'periodic_y': loss_y}
 
-    def compute_kinetic_energy(
-        self,
-        predictions: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        向後兼容：計算動能
-
-        Args:
-            predictions: [batch, 3] = [u, v, p]
-
-        Returns:
-            kinetic_energy: 標量 tensor
-        """
-        u, v, _ = self.parse_velocity_pressure(predictions)
-        ke = 0.5 * (u**2 + v**2).mean()
-        return ke
-
-    def normalize_loss_dict(
-        self,
-        loss_dict: Dict[str, torch.Tensor],
-        epoch: int
-    ) -> Dict[str, torch.Tensor]:
-        """
-        向後兼容：損失字典歸一化
-
-        Args:
-            loss_dict: 損失字典
-            epoch: 當前 epoch
-
-        Returns:
-            歸一化後的損失字典
-        """
-        if epoch < self.warmup_epochs:
-            # Warmup 階段：收集統計但不歸一化
-            for key, loss in loss_dict.items():
-                rms = torch.sqrt(torch.mean(loss ** 2)).item()
-                if key not in self.loss_normalizers:
-                    self.loss_normalizers[key] = rms
-                else:
-                    self.loss_normalizers[key] = (
-                        self.normalizer_momentum * self.loss_normalizers[key] +
-                        (1 - self.normalizer_momentum) * rms
-                    )
-            return loss_dict  # 返回原值
-        else:
-            # 訓練階段：歸一化
-            normalized = {}
-            for key, loss in loss_dict.items():
-                normalizer = self.loss_normalizers.get(key, 1.0)
-                normalizer = max(normalizer, 1e-8)  # 避免除零
-                normalized[key] = loss / normalizer
-            return normalized
-
     def get_physics_info(self) -> Dict:
         """
-        返回物理元數據（覆寫基類方法，向後兼容測試格式）
+        返回物理元數據（覆寫基類方法）
 
         Returns:
             物理信息字典
         """
         base_info = super().get_physics_info()
         
-        # 向後兼容：添加測試期望的鍵
         base_info.update({
             'equation': 'Kolmogorov Flow (2D NS with forcing)',
             'forcing_amplitude': float(self.amplitude.item()),
             'forcing_wavenumber': float(self.wavenumber.item()),
             'boundary_conditions': 'double_periodic',  # 測試期望這個值
             'reynolds_definition': 'Kolmogorov: Re = sqrt(A) * (2π/k)^1.5 / ν',
-            
-            # 測試期望的格式
-            'forcing_parameters': {
-                'amplitude': float(self.amplitude.item()),
-                'wavenumber': float(self.wavenumber.item())
-            },
             'physics_parameters': {
-                'nu': float(self.nu.item()),
-                'rho': float(self.rho.item()),
+                'nu': float(self.nu),
+                'rho': float(self.rho),
                 'Reynolds_number': self.compute_reynolds_number()
             },
             'domain_bounds': self.domain_bounds,  # 測試期望這個鍵
@@ -666,50 +510,33 @@ class KolmogorovFlow2D(NavierStokesBase):
 
 
 # ==============================================================================
-# Factory Function (Backward Compatibility)
+# Factory Function
 # ==============================================================================
 
 def create_kolmogorov_flow_2d(
-    forcing_amplitude: float = None,
-    forcing_wavenumber: int = None,
+    forcing_amplitude: float = 1.0,
+    forcing_wavenumber: int = 4,
     nu: float = 0.01,
     rho: float = 1.0,
     domain_x: Tuple[float, float] = (0.0, 2.0 * np.pi),
     domain_y: Tuple[float, float] = (0.0, 2.0 * np.pi),
-    loss_config: Optional[Dict[str, Any]] = None,
-    # Backward compatibility aliases
-    A: float = None,
-    k_f: int = None,
-    **kwargs
+    loss_config: Optional[Dict[str, Any]] = None
 ) -> KolmogorovFlow2D:
     """
-    工廠函數：創建 Kolmogorov Flow 2D 求解器（向後兼容）
+    工廠函數：創建 Kolmogorov Flow 2D 求解器
 
     Args:
-        forcing_amplitude: 強迫振幅 A（或使用舊參數名 A）
-        forcing_wavenumber: 強迫波數 k_f（或使用舊參數名 k_f）
+        forcing_amplitude: 強迫振幅 A
+        forcing_wavenumber: 強迫波數 k_f
         nu: 動力黏度
         rho: 密度
         domain_x: x 域邊界 (x_min, x_max)
         domain_y: y 域邊界 (y_min, y_max)
         loss_config: 損失配置
-        A: (DEPRECATED) 舊參數名，等同於 forcing_amplitude
-        k_f: (DEPRECATED) 舊參數名，等同於 forcing_wavenumber
 
     Returns:
         KolmogorovFlow2D 實例
     """
-    # Backward compatibility: 支援舊參數名
-    if A is not None:
-        forcing_amplitude = A
-    if k_f is not None:
-        forcing_wavenumber = k_f
-    
-    # 設定預設值
-    if forcing_amplitude is None:
-        forcing_amplitude = 1.0
-    if forcing_wavenumber is None:
-        forcing_wavenumber = 4
     
     forcing_params = {
         'amplitude': forcing_amplitude,

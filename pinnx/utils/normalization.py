@@ -329,7 +329,7 @@ class OutputTransform:
             ValueError: 若 metadata 格式不正確
         """
         # 驗證必要欄位
-        required_fields = ['norm_type', 'means', 'stds']
+        required_fields = ['norm_type', 'variable_order', 'means', 'stds']
         missing_fields = [f for f in required_fields if f not in metadata]
         if missing_fields:
             raise KeyError(
@@ -340,7 +340,7 @@ class OutputTransform:
         # 建立 OutputNormConfig
         config = OutputNormConfig(
             norm_type=metadata['norm_type'],
-            variable_order=metadata.get('variable_order', cls.DEFAULT_VAR_ORDER.copy()),
+            variable_order=list(metadata['variable_order']),
             means=metadata['means'],
             stds=metadata['stds'],
             params=metadata.get('params', {})
@@ -359,7 +359,7 @@ class OutputTransform:
         training_data: Optional[Dict[str, torch.Tensor]] = None
     ) -> 'OutputTransform':
         """
-        從配置創建 OutputTransform（向後兼容 Trainer）
+        從配置創建 OutputTransform
         
         Args:
             config: 完整配置字典
@@ -1144,17 +1144,3 @@ class UnifiedNormalizer:
                     coord_tensors.append(torch.from_numpy(val).float())
         return coord_tensors
 
-
-# ===================================================================
-# 向後兼容：保留舊接口
-# ===================================================================
-
-# 為了不破壞現有代碼，提供別名
-InputNormalizer = InputTransform
-DataNormalizer = OutputTransform
-
-# 配置兼容
-NormalizationConfig = InputNormConfig
-
-# Note (2025-10-20): create_normalizer_from_checkpoint() 已移除
-# 請使用 UnifiedNormalizer.from_metadata() 或 OutputTransform(OutputNormConfig(...))

@@ -139,12 +139,14 @@ class FourierFeatures(nn.Module):
     """
     
     def __init__(self, in_dim: int, m: int = 32, sigma: float = 5.0, 
-                 multiscale: bool = False, trainable: bool = False):
+                 multiscale: bool = False, trainable: bool = False,
+                 use_2pi: bool = True):
         super().__init__()
         self.in_dim = in_dim
         self.m = m
         self.sigma = sigma
         self.multiscale = multiscale
+        self.use_2pi = use_2pi
         self.out_dim = 2 * m
         
         # 生成 Fourier 係數矩陣
@@ -168,12 +170,14 @@ class FourierFeatures(nn.Module):
         Returns:
             [batch_size, 2*m] Fourier 特徵 [cos(z), sin(z)]
         """
-        z = 2.0 * math.pi * x @ self.B
+        z = x @ self.B
+        if self.use_2pi:
+            z = 2.0 * math.pi * z
         return torch.cat([torch.cos(z), torch.sin(z)], dim=-1)
     
     def extra_repr(self) -> str:
         return f'in_dim={self.in_dim}, m={self.m}, sigma={self.sigma:.2f}, ' \
-               f'multiscale={self.multiscale}, out_dim={self.out_dim}'
+               f'multiscale={self.multiscale}, use_2pi={self.use_2pi}, out_dim={self.out_dim}'
 
 
 class SineActivation(nn.Module):
@@ -377,6 +381,101 @@ class ResBlock(nn.Module):
         return self.alpha * out + (1 - self.alpha) * x
 
 
+class PirateBlock(nn.Module):
+    """
+    PirateNet-style gated residual block.
+
+    h = f(x); h = h*u + (1-h)*v; repeat twice, then alpha-blended skip.
+    """
+
+    def __init__(
+        self,
+        width: int,
+        activation: str = 'tanh',
+        use_rwf: bool = False,
+        rwf_scale_mean: float = 1.0,
+        rwf_scale_std: float = 0.1,
+        sine_omega_0: float = 1.0,
+        use_layer_norm: bool = False,
+        dropout: float = 0.0,
+        alpha_init: float = 0.0,
+    ):
+        super().__init__()
+
+        if use_rwf:
+            self.fc1 = RWFLinear(width, width, scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
+            self.fc2 = RWFLinear(width, width, scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
+            self.fc3 = RWFLinear(width, width, scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
+        else:
+            self.fc1 = nn.Linear(width, width)
+            self.fc2 = nn.Linear(width, width)
+            self.fc3 = nn.Linear(width, width)
+
+        self.use_layer_norm = use_layer_norm
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else None
+
+        if activation == 'tanh':
+            self.activation = nn.Tanh()
+        elif activation == 'swish':
+            self.activation = nn.SiLU()
+        elif activation == 'gelu':
+            self.activation = nn.GELU()
+        elif activation == 'sine':
+            self.activation = SineActivation(omega_0=sine_omega_0)
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+
+        self.layer_norm1 = nn.LayerNorm(width) if use_layer_norm else None
+        self.layer_norm2 = nn.LayerNorm(width) if use_layer_norm else None
+        self.layer_norm3 = nn.LayerNorm(width) if use_layer_norm else None
+        self.alpha = nn.Parameter(torch.tensor(float(alpha_init)))
+
+        self._init_weights(activation, sine_omega_0)
+
+    def _init_weights(self, activation: str, sine_omega_0: float) -> None:
+        for linear in (self.fc1, self.fc2, self.fc3):
+            if isinstance(linear, RWFLinear):
+                if activation == 'sine':
+                    linear.apply_siren_init(sine_omega_0, is_first=False)
+                continue
+
+            if activation in ['swish', 'relu', 'elu']:
+                nn.init.kaiming_normal_(linear.weight, nonlinearity='relu')
+            elif activation == 'sine':
+                n_in = linear.weight.shape[1]
+                bound = np.sqrt(6 / n_in) / sine_omega_0
+                nn.init.uniform_(linear.weight, -bound, bound)
+                nn.init.zeros_(linear.bias)
+            else:
+                nn.init.xavier_normal_(linear.weight)
+                nn.init.zeros_(linear.bias)
+
+    def forward(self, x: torch.Tensor, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.fc1(x)
+        if self.layer_norm1 is not None:
+            out = self.layer_norm1(out)
+        out = self.activation(out)
+        out = out * u + (1 - out) * v
+
+        out = self.fc2(out)
+        if self.layer_norm2 is not None:
+            out = self.layer_norm2(out)
+        out = self.activation(out)
+        out = out * u + (1 - out) * v
+
+        out = self.fc3(out)
+        if self.layer_norm3 is not None:
+            out = self.layer_norm3(out)
+        out = self.activation(out)
+
+        if self.dropout is not None:
+            out = self.dropout(out)
+
+        return self.alpha * out + (1 - self.alpha) * identity
+
+
 class PINNNet(nn.Module):
     """
     基於 Fourier 特徵的 PINN 神經網路 (統一版)
@@ -400,6 +499,7 @@ class PINNNet(nn.Module):
                  activation: str = 'tanh',   # 激活函數
                  use_fourier: bool = True,   # 是否使用 Fourier 特徵
                  trainable_fourier: bool = False, # Fourier 係數是否可訓練
+                 fourier_use_2pi: bool = True, # Fourier 映射是否乘 2π
                  use_residual: bool = False, # 是否使用殘差連接
                  use_layer_norm: bool = False, # 是否使用層歸一化
                  use_input_projection: bool = False, # 是否使用輸入投影層
@@ -410,7 +510,7 @@ class PINNNet(nn.Module):
                  sine_omega_0: float = 1.0, # Sine 激活函數頻率參數 (較保守以配合 Fourier 特徵)
                  fourier_normalize_input: bool = False, # 🔧 是否在 Fourier 前標準化輸入（修復 VS-PINN 縮放問題）
                  input_scale_factors: Optional[torch.Tensor] = None, # 🔧 輸入縮放因子 [N_x, N_y, N_z]（用於 VS-PINN）
-                 block_type: str = 'dense', # 🔧 block 型式：dense（預設）或 resnet（兩層殘差+adaptive alpha）
+                 block_type: str = 'dense', # 🔧 block 型式：dense / resnet / piratenet
                  res_block_alpha_init: float = 0.0): # 🔧 resnet block 的 alpha 初值（對齊 PirateNet 論文）
         
         super().__init__()
@@ -426,6 +526,7 @@ class PINNNet(nn.Module):
         self._fourier_scale: Optional[torch.Tensor] = None
         self._fourier_feature_range: Optional[torch.Tensor] = None
         self._fourier_range: Optional[torch.Tensor] = None
+        self._pirate_activation: Optional[nn.Module] = None
         
         # 🔧 註冊輸入縮放因子（用於 VS-PINN 的標準化補償）
         if input_scale_factors is not None:
@@ -438,7 +539,8 @@ class PINNNet(nn.Module):
             self.fourier = FourierFeatures(
                 in_dim, fourier_m, fourier_sigma, 
                 multiscale=fourier_multiscale,
-                trainable=trainable_fourier
+                trainable=trainable_fourier,
+                use_2pi=fourier_use_2pi
             )
             input_features = self.fourier.out_dim
         else:
@@ -457,7 +559,7 @@ class PINNNet(nn.Module):
         
         # 隱藏層
         layers = []
-        if block_type not in ('dense', 'resnet'):
+        if block_type not in ('dense', 'resnet', 'piratenet'):
             raise ValueError(f"Unsupported block_type: {block_type}")
 
         if block_type == 'dense':
@@ -476,7 +578,7 @@ class PINNNet(nn.Module):
                     sine_omega_0=sine_omega_0
                 ))
                 current_dim = width
-        else:
+        elif block_type == 'resnet':
             # resnet: enforce uniform width and residual skip with adaptive alpha
             if current_dim != width:
                 # align dimensions if input projection disabled
@@ -497,6 +599,45 @@ class PINNNet(nn.Module):
                     dropout=dropout,
                     alpha_init=res_block_alpha_init,
                 ))
+        else:
+            # piratenet: enforce uniform width and gated residual blocks
+            if current_dim != width:
+                proj = nn.Linear(current_dim, width)
+                nn.init.xavier_normal_(proj.weight)
+                nn.init.zeros_(proj.bias)
+                layers.append(proj)
+                current_dim = width
+
+            if activation == 'tanh':
+                self._pirate_activation = nn.Tanh()
+            elif activation == 'swish':
+                self._pirate_activation = nn.SiLU()
+            elif activation == 'gelu':
+                self._pirate_activation = nn.GELU()
+            elif activation == 'sine':
+                self._pirate_activation = SineActivation(omega_0=sine_omega_0)
+            else:
+                raise ValueError(f"Unsupported activation: {activation}")
+
+            if use_rwf:
+                self.pirate_u = RWFLinear(width, width, scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
+                self.pirate_v = RWFLinear(width, width, scale_mean=rwf_scale_mean, scale_std=rwf_scale_std)
+            else:
+                self.pirate_u = nn.Linear(width, width)
+                self.pirate_v = nn.Linear(width, width)
+
+            for _ in range(depth):
+                layers.append(PirateBlock(
+                    width=width,
+                    activation=activation,
+                    use_rwf=use_rwf,
+                    rwf_scale_mean=rwf_scale_mean,
+                    rwf_scale_std=rwf_scale_std,
+                    sine_omega_0=sine_omega_0,
+                    use_layer_norm=use_layer_norm,
+                    dropout=dropout,
+                    alpha_init=res_block_alpha_init,
+                ))
         
         self.hidden_layers = nn.ModuleList(layers)
         
@@ -504,7 +645,7 @@ class PINNNet(nn.Module):
         self.output_layer = nn.Linear(width, out_dim)
 
         # 輸出層特殊初始化：較小的權重，有助於訓練穩定
-        residual_enabled = use_residual or block_type == 'resnet'
+        residual_enabled = use_residual or block_type in ('resnet', 'piratenet')
         output_gain = 0.01 if residual_enabled else 0.1
         nn.init.xavier_normal_(self.output_layer.weight, gain=output_gain)
         nn.init.zeros_(self.output_layer.bias)
@@ -545,8 +686,17 @@ class PINNNet(nn.Module):
             h = F.silu(h)  # Swish activation
         
         # 隱藏層前向傳播
+        pirate_u = pirate_v = None
+        if self.block_type == 'piratenet':
+            if self._pirate_activation is None:
+                raise RuntimeError("PirateNet activation not initialized.")
+            pirate_u = self._pirate_activation(self.pirate_u(h))
+            pirate_v = self._pirate_activation(self.pirate_v(h))
+
         for layer in self.hidden_layers:
-            if isinstance(layer, ResBlock):
+            if isinstance(layer, PirateBlock):
+                h = layer(h, pirate_u, pirate_v)
+            elif isinstance(layer, ResBlock):
                 h = layer(h)
             elif isinstance(layer, nn.Linear):
                 h = layer(h)
@@ -780,6 +930,7 @@ def create_pinn_model(config: dict) -> nn.Module:
             activation=config.get('activation', 'tanh'),
             use_fourier=config.get('use_fourier', True),
             trainable_fourier=config.get('trainable_fourier', False),
+            fourier_use_2pi=config.get('fourier_use_2pi', True),
             use_residual=config.get('use_residual', False),
             use_layer_norm=config.get('use_layer_norm', False),
             use_input_projection=config.get('use_input_projection', False),
@@ -940,65 +1091,3 @@ if __name__ == "__main__":
 
     print("\n✅ 所有測試通過！")
 
-
-# ============================================================================
-# Backward Compatibility Aliases (Deprecated)
-# ============================================================================
-
-# 向後兼容別名：舊測試可能仍在使用這些名稱
-# 注意：這些別名已棄用，建議更新代碼使用 PINNNet 或 create_pinn_model()
-
-import warnings
-
-def _deprecated_alias(old_name: str, new_name: str):
-    """創建棄用警告的包裝器"""
-    warnings.warn(
-        f"{old_name} is deprecated and will be removed in a future version. "
-        f"Use {new_name} instead.",
-        DeprecationWarning,
-        stacklevel=3
-    )
-
-# FourierMLP 別名（舊名稱）
-class FourierMLP(PINNNet):
-    """
-    已棄用：使用 PINNNet 代替
-    
-    這是向後兼容別名，將在未來版本中移除。
-    """
-    def __init__(self, *args, **kwargs):
-        _deprecated_alias('FourierMLP', 'PINNNet')
-        super().__init__(*args, **kwargs)
-
-# MultiScalePINNNet 別名（舊名稱）
-class MultiScalePINNNet(PINNNet):
-    """
-    已棄用：使用 create_pinn_model() 配置 fourier_multiscale=True 代替
-    
-    這是向後兼容別名，將在未來版本中移除。
-    
-    遷移示例：
-    ```python
-    # 舊代碼
-    model = MultiScalePINNNet(in_dim=3, out_dim=4, ...)
-    
-    # 新代碼
-    config = {
-        'model': {
-            'type': 'fourier_vs_mlp',
-            'in_dim': 3,
-            'out_dim': 4,
-            'fourier_multiscale': True,
-            ...
-        }
-    }
-    model = create_pinn_model(config)
-    ```
-    """
-    def __init__(self, *args, **kwargs):
-        _deprecated_alias('MultiScalePINNNet', 'create_pinn_model() with fourier_multiscale=True')
-        # MultiScalePINNNet 實際上就是開啟 fourier_multiscale 的 PINNNet
-        if 'fourier_config' not in kwargs:
-            kwargs['fourier_config'] = {}
-        kwargs['fourier_config']['multiscale'] = True
-        super().__init__(*args, **kwargs)

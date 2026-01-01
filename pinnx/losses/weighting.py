@@ -335,12 +335,14 @@ class CausalWeighter:
     基於 Wang et al. (2022) "Respecting Causality is all you need for training Physics-Informed Neural Networks"
     
     核心機制：
-    w(t) = exp(-epsilon * integral_0^t (Loss(tau) d_tau))
+    w_k = exp(-epsilon * sum_{i<k} mean(L_i))
+    其中 L_i 是第 i 個時間分塊的平均殘差平方。
     """
     
     def __init__(self, 
                  epsilon: float = 1.0, 
-                 n_time_bins: int = 10,
+                 n_time_bins: int = None,
+                 num_chunks: int = 10,
                  t_min: float = 0.0,
                  t_max: float = 1.0,
                  causality_strength: float = None, # 兼容舊接口
@@ -351,12 +353,13 @@ class CausalWeighter:
         """
         Args:
             epsilon: 因果容差參數，控制權重衰減速度。值越大，對早期時間的強制性越強。
-            n_time_bins: 時間分窗數量。用於近似時間積分。
+            n_time_bins: 舊接口，對應 num_chunks（保留相容性）。
+            num_chunks: 時間分塊數量（jaxpi 設定）。
             t_min: 時間域下界
             t_max: 時間域上界
         """
         self.epsilon = epsilon if causality_strength is None else causality_strength
-        self.n_time_bins = n_time_bins
+        self.num_chunks = int(n_time_bins) if n_time_bins is not None else int(num_chunks)
         self.t_min = t_min
         self.t_max = t_max
         
@@ -366,68 +369,83 @@ class CausalWeighter:
         self.decay_rate = decay_rate or temporal_decay or 0.1
 
     def compute_weights(self, 
-                       pde_residuals: torch.Tensor, 
+                       pde_losses: torch.Tensor, 
                        time_coords: torch.Tensor) -> torch.Tensor:
         """
         計算每個採樣點的因果權重
         
         Args:
-            pde_residuals: PDE 殘差平方值 [N, 1] 或 [N] (未取平均)
+            pde_losses: 每點的 PDE 損失值 [N, 1] 或 [N] (通常為殘差平方和)
             time_coords: 對應的時間坐標 [N, 1] 或 [N]
             
         Returns:
             weights: 與輸入形狀相同的權重張量 [N, 1]
         """
         # 形狀驗證
-        if pde_residuals.numel() != time_coords.numel():
+        if pde_losses.numel() != time_coords.numel():
             raise ValueError(
-                f"Shape mismatch in CausalWeighter: pde_residuals {pde_residuals.shape}, "
+                f"Shape mismatch in CausalWeighter: pde_losses {pde_losses.shape}, "
                 f"time_coords {time_coords.shape}"
             )
 
         # 確保輸入是展平的
-        loss_vals = pde_residuals.detach().flatten()  # [N], 阻斷梯度
+        loss_vals = pde_losses.detach().flatten()  # [N], 阻斷梯度
         t_vals = time_coords.detach().flatten()       # [N]
         
         device = loss_vals.device
         
-        # 1. 確定每個點所屬的 bin 索引
-        t_range = self.t_max - self.t_min
-        if t_range < 1e-6: t_range = 1.0
+        # 1. 依時間排序（jaxpi：只依時間排序，數值大小不影響權重）
+        t_sorted, sort_idx = torch.sort(t_vals)
+        loss_sorted = loss_vals[sort_idx]
+        n_points = loss_sorted.numel()
+        if n_points == 0:
+            return loss_vals.new_zeros((0, 1))
         
-        t_norm = (t_vals - self.t_min) / t_range
-        t_norm = torch.clamp(t_norm, 0.0, 0.9999)
+        num_chunks = max(1, min(self.num_chunks, n_points))
+        chunk_size = n_points // num_chunks
+        if chunk_size == 0:
+            chunk_size = 1
+            num_chunks = n_points
         
-        bin_indices = (t_norm * self.n_time_bins).long() # [N]
+        usable = chunk_size * num_chunks
+        loss_main = loss_sorted[:usable].view(num_chunks, chunk_size)
         
-        # 2. 計算每個 bin 的平均損失
-        bin_loss_sum = torch.zeros(self.n_time_bins, device=device)
-        bin_counts = torch.zeros(self.n_time_bins, device=device)
+        # 2. 計算每個 chunk 的平均損失
+        chunk_means = torch.mean(loss_main, dim=1)  # [num_chunks]
         
-        bin_loss_sum.index_add_(0, bin_indices, loss_vals)
-        bin_counts.index_add_(0, bin_indices, torch.ones_like(loss_vals))
+        # 3. 建立因果矩陣 M (strict lower triangular)
+        causal_matrix = torch.tril(
+            torch.ones((num_chunks, num_chunks), device=device),
+            diagonal=-1
+        )
         
-        bin_means = bin_loss_sum / (bin_counts + 1e-8) # [n_bins]
+        # 4. 計算 chunk 權重
+        chunk_weights = torch.exp(-self.epsilon * (causal_matrix @ chunk_means))
         
-        # 3. 計算累積損失 (近似積分)
-        cumulative_loss = torch.cumsum(bin_means, dim=0)
+        # 5. 映射回每個採樣點
+        weights_sorted = torch.empty_like(loss_sorted)
+        weights_sorted[:usable] = chunk_weights.repeat_interleave(chunk_size)
+        if usable < n_points:
+            weights_sorted[usable:] = chunk_weights[-1]
         
-        # 4. Shift cumulative sum: [L0, L0+L1, ...] -> [0, L0, L0+L1, ...]
-        # 這樣 bin 0 的權重為 1.0 (exp(0))
-        cumulative_prev = torch.roll(cumulative_loss, 1)
-        cumulative_prev[0] = 0.0
+        # 6. 還原到原本順序
+        weights = torch.empty_like(weights_sorted)
+        weights[sort_idx] = weights_sorted
         
-        # 5. 計算 Bin 權重
-        bin_weights = torch.exp(-self.epsilon * cumulative_prev)
-        
-        # 6. 映射回每個採樣點
-        point_weights = bin_weights[bin_indices]
-        
-        return point_weights.unsqueeze(1) # [N, 1]
+        return weights.unsqueeze(1) # [N, 1]
 
     # 兼容舊接口
     def compute_causal_weights(self, time_losses, time_points=None):
-        return [1.0] * len(time_losses)
+        if not time_losses:
+            return []
+        loss_vals = torch.stack([loss.detach() if torch.is_tensor(loss) else torch.tensor(loss)
+                                 for loss in time_losses])
+        if time_points is None:
+            time_points = torch.arange(len(time_losses), device=loss_vals.device).float()
+        else:
+            time_points = torch.as_tensor(time_points, device=loss_vals.device).float()
+        weights = self.compute_weights(loss_vals, time_points)
+        return [float(w.item()) for w in weights.squeeze(1)]
     
     def apply_temporal_decay(self, weights, current_epoch):
         return weights
@@ -532,6 +550,11 @@ class AdaptiveWeightScheduler:
             weights[name] = weight_ratios.get(name, 1.0)
         return weights
 
+    def update_weights(self, losses: Dict[str, torch.Tensor], step: int = 0, total_steps: int = 100000) -> Dict[str, float]:
+        """回傳當前 phase 對應的權重配置（簡化版）"""
+        _ = losses  # losses 預留未來擴展，目前不影響 phase-based 權重
+        return self.get_phase_weights(step, total_steps)
+
 
 class MultiWeightManager:
     """多權重策略管理器"""
@@ -545,6 +568,8 @@ class MultiWeightManager:
                  preference_weights: List[float] = None,
                  config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
+        self.preference_weights = preference_weights
+        self.eps = _EPS
         if strategies is None:
             strategies = self.config.get('strategies', ['gradnorm', 'adaptive'])
             
@@ -571,7 +596,23 @@ class MultiWeightManager:
             
     def update_weights(self, losses, current_step=0, total_steps=100000, **kwargs):
         # 簡化的更新邏輯
-        if self.model is None: return {}
+        if self.model is None:
+            objective_values = losses or {}
+            if isinstance(objective_values, dict):
+                weights = {}
+                prefs = self.config.get('preference_weights')
+                if prefs is None and hasattr(self, 'preference_weights'):
+                    prefs = self.preference_weights
+                if prefs is None:
+                    prefs = [1.0] * len(self.objectives)
+                for idx, name in enumerate(self.objectives):
+                    value = objective_values.get(name, 0.0)
+                    if torch.is_tensor(value):
+                        value = float(value.detach().item())
+                    weight = max(float(value), self.eps) * float(prefs[idx])
+                    weights[name] = weight
+                return weights
+            return {name: 1.0 for name in self.loss_names}
         
         final_weights = {name: 1.0 for name in self.loss_names}
         if 'gradnorm' in self.weighters:

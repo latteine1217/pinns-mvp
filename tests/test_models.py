@@ -11,7 +11,7 @@ import os
 from typing import Dict
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from pinnx.models.fourier_mlp import FourierFeatures, PINNNet, MultiScalePINNNet
+from pinnx.models.fourier_mlp import FourierFeatures, PINNNet
 from pinnx.models.wrappers import ScaledPINNWrapper, EnsemblePINNWrapper, PhysicsConstrainedWrapper, MultiHeadWrapper
 
 
@@ -141,6 +141,28 @@ class TestPINNNet:
         assert alphas, "ResNet blocks should expose alpha parameters"
         for alpha in alphas:
             assert alpha.grad is not None
+
+    def test_pinn_net_piratenet_block(self):
+        """piratenet block 應保持形狀且 alpha 可訓練（u/v gating）"""
+        net = PINNNet(
+            in_dim=3,
+            out_dim=2,
+            width=48,
+            depth=2,
+            block_type='piratenet',
+            res_block_alpha_init=0.0,
+            use_input_projection=True,
+        ).to(self.device)
+
+        x = torch.randn(8, 3, device=self.device, requires_grad=True)
+        out = net(x)
+        assert out.shape == (8, 2)
+        loss = out.pow(2).sum()
+        loss.backward()
+        alphas = [m.alpha for m in net.hidden_layers if hasattr(m, "alpha")]
+        assert alphas, "PirateNet blocks should expose alpha parameters"
+        for alpha in alphas:
+            assert alpha.grad is not None
     
     def test_pinn_net_different_configs(self):
         """測試不同配置的 PINN 網路"""
@@ -188,7 +210,10 @@ class TestPINNNet:
         }
         net.configure_fourier_input(metadata)
         captured: Dict[str, torch.Tensor] = {}
-        handle = net.fourier.register_forward_hook(lambda m, inp, out: captured.setdefault('input', inp[0].detach().clone()))
+        def _capture_input(module, inp, out):
+            captured.setdefault('input', inp[0].detach().clone())
+            return None
+        handle = net.fourier.register_forward_hook(_capture_input)
         try:
             net(x_norm)
         finally:
@@ -223,7 +248,10 @@ class TestPINNNet:
         }
         net.configure_fourier_input(metadata)
         captured: Dict[str, torch.Tensor] = {}
-        handle = net.fourier.register_forward_hook(lambda m, inp, out: captured.setdefault('input', inp[0].detach().clone()))
+        def _capture_input(module, inp, out):
+            captured.setdefault('input', inp[0].detach().clone())
+            return None
+        handle = net.fourier.register_forward_hook(_capture_input)
         try:
             net(x_norm)
         finally:

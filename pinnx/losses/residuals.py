@@ -153,11 +153,11 @@ def ns_residual_2d(coords: torch.Tensor,
     
     Examples:
         >>> # Kolmogorov Flow (各向同性)
-        >>> residuals = ns_residual_2d(coords, velocity, pressure, nu=1e-3, merge_momentum=True)
+        >>> residuals = ns_residual_2d(coords, velocity, pressure, viscosity=1e-3, merge_momentum=True)
         >>> # 返回: {'momentum': [N, 2], 'continuity': [N]}
         
         >>> # Channel Flow (各向異性)
-        >>> residuals = ns_residual_2d(coords, velocity, pressure, nu=1e-3, merge_momentum=False)
+        >>> residuals = ns_residual_2d(coords, velocity, pressure, viscosity=1e-3, merge_momentum=False)
         >>> # 返回: {'momentum_x': [N], 'momentum_y': [N], 'continuity': [N]}
     """
     batch_size = coords.shape[0]

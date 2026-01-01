@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from pinnx.physics.ns_2d import (
-    ns_residual_2d, incompressible_ns_2d, 
+    ns_residual_2d,
     compute_vorticity,
     check_conservation_laws
 )
@@ -54,20 +54,6 @@ class TestNSEquations:
         assert len(residuals) == 3  # momentum_x, momentum_y, continuity
         assert all(r.shape[0] == coords.shape[0] for r in residuals)
         assert all(not torch.isnan(r).any() for r in residuals)
-    
-    def test_incompressible_ns(self):
-        """測試不可壓縮 NS 方程"""
-        coords = torch.randn(10, 2, requires_grad=True, device=self.device)
-        
-        # 創建簡單網路
-        import torch.nn as nn
-        net = nn.Sequential(nn.Linear(2, 10), nn.Tanh(), nn.Linear(10, 3)).to(self.device)
-        predictions = net(coords)  # [u, v, p]
-        
-        result = incompressible_ns_2d(coords, predictions, viscosity=0.01)
-        
-        assert result.shape[0] == coords.shape[0]
-        assert not torch.isnan(result).any()
     
     def test_derivatives_calculation(self):
         """測試導數計算"""

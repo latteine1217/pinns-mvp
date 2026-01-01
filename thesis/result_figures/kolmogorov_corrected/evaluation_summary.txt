@@ -1,0 +1,17 @@
+======================================================================
+Kolmogorov Flow Time-Averaged Evaluation
+======================================================================
+
+DNS Reference:
+  Time Range: [15.0, 35.0]
+  Time Samples: 201
+
+PINN Prediction:
+  Time Range: [15.0, 35.0]
+  Time Samples: 20
+
+Relative L2 Errors:
+  u: 104.40%
+  v: 119.26%
+  p: 100.66%
+  Overall: 108.41%

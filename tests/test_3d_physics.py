@@ -24,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.physics.ns_3d_thin_slab import (
     NSEquations3DThinSlab,
-    ns_residual_3d_thin_slab,
     compute_derivatives_3d,
     apply_periodic_bc_3d,
     apply_wall_bc_3d,
@@ -33,6 +32,11 @@ from pinnx.physics.ns_3d_thin_slab import (
     compute_enstrophy_3d,
     compute_q_criterion_3d
 )
+
+
+def compute_residuals(coords: torch.Tensor, pred: torch.Tensor, nu: float):
+    ns_eq = NSEquations3DThinSlab(viscosity=nu)
+    return ns_eq.residual(coords, pred[:, :3], pred[:, 3:4])
 
 
 @pytest.fixture
@@ -90,7 +94,13 @@ class TestDimensionalConsistency:
         nu = 0.001
         
         # 計算殘差
-        res = ns_residual_3d_thin_slab(coords, pred, nu)
+        res_dict = compute_residuals(coords, pred, nu)
+        res = (
+            res_dict['momentum_x'],
+            res_dict['momentum_y'],
+            res_dict['momentum_z'],
+            res_dict['continuity'],
+        )
         
         # 驗證輸出形狀
         assert len(res) == 4, "應該返回 4 個殘差項"
@@ -122,7 +132,13 @@ class TestDimensionalConsistency:
         pred = torch.cat([u_plus, v_plus, w_plus, p_plus], dim=1)
         
         # 計算殘差（Re_τ = 1000）
-        res = ns_residual_3d_thin_slab(coords, pred, 1000.0)
+        res_dict = compute_residuals(coords, pred, 1000.0)
+        res = (
+            res_dict['momentum_x'],
+            res_dict['momentum_y'],
+            res_dict['momentum_z'],
+            res_dict['continuity'],
+        )
         
         # 動量方程：[u⁺/t⁺] + ... = [u⁺/x⁺²] （量綱一致）
         # 檢查各項量綱平衡（通過數值範圍推斷）
@@ -162,8 +178,10 @@ class TestConservationLaws:
         nu = 0.001  # Re_tau=1000 壁面單位
         
         # 計算殘差
-        res = ns_residual_3d_thin_slab(coords, pred, nu)
-        momentum_x, momentum_y, momentum_z, _ = res
+        res_dict = compute_residuals(coords, pred, nu)
+        momentum_x = res_dict['momentum_x']
+        momentum_y = res_dict['momentum_y']
+        momentum_z = res_dict['momentum_z']
         
         # 計算動量殘差 L2 範數
         mom_x_l2 = torch.sqrt(torch.mean(momentum_x**2))
@@ -329,8 +347,14 @@ class Test2DSliceConsistency:
         pred_2d = torch.cat([u_2d, v_2d, p_2d], dim=1)
         
         # 計算殘差
-        res_3d = ns_residual_3d_thin_slab(coords_3d, pred_3d, nu=0.001)
-        res_2d = ns_residual_2d(coords_2d, pred_2d, nu=1.0/1000.0)
+        res_dict = compute_residuals(coords_3d, pred_3d, nu=0.001)
+        res_3d = (
+            res_dict['momentum_x'],
+            res_dict['momentum_y'],
+            res_dict['momentum_z'],
+            res_dict['continuity'],
+        )
+        res_2d = ns_residual_2d(coords_2d, pred_2d, viscosity=1.0/1000.0)
         
         # 比較 x, y 動量方程
         mom_x_3d, mom_y_3d, mom_z_3d, div_3d = res_3d
@@ -365,7 +389,13 @@ class TestNumericalStability:
         
         # 計算殘差（應該不會崩潰）
         try:
-            res = ns_residual_3d_thin_slab(coords, pred, nu=0.001)
+            res_dict = compute_residuals(coords, pred, nu=0.001)
+            res = (
+                res_dict['momentum_x'],
+                res_dict['momentum_y'],
+                res_dict['momentum_z'],
+                res_dict['continuity'],
+            )
             
             # 檢查輸出是否有限
             for i, r in enumerate(res):
@@ -387,7 +417,13 @@ class TestNumericalStability:
         p = 1.0 + 0.01 * torch.sin(x)  # 非線性壓力
         pred = torch.cat([u, v, w, p], dim=1)
         
-        res = ns_residual_3d_thin_slab(coords, pred, nu=0.001)
+        res_dict = compute_residuals(coords, pred, nu=0.001)
+        res = (
+            res_dict['momentum_x'],
+            res_dict['momentum_y'],
+            res_dict['momentum_z'],
+            res_dict['continuity'],
+        )
         
         # 近零速度應滿足連續方程（容忍度放寬）
         _, _, _, continuity = res
@@ -441,9 +477,9 @@ class TestNSEquations3DThinSlabClass:
         """測試類別初始化"""
         ns_eq = NSEquations3DThinSlab(viscosity=0.001)
         
-        assert ns_eq.viscosity == 0.001
-        assert ns_eq.viscosity == 1.0 / 1000.0
-        print(f"\n[OOP] NSEquations3DThinSlab 初始化成功，viscosity={ns_eq.viscosity}")
+        assert ns_eq.nu == 0.001
+        assert ns_eq.nu == 1.0 / 1000.0
+        print(f"\n[OOP] NSEquations3DThinSlab 初始化成功，nu={ns_eq.nu}")
     
     def test_residual_method(self, sample_3d_coords, analytical_solution):
         """測試 .residual() 方法"""

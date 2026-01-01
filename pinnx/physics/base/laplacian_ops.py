@@ -138,29 +138,3 @@ def compute_laplacian_anisotropic(
     
     return laplacian_aniso
 
-
-# ============================================================================
-# Backward Compatibility Wrappers (向後兼容包裝函數)
-# ============================================================================
-
-def compute_laplacian_2d(f: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-    """
-    向後兼容：2D 拉普拉斯算子
-    
-    ⚠️ Deprecated: 建議使用 compute_laplacian(f, x, spatial_dim=2)
-    """
-    return compute_laplacian(f, x, spatial_dim=2)
-
-
-def compute_laplacian_3d(
-    f: torch.Tensor,
-    coords: torch.Tensor,
-    stabilize: bool = True,
-    max_value: float = 1e4
-) -> torch.Tensor:
-    """
-    向後兼容：3D 拉普拉斯算子（帶穩定化）
-    
-    ⚠️ Deprecated: 建議使用 compute_laplacian(f, coords, spatial_dim=3, stabilize=True)
-    """
-    return compute_laplacian(f, coords, spatial_dim=3, stabilize=stabilize, max_value=max_value)

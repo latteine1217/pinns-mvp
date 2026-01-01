@@ -181,7 +181,6 @@ physics:
 # =============================================================================
 losses:
   data_weight: 10.0
-  boundary_weight: 10.0
   
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0

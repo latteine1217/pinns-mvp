@@ -89,7 +89,7 @@ losses:
 
 # 使用 VS-PINN（變數尺度化）
 model:
-  type: "VSPINNFourierMLP"
+  type: "fourier_vs_mlp"
   variable_scaling: true
 ```
 
@@ -356,7 +356,7 @@ ValueError: ❌ 壓力場資料缺失！
 **症狀**：Trainer 初始化時拋出錯誤：
 
 ```
-RuntimeError: ❌ DataNormalizer 統計量無效！
+RuntimeError: ❌ OutputTransform 統計量無效！
    可能原因:
    1. 標準化類型為 'training_data_norm' 但未提供 training_data
    2. training_data 中某些變量為常數（std ≈ 0）

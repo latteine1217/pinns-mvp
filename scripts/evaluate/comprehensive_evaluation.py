@@ -596,15 +596,6 @@ def compute_wall_shear_stress_comparison(pred: Dict[str, np.ndarray],
         # 理論值比較 (JHTDB Channel Flow Re_τ=1000)
         'theoretical_tau_w': 0.0025,
         'pred_vs_theory_error': float(np.abs(np.mean(pred_tau_lower) - 0.0025) / 0.0025),
-
-        # 向後相容：保留舊的鍵名（使用下壁面值）
-        'pred_tau_mean': float(np.mean(pred_tau_lower)),
-        'pred_tau_std': float(np.std(pred_tau_lower)),
-        'ref_tau_mean': float(np.mean(ref_tau_lower)),
-        'ref_tau_std': float(np.std(ref_tau_lower)),
-        'tau_rmse': float(np.sqrt(np.mean((pred_tau_lower - ref_tau_lower)**2))),
-        'tau_rel_error': float(np.abs(np.mean(pred_tau_lower) - np.mean(ref_tau_lower))
-                              / (np.abs(np.mean(ref_tau_lower)) + 1e-12))
     }
 
     logger.info(f"✅ Wall shear stress ({'2D' if is_2d else '3D'}):")

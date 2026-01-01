@@ -1,0 +1,11 @@
+{
+  "relative_l2_overall": 1.6637267679772634,
+  "relative_l2_u": 1.071912169456482,
+  "relative_l2_v": 2.4633147716522217,
+  "relative_l2_p": 1.042614459991455,
+  "relative_l2_vorticity": 6.26357364654541,
+  "divergence_error_mean": 8.295165061950684,
+  "divergence_error_max": 44.145023345947266,
+  "pressure_gradient_dpdx_l2": 7.646064281463623,
+  "pressure_gradient_dpdy_l2": 2.876699209213257
+}

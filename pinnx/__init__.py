@@ -90,10 +90,8 @@ try:
     from .physics import (
         ns_residual_2d,
         VSScaler,
-        compute_derivatives,
         check_conservation_laws,
         compute_vorticity,
-        incompressible_ns_2d,
         NSEquations3DTemporal,
         RANSEquations2D,
         reynolds_number,
@@ -294,8 +292,8 @@ __all__ = [
     '__version__', 'Config', 'load_config', 'setup_experiment',
     
     # 物理模組
-    'ns_residual_2d', 'VSScaler', 'compute_derivatives', 'check_conservation_laws',
-    'compute_vorticity', 'incompressible_ns_2d', 'NSEquations3DTemporal',
+    'ns_residual_2d', 'VSScaler', 'check_conservation_laws',
+    'compute_vorticity', 'NSEquations3DTemporal',
     'RANSEquations2D', 'reynolds_number', 'PhysicsConstants',
     
     # 模型模組

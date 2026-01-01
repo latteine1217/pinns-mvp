@@ -98,7 +98,6 @@ model:
   activation: swish
   block_type: resnet
   fourier_features:
-    enabled: true
     type: standard
     fourier_m: 12
     fourier_sigma: 4.0

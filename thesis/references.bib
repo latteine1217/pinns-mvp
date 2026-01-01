@@ -1,0 +1,719 @@
+@article{Raissi2019JCP,
+  title = {Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations},
+  author = {Raissi, Maziar and Perdikaris, Paris and Karniadakis, George Em},
+  journal = {Journal of Computational Physics},
+  volume = {378},
+  pages = {686--707},
+  year = {2019},
+  doi = {10.1016/j.jcp.2018.10.045},
+  abstract = {We introduce physics-informed neural networks – neural networks that are trained to solve supervised learning tasks while respecting any given laws of physics described by general nonlinear partial differential equations. In this work, we present our developments in the context of solving two main classes of problems: data-driven solution and data-driven discovery of partial differential equations. Depending on the nature and arrangement of the available data, we devise two distinct types of algorithms, namely continuous time and discrete time models. The first type of models forms a new family of data-efficient spatio-temporal function approximators, while the latter type allows the use of arbitrarily accurate implicit Runge–Kutta time stepping schemes with unlimited number of stages. The effectiveness of the proposed framework is demonstrated through a collection of classical problems in fluids, quantum mechanics, reaction–diffusion systems, and the propagation of nonlinear shallow-water waves.}
+}
+
+@article{Raissi2020Science,
+  title = {Hidden fluid mechanics: Learning velocity and pressure fields from flow visualizations},
+  author = {Raissi, Maziar and Yazdani, Alireza and Karniadakis, George Em},
+  journal = {Science},
+  volume = {367},
+  number = {6481},
+  pages = {1026--1030},
+  year = {2020},
+  doi = {10.1126/science.aaw4741},
+  abstract = {For centuries, flow visualization has been the art of making fluid motion visible in physical and biological systems. Although such flow patterns can be, in principle, described by the Navier-Stokes equations, extracting the velocity and pressure fields directly from the images is challenging. We addressed this problem by developing hidden fluid mechanics (HFM), a physics-informed deep-learning framework capable of encoding the Navier-Stokes equations into the neural networks while being agnostic to the geometry or the initial and boundary conditions. We demonstrate HFM for several physical and biomedical problems by extracting quantitative information for which direct measurements may not be possible. HFM is robust to low resolution and substantial noise in the observation data, which is important for potential applications.}
+}
+
+@article{Karniadakis2021NRP,
+  title = {Physics-informed machine learning},
+  author = {Karniadakis, George Em and Kevrekidis, Ioannis G. and Lu, Lu and Perdikaris, Paris and Wang, Sifan and Yang, Liu},
+  journal = {Nature Reviews Physics},
+  volume = {3},
+  number = {6},
+  pages = {422--440},
+  year = {2021},
+  doi = {10.1038/s42254-021-00314-5},
+  abstract = {Despite great progress in simulating multiphysics problems using the numerical discretization of partial differential equations (PDEs), one still cannot seamlessly incorporate noisy data into existing algorithms, mesh generation remains complex, and high-dimensional problems governed by parameterized PDEs cannot be tackled. Moreover, solving inverse problems with hidden physics is often prohibitively expensive and requires different formulations and elaborate computer codes. Machine learning has emerged as a promising alternative, but training deep neural networks requires big data, not always available for scientific problems. Instead, such networks can be trained from additional information obtained by enforcing the physical laws (for example, at random points in the continuous space-time domain). Such physics-informed learning integrates (noisy) data and mathematical models, and implements them through neural networks or other kernel-based regression networks. Moreover, it may be possible to design specialized network architectures that automatically satisfy some of the physical invariants for better accuracy, faster training and improved generalization. Here, we review some of the prevailing trends in embedding physics into machine learning, present some of the current capabilities and limitations and discuss diverse applications of physics-informed learning both for forward and inverse problems, including discovering hidden physics and tackling high-dimensional problems.}
+}
+
+@article{Cai2021JFM,
+  title = {Flow over an espresso cup: inferring 3-D velocity and pressure fields from tomographic background oriented Schlieren via physics-informed neural networks},
+  author = {Cai, Shengze and Wang, Zhicheng and Fuest, Frederik and Jeon, Young Jin and Gray, Callum and Karniadakis, George Em},
+  journal = {Journal of Fluid Mechanics},
+  volume = {915},
+  pages = {A102},
+  year = {2021},
+  doi = {10.1017/jfm.2021.135},
+  abstract = {Tomographic background oriented Schlieren (Tomo-BOS) imaging measures density or temperature fields in three dimensions using multiple camera BOS projections, and is particularly useful for instantaneous flow visualizations of complex fluid dynamics problems. We propose a new method based on physics-informed neural networks (PINNs) to infer the full continuous three-dimensional (3-D) velocity and pressure fields from snapshots of 3-D temperature fields obtained by Tomo-BOS imaging. The PINNs seamlessly integrate the underlying physics of the observed fluid flow and the visualization data, hence enabling the inference of latent quantities using limited experimental data. In this hidden fluid mechanics paradigm, we train the neural network by minimizing a loss function composed of a data mismatch term and residual terms associated with the coupled Navier–Stokes and heat transfer equations. We first quantify the accuracy of the proposed method based on a two-dimensional synthetic data set for buoyancy-driven flow, and subsequently apply it to the Tomo-BOS data set, where we are able to infer the instantaneous velocity and pressure fields of the flow over an espresso cup based only on the temperature field provided by the Tomo-BOS imaging. Moreover, we conduct an independent PIV experiment to validate the PINN inference for the unsteady velocity field at a centre plane. To explain the observed flow physics, we also perform systematic PINN simulations at different Reynolds and Richardson numbers and quantify the variations in velocity and pressure fields. The results in this paper indicate that the proposed deep learning technique can become a promising direction in experimental fluid mechanics.}
+}
+
+@article{Drmac2016SISC,
+  title = {A New Selection Operator for the Discrete Empirical Interpolation Method---Improved A Priori Error Bound and Extensions},
+  author = {Drma{\v{c}}, Zlatko and Gugercin, Serkan},
+  journal = {SIAM Journal on Scientific Computing},
+  volume = {38},
+  number = {2},
+  pages = {A631--A648},
+  year = {2016},
+  doi = {10.1137/15M1019271},
+  abstract = {This paper introduces a new framework for constructing the Discrete Empirical Interpolation Method DEIM projection operator. The interpolation node selection procedure is formulated using the QR factorization with column pivoting, and it enjoys a sharper error bound for the DEIM projection error. Furthermore, for a subspace  given as the range of an orthonormal U, the DEIM projection does not change if U is replaced by UΩ with arbitrary unitary matrix Ω. In a large-scale setting, the new approach allows modifications that use only randomly sampled rows of U, but with the potential of producing good approximations with corresponding probabilistic error bounds. Another salient feature of the new framework is that robust and efficient software implementation is easily developed, based on readily available high performance linear algebra packages.}
+}
+
+@article{Manohar2018PNAS,
+  title = {Data-driven sparse sensor placement for reconstruction: Demonstrating benefits of exploiting known patterns},
+  author = {Manohar, Krithika and Brunton, Bingni W. and Kutz, J. Nathan and Brunton, Steven L.},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {115},
+  number = {31},
+  pages = {E7358--E7366},
+  year = {2018},
+  doi = {10.1073/pnas.1715275115},
+  note = {Preprint: arXiv:1701.07569}
+}
+
+@article{Yang2021JCP,
+  title = {B-PINNs: Bayesian physics-informed neural networks for forward and inverse PDE problems with noisy data},
+  author = {Yang, Liu and Meng, Xuhui and Karniadakis, George Em},
+  journal = {Journal of Computational Physics},
+  volume = {425},
+  pages = {109913},
+  year = {2021},
+  doi = {10.1016/j.jcp.2020.109913},
+  abstract = {We propose a Bayesian physics-informed neural network (B-PINN) to solve both forward and inverse nonlinear problems described by partial differential equations (PDEs) and noisy data. In this Bayesian framework, the Bayesian neural network (BNN) combined with a PINN for PDEs serves as the prior while the Hamiltonian Monte Carlo (HMC) or the variational inference (VI) could serve as an estimator of the posterior. B-PINNs make use of both physical laws and scattered noisy measurements to provide predictions and quantify the aleatoric uncertainty arising from the noisy data in the Bayesian framework. Compared with PINNs, in addition to uncertainty quantification, B-PINNs obtain more accurate predictions in scenarios with large noise due to their capability of avoiding overfitting. We conduct a systematic comparison between the two different approaches for the B-PINNs posterior estimation (i.e., HMC or VI), along with dropout used for quantifying uncertainty in deep neural networks. Our experiments show that HMC is more suitable than VI with mean field Gaussian approximation for the B-PINNs posterior estimation, while dropout employed in PINNs can hardly provide accurate predictions with reasonable uncertainty. Finally, we replace the BNN in the prior with a truncated Karhunen-Loève (KL) expansion combined with HMC or a deep normalizing flow (DNF) model as posterior estimators. The KL is as accurate as BNN and much faster but this framework cannot be easily extended to high-dimensional problems unlike the BNN based framework.}
+}
+
+@article{Zhang2019JCP,
+  title = {Quantifying total uncertainty in physics-informed neural networks for solving forward and inverse stochastic problems},
+  author = {Zhang, Dongkun and Lu, Lu and Guo, Ling and Karniadakis, George Em},
+  journal = {Journal of Computational Physics},
+  volume = {397},
+  pages = {108850},
+  year = {2019},
+  doi = {10.1016/j.jcp.2019.07.048},
+  abstract = {Physics-informed neural networks (PINNs) have recently emerged as an alternative way of numerically solving partial differential equations (PDEs) without the need of building elaborate grids, instead, using a straightforward implementation. In particular, in addition to the deep neural network (DNN) for the solution, an auxiliary DNN is considered that represents the residual of the PDE. The residual is then combined with the mismatch in the given data of the solution in order to formulate the loss function. This framework is effective but is lacking uncertainty quantification of the solution due to the inherent randomness in the data or due to the approximation limitations of the DNN architecture. Here, we propose a new method with the objective of endowing the DNN with uncertainty quantification for both sources of uncertainty, i.e., the parametric uncertainty and the approximation uncertainty. We first account for the parametric uncertainty when the parameter in the differential equation is represented as a stochastic process. Multiple DNNs are designed to learn the modal functions of the arbitrary polynomial chaos (aPC) expansion of its solution by using stochastic data from sparse sensors. We can then make predictions from new sensor measurements very efficiently with the trained DNNs. Moreover, we employ dropout to quantify the uncertainty of DNNs in approximating the modal functions. We then design an active learning strategy based on the dropout uncertainty to place new sensors in the domain in order to improve the predictions of DNNs. Several numerical tests are conducted for both the forward and the inverse problems to demonstrate the effectiveness of PINNs combined with uncertainty quantification. This NN-aPC new paradigm of physics-informed deep learning with uncertainty quantification can be readily applied to other types of stochastic PDEs in multi-dimensions.}
+}
+
+@article{Psaros2023JCP,
+  title = {Uncertainty quantification in scientific machine learning},
+  author = {Psaros, Anil and Meng, Xuhui and Zou, Zongren and Karniadakis, George Em},
+  journal = {Journal of Computational Physics},
+  volume = {477},
+  pages = {111902},
+  year = {2023},
+  doi = {10.1016/j.jcp.2022.111902},
+  abstract = {Neural networks (NNs) are currently changing the computational paradigm on how to combine data with mathematical laws in physics and engineering in a profound way, tackling challenging inverse and ill-posed problems not solvable with traditional methods. However, quantifying errors and uncertainties in NN-based inference is more complicated than in traditional methods. This is because in addition to aleatoric uncertainty associated with noisy data, there is also uncertainty due to limited data, but also due to NN hyperparameters, overparametrization, optimization and sampling errors as well as model misspecification. Although there are some recent works on uncertainty quantification (UQ) in NNs, there is no systematic investigation of suitable methods towards quantifying the total uncertainty effectively and efficiently even for function approximation, and there is even less work on solving partial differential equations and learning operator mappings between infinite-dimensional function spaces using NNs. In this work, we present a comprehensive framework that includes uncertainty modeling, new and existing solution methods, as well as evaluation metrics and post-hoc improvement approaches. To demonstrate the applicability and reliability of our framework, we present an extensive comparative study in which various methods are tested on prototype problems, including problems with mixed input-output data, and stochastic problems in high dimensions. In the Appendix, we include a comprehensive description of all the UQ methods employed. Further, to help facilitate the deployment of UQ in Scientific Machine Learning research and practice, we present and develop in [1] an open-source Python library (github.com/Crunch-UQ4MI/neuraluq), termed NeuralUQ, that is accompanied by an educational tutorial and additional computational experiments.}
+}
+
+@article{Penwarden2022JCP,
+  title = {Multifidelity Modeling for Physics-Informed Neural Networks (PINNs)},
+  author = {Penwarden, Michael and Zhe, Shandian and Narayan, Akil C. and Kirby, Robert M.},
+  journal = {Journal of Computational Physics},
+  volume = {451},
+  pages = {110844},
+  year = {2022},
+  doi = {10.1016/j.jcp.2021.110844},
+  abstract = {Multifidelity simulation methodologies are often used in an attempt to judiciously combine low-fidelity and high-fidelity simulation results in an accuracy-increasing, cost-saving way. Candidates for this approach are simulation methodologies for which there are fidelity differences connected with significant computational cost differences. Physics-informed Neural Networks (PINNs) are candidates for these types of approaches due to the significant difference in training times required when different fidelities (expressed in terms of architecture width and depth as well as optimization criteria) are employed. In this paper, we propose a particular multifidelity approach applied to PINNs that exploits low-rank structure. We demonstrate that width, depth, and optimization criteria can be used as parameters related to model fidelity and show numerical justification of cost differences in training due to fidelity parameter choices. We test our multifidelity scheme on various canonical forward PDE models that have been presented in the emerging PINNs literature.}
+}
+
+@article{Ko2025JCP,
+  title = {VS-PINN: Fast and efficient training of physics-informed neural networks using variable-scaling methods for stiff PDEs},
+  author = {Ko, Seungchan and Park, Sang Hyeon},
+  journal = {Journal of Computational Physics},
+  year = {2025},
+  pages = {113860},
+  doi = {10.1016/j.jcp.2025.113860},
+  note = {Also available as arXiv:2406.06287},
+  abstract = {Physics-informed neural networks (PINNs) have recently emerged as a promising way to compute the solutions of partial differential equations (PDEs) using deep neural networks. However, despite their significant success in various fields, it remains unclear in many aspects how to effectively train PINNs if the solutions of PDEs exhibit stiff behaviors or high frequencies. In this paper, we propose a new method for training PINNs using variable-scaling techniques. This method is simple and it can be applied to a wide range of problems including PDEs with rapidly-varying solutions. Throughout various numerical experiments, we will demonstrate the effectiveness of the proposed method for these problems and confirm that it can significantly improve the training efficiency and performance of PINNs. Furthermore, based on the analysis of the neural tangent kernel (NTK), we will provide theoretical evidence for this phenomenon and show that our methods can indeed improve the performance of PINNs.}
+}
+
+@article{Graham2016JoT,
+  title = {A Web Services-accessible database of turbulent channel flow and its use for testing a new integral wall model for LES},
+  author = {Graham, Jonathan and Kanov, Kalin and Yang, Xiang I. A. and Lee, Myoungkyu and Malaya, Nicholas and Lalescu, Cristian C. and Burns, Randal and Eyink, Gregory and Szalay, Alexander and Moser, Robert D. and Meneveau, Charles},
+  journal = {Journal of Turbulence},
+  volume = {17},
+  number = {2},
+  pages = {181--215},
+  year = {2016},
+  doi = {10.1080/14685248.2015.1088656},
+  abstract = {The output from a direct numerical simulation (DNS) of turbulent channel flow at Reτ ≈ 1000 is used to construct a publicly and Web services accessible, spatio-temporal database for this flow. The simulated channel has a size of 8πh × 2h × 3πh, where h is the channel half-height. Data are stored at 2048 × 512 × 1536 spatial grid points for a total of 4000 time samples every 5 time steps of the DNS. These cover an entire channel flow-through time, i.e. the time it takes to traverse the entire channel length 8πh at the mean velocity of the bulk flow. Users can access the database through an interface that is based on the Web services model and perform numerical experiments on the slightly over 100 terabytes (TB) DNS data on their remote platforms, such as laptops or local desktops. Additional technical details about the pressure calculation, database interpolation, and differentiation tools are provided in several appendices. As a sample application of the channel flow database, we use it to conduct an a-priori test of a recently introduced integral wall model for large eddy simulation of wall-bounded turbulent flow. The results are compared with those of the equilibrium wall model, showing the strengths of the integral wall model as compared to the equilibrium model.}
+}
+
+@article{Li2008JoT,
+  title = {A public turbulence database cluster and applications to study Lagrangian evolution of velocity increments in turbulence},
+  author = {Li, Yi and Perlman, Eric and Wan, Minping and Yang, Yunke and Meneveau, Charles and Burns, Randal and Chen, Shiyi and Szalay, Alexander and Eyink, Gregory},
+  journal = {Journal of Turbulence},
+  volume = {9},
+  number = {31},
+  pages = {N31},
+  year = {2008},
+  abstract = {A public database system archiving a direct numerical simulation (DNS) data set of isotropic, forced turbulence is described in this paper. The data set consists of the DNS output on 10243 spatial points and 1024 time-samples spanning about one large-scale turn-over timescale. This complete 10244 space-time history of turbulence is accessible to users remotely through an interface that is based on the Web-services model. Users may write and execute analysis programs on their host computers, while the programs make subroutine-like calls that request desired parts of the data over the network. The users are thus able to perform numerical experiments by accessing the 27 Terabytes of DNS data using regular platforms such as laptops. The architecture of the database is explained, as are some of the locally defined functions, such as differentiation and interpolation. Test calculations are performed to illustrate the usage of the system and to verify the accuracy of the methods. The database is then used to analyze a dynamical model for small-scale intermittency in turbulence. Specifically, the dynamical effects of pressure and viscous terms on the Lagrangian evolution of velocity increments are evaluated using conditional averages calculated from the DNS data in the database. It is shown that these effects differ considerably among themselves and thus require different modeling strategies in Lagrangian models of velocity increments and intermittency.}
+}
+
+@inproceedings{Perlman2007SC,
+  title = {Data Exploration of Turbulence Simulations Using a Database Cluster},
+  author = {Perlman, Eric and Burns, Randal and Li, Yi and Meneveau, Charles},
+  booktitle = {Proceedings of the 2007 ACM/IEEE Conference on Supercomputing (SC'07)},
+  year = {2007},
+  doi = {10.1145/1362622.1362654},
+  abstract = {We describe a new environment for the exploration of turbulent flows that uses a cluster of databases to store complete histories of Direct Numerical Simulation (DNS) results. This allows for spatial and temporal exploration of high-resolution data that were traditionally too large to store and too computationally expensive to produce on demand. We perform analysis of these data directly on the databases nodes, which minimizes the volume of network traffic. The low network demands enable us to provide public access to this experimental platform and its datasets through Web services. This paper details the system design and implementation. Specifically, we focus on hierarchical spatial indexing, cache-sensitive spatial scheduling of batch workloads, localizing computation through data partitioning, and load balancing techniques that minimize data movement. We provide real examples of how scientists use the system to perform high-resolution turbulence research from standard desktop computing environments.}
+}
+
+@article{Lee2015JFM,
+  title = {Direct numerical simulation of turbulent channel flow up to $Re_{\\tau}=5200$},
+  author = {Lee, Myoungkyu and Moser, Robert D.},
+  journal = {Journal of Fluid Mechanics},
+  volume = {774},
+  pages = {395--415},
+  year = {2015},
+  doi = {10.1017/jfm.2015.268},
+  abstract = {A direct numerical simulation of incompressible channel flow at a friction Reynolds number (Reτ) of 5186 has been performed, and the flow exhibits a number of the characteristics of high-Reynolds-number wall-bounded turbulent flows. For example, a region where the mean velocity has a logarithmic variation is observed, with von Kármán constant κ=0.384±0.004. There is also a logarithmic dependence of the variance of the spanwise velocity component, though not the streamwise component. A distinct separation of scales exists between the large outer-layer structures and small inner-layer structures. At intermediate distances from the wall, the one-dimensional spectrum of the streamwise velocity fluctuation in both the streamwise and spanwise directions exhibits k−1 dependence over a short range in wavenumber (k). Further, consistent with previous experimental observations, when these spectra are multiplied by k (premultiplied spectra), they have a bimodal structure with local peaks located at wavenumbers on either side of the k−1 range.}
+}
+
+@misc{pyJHTDB,
+  title = {pyJHTDB: Python client for the Johns Hopkins Turbulence Database (JHTDB)},
+  author = {{JHTDB Team}},
+  howpublished = {GitHub repository},
+  year = {2025},
+  url = {https://github.com/idies/pyJHTDB}
+}
+
+@article{Liu2024KAN,
+  title = {KAN: Kolmogorov--Arnold Networks},
+  author = {Liu, Ziming and Wang, Siqi and others},
+  journal = {arXiv preprint arXiv:2404.19756},
+  year = {2024},
+  url = {https://arxiv.org/abs/2404.19756},
+  abstract = {Inspired by the Kolmogorov-Arnold representation theorem, we propose Kolmogorov-Arnold Networks (KANs) as promising alternatives to Multi-Layer Perceptrons (MLPs). While MLPs have fixed activation functions on nodes ("neurons"), KANs have learnable activation functions on edges ("weights"). KANs have no linear weights at all -- every weight parameter is replaced by a univariate function parametrized as a spline. We show that this seemingly simple change makes KANs outperform MLPs in terms of accuracy and interpretability. For accuracy, much smaller KANs can achieve comparable or better accuracy than much larger MLPs in data fitting and PDE solving. Theoretically and empirically, KANs possess faster neural scaling laws than MLPs. For interpretability, KANs can be intuitively visualized and can easily interact with human users. Through two examples in mathematics and physics, KANs are shown to be useful collaborators helping scientists (re)discover mathematical and physical laws. In summary, KANs are promising alternatives for MLPs, opening opportunities for further improving today's deep learning models which rely heavily on MLPs.}
+}
+
+@misc{tancik2020fourierfeaturesletnetworks,
+      title={Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains}, 
+      author={Matthew Tancik and Pratul P. Srinivasan and Ben Mildenhall and Sara Fridovich-Keil and Nithin Raghavan and Utkarsh Singhal and Ravi Ramamoorthi and Jonathan T. Barron and Ren Ng},
+      year={2020},
+      eprint={2006.10739},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2006.10739}, 
+      abstract={We show that passing input points through a simple Fourier feature mapping enables a multilayer perceptron (MLP) to learn high-frequency functions in low-dimensional problem domains. These results shed light on recent advances in computer vision and graphics that achieve state-of-the-art results by using MLPs to represent complex 3D objects and scenes. Using tools from the neural tangent kernel (NTK) literature, we show that a standard MLP fails to learn high frequencies both in theory and in practice. To overcome this spectral bias, we use a Fourier feature mapping to transform the effective NTK into a stationary kernel with a tunable bandwidth. We suggest an approach for selecting problem-specific Fourier features that greatly improves the performance of MLPs for low-dimensional regression tasks relevant to the computer vision and graphics communities.}
+}
+
+@misc{wang2025simulatingthreedimensionalturbulencephysicsinformed,
+      title={Simulating Three-dimensional Turbulence with Physics-informed Neural Networks}, 
+      author={Sifan Wang and Shyam Sankaran and Xiantao Fan and Panos Stinis and Paris Perdikaris},
+      year={2025},
+      eprint={2507.08972},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2507.08972}, 
+      abstract={Turbulent fluid flows are among the most computationally demanding problems in science, requiring enormous computational resources that become prohibitive at high flow speeds. Physics-informed neural networks (PINNs) represent a radically different approach that trains neural networks directly from physical equations rather than data, offering the potential for continuous, mesh-free solutions. Here we show that appropriately designed PINNs can successfully simulate fully turbulent flows in both two and three dimensions, directly learning solutions to the fundamental fluid equations without traditional computational grids or training data. Our approach combines several algorithmic innovations including adaptive network architectures, causal training, and advanced optimization methods to overcome the inherent challenges of learning chaotic dynamics. Through rigorous validation on challenging turbulence problems, we demonstrate that PINNs accurately reproduce key flow statistics including energy spectra, kinetic energy, enstrophy, and Reynolds stresses. Our results demonstrate that neural equation solvers can handle complex chaotic systems, opening new possibilities for continuous turbulence modeling that transcends traditional computational limitations.}
+}
+
+@article{parfenyev20242dturbulence,
+author = {Parfenyev, Vladimir and Blumenau, M. and Nikitin, I.},
+year = {2024},
+month = {10},
+pages = {},
+title = {Inferring Parameters and Reconstruction of Two-Dimensional Turbulent Flows with Physics-Informed Neural Networks},
+volume = {120},
+journal = {JETP Letters},
+doi = {10.1134/S0021364024602203},
+abstract = {Obtaining system parameters and reconstructing the full flow state from limited velocity observations using conventional fluid dynamics solvers can be prohibitively expensive. Here we employ machine learning algorithms to overcome the challenge. As an example, we consider a moderately turbulent fluid flow, excited by a stationary force and described by a two-dimensional Navier–Stokes equation with linear bottom friction. Using dense in time, spatially sparse and probably noisy velocity data, we reconstruct the spatially dense velocity field, infer the pressure and driving force up to a harmonic function and its gradient, respectively, and determine the unknown fluid viscosity and friction coefficient. Both the root-mean-square errors of the reconstructions and their energy spectra are addressed. We study the dependence of these metrics on the degree of sparsity and noise in the velocity measurements. Our approach involves training a physics-informed neural network by minimizing the loss function, which penalizes deviations from the provided data and violations of the governing equations. The suggested technique extracts additional information from velocity measurements, potentially enhancing the capabilities of particle image/tracking velocimetry.}
+}
+
+@inproceedings{shin2025robust,
+  title={Robust Flow Field Reconstruction Using PINN for 3D Lagrangian Particle Tracking},
+  author={Shin, Hyungmin and Schr{\"o}der, Andreas},
+  booktitle={16th International Symposium on Particle Image Velocimetry--ISPIV 2025},
+  pages={1--12},
+  note={Paper 1142},
+  year={2025},
+  abstract={Physics-Informed Neural Networks (PINNs) effectively reconstruct fluid flow fields from sparse Lagrangian Particle Tracking (LPT) data by embedding physical laws directly into neural network training. This study investigates the influence of experimental parameters such as particle density on PINN reconstruction performance using synthetic (DNS-based HIT and turbulent channel flows) and experimental turbulent boundary layer (TBL) datasets. Results demonstrate PINNs’ robustness across varying seeding densities, with notably superior performance in TBL cases compared to HIT cases. Optimization techniques, particularly the SOAP optimizer, significantly enhance convergence speed and accuracy, highlighting PINNs' potential for reliable fluid flow reconstruction from limited experimental data.}
+}
+
+@article{WANG2024116813,
+title = {Respecting causality for training physics-informed neural networks},
+journal = {Computer Methods in Applied Mechanics and Engineering},
+volume = {421},
+pages = {116813},
+year = {2024},
+issn = {0045-7825},
+doi = {https://doi.org/10.1016/j.cma.2024.116813},
+url = {https://www.sciencedirect.com/science/article/pii/S0045782524000690},
+author = {Sifan Wang and Shyam Sankaran and Paris Perdikaris},
+keywords = {Deep learning, Partial differential equations, Computational physics, Chaotic systems},
+abstract = {While the popularity of physics-informed neural networks (PINNs) is steadily rising, to this date PINNs have not been successful in simulating dynamical systems whose solution exhibits multi-scale, chaotic or turbulent behavior. In this work we attribute this shortcoming to the inability of existing PINNs formulations to respect the spatio-temporal causal structure that is inherent to the evolution of physical systems. We argue that this is a fundamental limitation and a key source of error that can ultimately steer PINN models to converge towards erroneous solutions. We address this pathology by proposing a simple re-formulation of PINNs loss functions that can explicitly account for physical causality during model training. We demonstrate that this simple modification alone is enough to introduce significant accuracy improvements, as well as a practical quantitative mechanism for assessing the convergence of a PINNs model. We provide state-of-the-art numerical results across a series of benchmarks for which existing PINNs formulations fail, including the chaotic Lorenz system, the Kuramoto–Sivashinsky equation in the chaotic regime, and the Navier–Stokes equations. To the best of our knowledge, this is the first time that PINNs have been successful in simulating such systems, introducing new opportunities for their applicability to problems of industrial complexity.}
+}
+
+@misc{wang2022randomweightfactorizationimproves,
+      title         = {Random Weight Factorization Improves the Training of Continuous Neural Representations}, 
+      author        = {Sifan Wang and Hanwen Wang and Jacob H. Seidman and Paris Perdikaris},
+      year          = {2022},
+      eprint        = {2210.01274},
+      archivePrefix = {arXiv},
+      primaryClass  = {cs.LG},
+      url           = {https://arxiv.org/abs/2210.01274}, 
+      abstract      = {Continuous neural representations have recently emerged as a powerful and flexible alternative to classical discretized representations of signals. However, training them to capture fine details in multi-scale signals is difficult and computationally expensive. Here we propose random weight factorization as a simple drop-in replacement for parameterizing and initializing conventional linear layers in coordinate-based multi-layer perceptrons (MLPs) that significantly accelerates and improves their training. We show how this factorization alters the underlying loss landscape and effectively enables each neuron in the network to learn using its own self-adaptive learning rate. This not only helps with mitigating spectral bias, but also allows networks to quickly recover from poor initializations and reach better local minima. We demonstrate how random weight factorization can be leveraged to improve the training of neural representations on a variety of tasks, including image regression, shape representation, computed tomography, inverse rendering, solving partial differential equations, and learning operators between function spaces.}
+}
+
+
+@article{Xu2022,
+  author    = {Shengfeng Xu and Zhenxu Sun and Renfang Huang and Dilong Guo and Guowei Yang and Shengjun Ju},
+  title     = {A practical approach to flow field reconstruction with sparse or incomplete data through physics informed neural network},
+  journal   = {Acta Mechanica Sinica},
+  year      = {2022},
+  volume    = {39},
+  number    = {3},
+  pages     = {322302},
+  doi       = {10.1007/s10409-022-22302-x},
+  url       = {https://doi.org/10.1007/s10409-022-22302-x},
+  abstract  = {Physics-informed neural networks (PINNs) have been an effective tool for approximating the mapping between points in the spatio-temporal domain and solutions of partial differential equations (PDEs). However, there are still some challenges in dealing with the nonlinear characteristics and complexity of the Navier–Stokes (N–S) equations. In this paper, the improved adaptive weighting PINNs based on the Gaussian likelihood estimation are applied to solve the N–S equations. The weights of the different loss items are allocated adaptively by the maximum likelihood estimation. The improved network structure has been designed with considering both the global and local information, making it easier to capture the part of PDEs solution with drastic changes. A combinational method of the numerical differentiation (ND) and the automatic differentiation (AD) is proposed to compute the differential operators, with the improved computational efficiency. The derivative operation of the convection and pressure-gradient terms was carried out using the combined method in solving the incompressible N–S equations. The results show that the effectiveness and training efficiency of this method are better than PINNs.}
+}
+
+
+@InProceedings{pmlr-v9-glorot10a,
+  title = 	 {Understanding the difficulty of training deep feedforward neural networks},
+  author = 	 {Glorot, Xavier and Bengio, Yoshua},
+  booktitle = 	 {Proceedings of the Thirteenth International Conference on Artificial Intelligence and Statistics},
+  pages = 	 {249--256},
+  year = 	 {2010},
+  editor = 	 {Teh, Yee Whye and Titterington, Mike},
+  volume = 	 {9},
+  series = 	 {Proceedings of Machine Learning Research},
+  address = 	 {Chia Laguna Resort, Sardinia, Italy},
+  month = 	 {13--15 May},
+  publisher =    {PMLR},
+  pdf = 	 {http://proceedings.mlr.press/v9/glorot10a/glorot10a.pdf},
+  url = 	 {https://proceedings.mlr.press/v9/glorot10a.html},
+  abstract = 	 {Whereas before 2006 it appears that deep multi-layer neural networks were not successfully trained, since then several algorithms have been shown to successfully train them, with experimental results showing the superiority of deeper vs less deep architectures. All these experimental results were obtained with new initialization or training mechanisms. Our objective here is to understand better why standard gradient descent from random initialization is doing so poorly with deep neural networks, to better understand these recent relative successes and help design better algorithms in the future.  We first observe the influence of the non-linear activations functions. We find that the logistic sigmoid activation is unsuited for deep networks with random initialization because of its mean value, which can drive especially the top hidden layer into saturation. Surprisingly, we find that saturated units can move out of saturation by themselves, albeit slowly, and explaining the plateaus sometimes seen when training neural networks. We find that a new non-linearity that saturates less can often be beneficial. Finally, we study how activations and gradients vary across layers and during training, with the idea that training may be more difficult when the singular values of the Jacobian associated with each layer are far from 1.  Based on these considerations, we propose a new initialization scheme that brings substantially faster convergence.}
+}
+
+@article{Wang2024,
+  author    = {Jie Wang and Xufeng Xiao and Xinlong Feng and Hui Xu},
+  title     = {An improved physics-informed neural network with adaptive weighting and mixed differentiation for solving the incompressible Navier--Stokes equations},
+  journal   = {Nonlinear Dynamics},
+  year      = {2024},
+  volume    = {112},
+  number    = {18},
+  pages     = {16113--16134},
+  doi       = {10.1007/s11071-024-09856-6},
+  url       = {https://doi.org/10.1007/s11071-024-09856-6},
+  abstract  = {Physics-informed neural networks (PINNs) have been an effective tool for approximating the mapping between points in the spatio-temporal domain and solutions of partial differential equations (PDEs). However, there are still some challenges in dealing with the nonlinear characteristics and complexity of the Navier–Stokes (N–S) equations. In this paper, the improved adaptive weighting PINNs based on the Gaussian likelihood estimation are applied to solve the N–S equations. The weights of the different loss items are allocated adaptively by the maximum likelihood estimation. The improved network structure has been designed with considering both the global and local information, making it easier to capture the part of PDEs solution with drastic changes. A combinational method of the numerical differentiation (ND) and the automatic differentiation (AD) is proposed to compute the differential operators, with the improved computational efficiency. The derivative operation of the convection and pressure-gradient terms was carried out using the combined method in solving the incompressible N–S equations. The results show that the effectiveness and training efficiency of this method are better than PINNs.}
+}
+
+@misc{wang2023solutionmultiplicityeffectsdata,
+      title={Solution multiplicity and effects of data and eddy viscosity on Navier-Stokes solutions inferred by physics-informed neural networks}, 
+      author={Zhicheng Wang and Xuhui Meng and Xiaomo Jiang and Hui Xiang and George Em Karniadakis},
+      year={2023},
+      eprint={2309.06010},
+      archivePrefix={arXiv},
+      primaryClass={physics.flu-dyn},
+      url={https://arxiv.org/abs/2309.06010}, 
+}
+
+@article{10.1063/5.0180770,
+    author = {Zhou, Wen and Miwa, Shuichiro (三輪 修一郎) and Okamoto, Koji (岡本 孝司)},
+    title = {Advancing fluid dynamics simulations: A comprehensive approach to optimizing physics-informed neural networks},
+    journal = {Physics of Fluids},
+    volume = {36},
+    number = {1},
+    pages = {013615},
+    year = {2024},
+    month = {01},
+    abstract = {Flow modeling based on physics-informed neural networks (PINNs) is emerging as a potential artificial intelligence (AI) technique for solving fluid dynamics problems. However, conventional PINNs encounter inherent limitations when simulating incompressible fluids, such as difficulties in selecting the sampling points, balancing the loss items, and optimizing the hyperparameters. These limitations often lead to non-convergence of PINNs. To overcome these issues, an improved and generic PINN for fluid dynamic analysis is proposed. This approach incorporates three key improvements: residual-based adaptive sampling, which automatically samples points in areas with larger residuals; adaptive loss weights, which balance the loss terms effectively; and utilization of the differential evolution optimization algorithm. Then, three case studies at low Reynolds number, Kovasznay flow, vortex shedding past a cylinder, and Beltrami flow are employed to validate the improved PINNs. The contribution of each improvement to the final simulation results is investigated and quantified. The simulation results demonstrate good agreement with both analytical solutions and benchmarked computational fluid dynamics (CFD) calculation results, showcasing the efficiency and validity of the improved PINNs. These PINNs have the potential to reduce the reliance on CFD simulations for solving fluid dynamics problems.},
+    issn = {1070-6631},
+    doi = {10.1063/5.0180770},
+    url = {https://doi.org/10.1063/5.0180770},
+    eprint = {https://pubs.aip.org/aip/pof/article-pdf/doi/10.1063/5.0180770/18573823/013615_1_5.0180770.pdf},
+}
+
+@article{Wang2024JMLR,
+  author  = {Wang, S. and Li, B. and Chen, Y. and Perdikaris, P.},
+  title   = {PirateNets: Physics-informed Deep Learning with Residual
+Adaptive Networks},
+  journal = {Journal of Machine Learning Research},
+  volume  = {25},
+  number  = {402},
+  pages   = {1--51},
+  year    = {2024},
+  abstract= {While physics-informed neural networks (PINNs) have become a popular deep learning framework for tackling forward and inverse problems governed by partial differential equations (PDEs), their performance is known to degrade when larger and deeper neural network architectures are employed. Our study identifies that the root of this counter-intuitive behavior lies in the use of multi-layer perceptron (MLP) architectures with non-suitable initialization schemes, which result in poor trainablity for the network derivatives, and ultimately lead to an unstable minimization of the PDE residual loss. To address this, we introduce Physics-informed Residual Adaptive Networks (PirateNets), a novel architecture that is designed to facilitate stable and efficient training of deep PINN models. PirateNets leverage a novel adaptive residual connection, which allows the networks to be initialized as shallow networks that progressively deepen during training. We also show that the proposed initialization scheme allows us to encode appropriate inductive biases corresponding to a given PDE system into the network architecture. We provide comprehensive empirical evidence showing that PirateNets are easier to optimize and can gain accuracy from considerably increased depth, ultimately achieving state-of-the-art results across various benchmarks. All code and data accompanying this manuscript will be made publicly available at at https://github.com/PredictiveIntelligenceLab/jaxpi/tree/pirate.}
+}
+
+@article{doi:10.1137/15M1044680,
+author = {Duersch, Jed A. and Gu, Ming},
+title = {Randomized QR with Column Pivoting},
+journal = {SIAM Journal on Scientific Computing},
+volume = {39},
+number = {4},
+pages = {C263-C291},
+year = {2017},
+doi = {10.1137/15M1044680},
+URL = {https://doi.org/10.1137/15M1044680},
+eprint = {https://doi.org/10.1137/15M1044680},
+abstract = { The dominant contribution to communication complexity in factorizing a matrix using QR with column pivoting is due to column-norm updates that are required to process pivot decisions. We use randomized sampling to approximate this process which dramatically reduces communication in column selection. We also introduce a sample update formula to reduce the cost of sampling trailing matrices. Using our column selection mechanism, we observe results that are comparable in quality to those obtained from the QRCP algorithm, but with performance near unpivoted QR. We also demonstrate strong parallel scalability on shared-memory multiple core systems using an implementation in Fortran with OpenMP. This work immediately extends to produce low-rank truncated approximations of large matrices. We propose a truncated QR factorization with column pivoting that avoids trailing matrix updates which are used in current implementations of level-3 BLAS QR and QRCP. Provided the truncation rank is small, avoiding trailing matrix updates reduces approximation time by nearly half. By using these techniques and employing a variation on Stewart's QLP algorithm, we develop an approximate truncated SVD that runs nearly as fast as truncated QR. }
+}
+
+@article{Soibam2024IJHMT,
+	title = {Inverse flow prediction using ensemble PINNs and uncertainty quantification},
+	journal = {International Journal of Heat and Mass Transfer},
+	volume = {226},
+	pages = {125480},
+	year = {2024},
+	issn = {0017-9310},
+	doi = {10.1016/j.ijheatmasstransfer.2024.125480},
+	url = {https://www.sciencedirect.com/science/article/pii/S0017931024003119},
+	author = {Jerol Soibam and Ioanna Aslanidou and Konstantinos Kyprianidis and Rebei Bel Fdhila},
+	keywords = {Heat transfer, Mixed convection, Physics informed neural network, Optimal sensor placement, Transient simulation, Inverse method},
+	abstract = {The thermal boundary conditions in a numerical simulation for heat transfer are often imprecise. This leads to poorly defined boundary conditions for the energy equation. The lack of accurate thermal boundary conditions in real-world applications makes it impossible to effectively solve the problem, regardless of the advancement of conventional numerical methods. This study utilises a physics-informed neural network to tackle ill-posed problems for unknown thermal boundaries with limited sensor data. The network approximates velocity and temperature fields while adhering to the Navier-Stokes and energy equations, revealing unknown thermal boundaries and reconstructing the flow field around a square cylinder. Optimal sensor placement, determined by the QR pivoting technique, enhances the capture of dynamics, improving model accuracy. An ensemble PINN approach is implemented to increase robustness and generalisability, mitigating overfitting and underfitting risks, and providing a measure of model confidence. This enables the identification of reliable prediction regions and highlights potential inaccuracies, broadening applicability in complex heat transfer problems with unknown boundary conditions. Key findings include the ensemble physics-informed neural networks' superior predictive accuracy over single models and its ability to quantify uncertainty, offering insights into model validity. The study further highlights the importance of sensor placement, boundary condition enforcement, and activation function choice, with a notable shift from tanh to sin functions improving vortex shedding depiction.}
+	}
+
+@article{Arzani2021POF,
+  title = {Uncovering near-wall blood flow from sparse data with physics-informed neural networks},
+  author = {Arzani, Azad and Wang, Jian-Xun and D'Souza, Roshan M.},
+  journal = {Physics of Fluids},
+  volume = {33},
+  number = {7},
+  pages = {071905},
+  year = {2021},
+  doi = {10.1063/5.0050288}
+}
+
+@article{Sliwinski2023DCE,
+  title = {Mean flow reconstruction of unsteady flows using physics-informed neural networks},
+  author = {Sliwinski, {\L}ukasz and Rigas, Georgios},
+  journal = {Data-Centric Engineering},
+  volume = {4},
+  pages = {e4},
+  year = {2023},
+  doi = {10.1017/dce.2023.2}
+}
+
+@article{Nguyen2025POF,
+  title = {Darcy--Brinkman--Forchheimer PINNs for inverse problems of homogeneous porous media flows},
+  author = {Nguyen, S. D. T. and To, A. C. and Karniadakis, George Em},
+  journal = {Physics of Fluids},
+  volume = {37},
+  number = {9},
+  pages = {093626},
+  year = {2025},
+  doi = {10.1063/5.0171742}
+}
+
+@article{celaya2025adaptive,
+  title={An Adaptive Collocation Point Strategy For Physics Informed Neural Networks via the QR Discrete Empirical Interpolation Method},
+  author={Celaya, Adrian and Fuentes, David and Riviere, Beatrice},
+  journal={arXiv preprint arXiv:2501.07700},
+  year={2025},
+  abstract = {Physics-informed neural networks (PINNs) have gained significant attention for solving forward and inverse problems related to partial differential equations (PDEs). While advancements in loss functions and network architectures have improved PINN accuracy, the impact of collocation point sampling on their performance remains underexplored. Fixed sampling methods, such as uniform random sampling and equispaced grids, can fail to capture critical regions with high solution gradients, limiting their effectiveness for complex PDEs. Adaptive methods, inspired by adaptive mesh refinement from traditional numerical methods, address this by dynamically updating collocation points during training but may overlook residual dynamics between updates, potentially losing valuable information. To overcome this limitation, we propose two adaptive collocation point selection strategies utilizing the QR Discrete Empirical Interpolation Method (QR-DEIM), a reduced-order modeling technique for efficiently approximating nonlinear functions. Our results on benchmark PDEs demonstrate that our QR-DEIM-based approaches improve PINN accuracy compared to existing methods, offering a promising direction for adaptive collocation point strategies.}
+}
+
+@article{Musacchio2014PRE,
+  title = {Turbulent channel without boundaries: The periodic Kolmogorov flow},
+  author = {Musacchio, S. and Boffetta, G.},
+  journal = {Phys. Rev. E},
+  volume = {89},
+  issue = {2},
+  pages = {023004},
+  numpages = {6},
+  year = {2014},
+  month = {Feb},
+  publisher = {American Physical Society},
+  doi = {10.1103/PhysRevE.89.023004},
+  url = {https://link.aps.org/doi/10.1103/PhysRevE.89.023004},
+  abstract = {The Kolmogorov flow provides an ideal instance of a virtual channel flow: It has no boundaries, but it possesses well defined mean flow in each half wavelength. We exploit this remarkable feature for the purpose of investigating the interplay between the mean flow and the turbulent drag of the bulk flow. By means of a set of direct numerical simulations at increasing Reynolds number, we show the dependence of the bulk turbulent drag on the amplitude of the mean flow. Further, we present a detailed analysis of the scale-by-scale energy balance, which describes how kinetic energy is redistributed among different regions of the flow while being transported toward small dissipative scales. Our results allow us to obtain an accurate prediction for the spatial energy transport at large scales.}
+}
+
+@inproceedings{bukowski2025sparse,
+  title={Sparse sensing and surface pressure field reconstruction for flow over a hemisphere},
+  author={Bukowski, Timothy J and Rennie, Mark R and Gordeyev, Stanislav},
+  booktitle={AIAA SCITECH 2025 Forum},
+  pages={1884},
+  year={2025},
+  abstract={Reconstructing detailed flow fields from sparse sensor data is a critical challenge in aerodynamic studies. This work evaluates the performance of several reconstruction methods, including Proper Orthogonal Decomposition (POD), Linear Stochastic Estimation (LSE), a combined LSE-POD method, and a method based on Shallow Decoder Networks (SDN). These methods were tested to reconstruct surface pressure fields around a hemispherical turret. The study incorporates data-driven sensor placement using QR factorization to optimize sensor locations and compares results to randomly placed sensors. The reconstruction methods were validated using high-resolution experimental pressure fluctuation data obtained from a hemispherical model in subsonic flow. Results demonstrate that the LSE method achieves the highest accuracy among the methods tested, while the SDN-based method proved to be the most robust to noise and to varying flow speed conditions. QR-based sensor placement was shown to improve reconstruction performance for all methods, particularly in regions with sparse dynamic activity.}
+}
+
+@Article{fluids4020109,
+AUTHOR = {Jayaraman, Balaji and Al Mamun, S M Abdullah and Lu, Chen},
+TITLE = {Interplay of Sensor Quantity, Placement and System Dimension in POD-Based Sparse Reconstruction of Fluid Flows},
+JOURNAL = {Fluids},
+VOLUME = {4},
+YEAR = {2019},
+NUMBER = {2},
+ARTICLE-NUMBER = {109},
+URL = {https://www.mdpi.com/2311-5521/4/2/109},
+ISSN = {2311-5521},
+ABSTRACT = {Sparse linear estimation of fluid flows using data-driven proper orthogonal decomposition (POD) basis is systematically explored in this work. Fluid flows are manifestations of nonlinear multiscale partial differential equations (PDE) dynamical systems with inherent scale separation that impact the system dimensionality. Given that sparse reconstruction is inherently an ill-posed problem, the most successful approaches require the knowledge of the underlying low-dimensional space spanning the manifold in which the system resides. In this paper, we adopt an approach that learns basis from singular value decomposition (SVD) of training data to recover sparse information. This results in a set of four design parameters for sparse recovery, namely, the choice of basis, system dimension required for sufficiently accurate reconstruction, sensor budget and their placement. The choice of design parameters implicitly determines the choice of algorithm as either l 2 minimization reconstruction or sparsity promoting l 1 minimization reconstruction. In this work, we systematically explore the implications of these design parameters on reconstruction accuracy so that practical recommendations can be identified. We observe that greedy-smart sensor placement, particularly interpolation points from the discrete empirical interpolation method (DEIM), provide the best balance of computational complexity and accurate reconstruction.},
+DOI = {10.3390/fluids4020109}
+}
+
+@article{Menter1994,
+  title = {Two-equation eddy-viscosity turbulence models for engineering applications},
+  author = {Menter, F. R.},
+  journal = {AIAA Journal},
+  volume = {32},
+  number = {8},
+  pages = {1598--1605},
+  year = {1994},
+  doi = {10.2514/3.12149},
+  abstract = {Two new two-equation eddy viscosity turbulence models will be presented. They combine different elements of existing models which are considered superior to their alternatives. The first model, referred to as the baseline (BSL) model, utilizes the original k-omega model of Wilcox in the inner region of the boundary layer and switches to the standard k-epsilon model in the outer region and in free shear flows. It can be shown that this formulation effectively blends the advantages of both models. The BSL model also accounts for the transport of turbulent shear stress, which results in improved predictions in adverse pressure gradient flows. The second model results from a modification to the definition of the eddy viscosity in the BSL formulation which accounts for the effects of the transport of the principal turbulent shear stress. The new model is called the shear stress transport (SST) model and leads to major improvements in the prediction capability relative to existing two-equation models.}
+}
+
+@misc{rathore2024challengestrainingpinnsloss,
+      title={Challenges in Training PINNs: A Loss Landscape Perspective}, 
+      author={Pratik Rathore and Weimu Lei and Zachary Frangella and Lu Lu and Madeleine Udell},
+      year={2024},
+      eprint={2402.01868},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2402.01868}, 
+      abstract={This paper explores challenges in training Physics-Informed Neural Networks (PINNs), emphasizing the role of the loss landscape in the training process. We examine difficulties in minimizing the PINN loss function, particularly due to ill-conditioning caused by differential operators in the residual term. We compare gradient-based optimizers Adam, L-BFGS, and their combination Adam+L-BFGS, showing the superiority of Adam+L-BFGS, and introduce a novel second-order optimizer, NysNewton-CG (NNCG), which significantly improves PINN performance. Theoretically, our work elucidates the connection between ill-conditioned differential operators and ill-conditioning in the PINN loss and shows the benefits of combining first- and second-order optimization methods. Our work presents valuable insights and more powerful optimization strategies for training PINNs, which could improve the utility of PINNs for solving difficult partial differential equations.}
+}
+
+@article{Leith1996PhysFluids,
+  title = {Stochastic backscatter in a subgrid-scale model: Plane shear mixing layer},
+  author = {Leith, C. E.},
+  journal = {Physics of Fluids},
+  volume = {8},
+  number = {6},
+  pages = {1588--1591},
+  year = {1996},
+  doi = {10.1063/1.868935},
+  abstract = {A stochastic model for subgrid-scale turbulent fluctuations is proposed, in which both forward and backward energy transfer (backscatter) are represented. The model is tested in large-eddy simulations of a plane shear mixing layer and compared with deterministic models. Results show that the stochastic backscatter model improves the representation of intermittency and energy transfer in the subgrid scales.}
+}
+
+@article{Boffetta2012ARFM,
+  title = {Two-Dimensional Turbulence},
+  author = {Boffetta, Guido and Ecke, Robert E.},
+  journal = {Annual Review of Fluid Mechanics},
+  volume = {44},
+  pages = {427--451},
+  year = {2012},
+  doi = {10.1146/annurev-fluid-120710-101240},
+  abstract = {Two-dimensional turbulence appears in thin fluid layers such as atmospheric flows, planetary atmospheres, and soap films. Unlike three-dimensional turbulence, 2D turbulence exhibits an inverse energy cascade where energy flows from small to large scales, leading to the formation of large-scale coherent structures. This review discusses the fundamental properties, energy cascade mechanisms, intermittency, and experimental observations of two-dimensional turbulent flows, highlighting the differences from classical 3D turbulence theory.}
+}
+
+@article{Jin2021JCP,
+  title = {NSFnets (Navier-Stokes flow nets): Physics-informed neural networks for the incompressible Navier-Stokes equations},
+  author = {Jin, Xiaowei and Cai, Shengze and Li, Hui and Karniadakis, George Em},
+  journal = {Journal of Computational Physics},
+  volume = {426},
+  pages = {109951},
+  year = {2021},
+  doi = {10.1016/j.jcp.2020.109951},
+  abstract = {We introduce NSFnets (Navier-Stokes flow nets), a physics-informed deep learning framework for solving the incompressible Navier-Stokes equations. NSFnets employ automatic differentiation to enforce the governing equations as soft constraints in the loss function, enabling mesh-free solutions for forward and inverse problems. We demonstrate NSFnets on several benchmark problems including 2D decaying turbulence, lid-driven cavity flow, and flow past a cylinder. The results show that NSFnets can capture complex flow features including turbulent structures, but may struggle with highly turbulent flows due to the wide range of spatial and temporal scales.}
+}
+
+@article{Mao2020JCP,
+  title = {Physics-informed neural networks for high-speed flows},
+  author = {Mao, Zhiping and Jagtap, Ameya D. and Karniadakis, George Em},
+  journal = {Computer Methods in Applied Mechanics and Engineering},
+  volume = {360},
+  pages = {112789},
+  year = {2020},
+  doi = {10.1016/j.cma.2019.112789},
+  abstract = {We develop physics-informed DeepONets, a new class of physics-informed neural networks for learning nonlinear operators. The DeepONet architecture is augmented with physics-informed loss functions that encode partial differential equations (PDEs). We demonstrate the effectiveness of this approach on several benchmark problems in computational fluid dynamics, including 2D cylinder wake and boundary layer flows.}
+}
+
+@article{Eivazi2022POF,
+  title = {Physics-informed neural networks for solving Reynolds-averaged Navier--Stokes equations},
+  author = {Eivazi, Hamidreza and Tahani, Mojtaba and Schlatter, Philipp and Vinuesa, Ricardo},
+  journal = {Physics of Fluids},
+  volume = {34},
+  number = {7},
+  pages = {075117},
+  year = {2022},
+  doi = {10.1063/5.0095270},
+  abstract = {We explore the application of physics-informed neural networks (PINNs) for solving Reynolds-averaged Navier-Stokes (RANS) equations in turbulent flows. We demonstrate the capability of PINNs to predict turbulent flows in canonical configurations such as the 2D lid-driven cavity and flow over a backward-facing step. The results show that PINNs can successfully capture the transition from laminar to turbulent regimes when augmented with appropriate turbulence closures.}
+}
+
+@article{Wang2021JCP,
+  title = {Understanding and mitigating gradient flow pathologies in physics-informed neural networks},
+  author = {Wang, Sifan and Teng, Yujun and Perdikaris, Paris},
+  journal = {SIAM Journal on Scientific Computing},
+  volume = {43},
+  number = {5},
+  pages = {A3055--A3081},
+  year = {2021},
+  doi = {10.1137/20M1318043},
+  abstract = {Physics-informed neural networks (PINNs) have emerged as a promising tool for solving forward and inverse problems involving partial differential equations. However, training PINNs can be challenging due to gradient pathologies arising from the competing terms in the composite loss function. We analyze the causes of these pathologies and propose several strategies to mitigate them, including adaptive weighting schemes, learning rate annealing, and curriculum training. Our results demonstrate that these techniques significantly improve training stability and solution accuracy.}
+}
+
+@inproceedings{Chen2018ICML,
+  title = {GradNorm: Gradient normalization for adaptive loss balancing in deep multitask networks},
+  author = {Chen, Zhao and Badrinarayanan, Vijay and Lee, Chen-Yu and Rabinovich, Andrew},
+  booktitle = {Proceedings of the 35th International Conference on Machine Learning},
+  pages = {794--803},
+  year = {2018},
+  volume = {80},
+  series = {Proceedings of Machine Learning Research},
+  publisher = {PMLR},
+  abstract = {We present GradNorm, an algorithm that automatically balances training in deep multitask models by dynamically tuning gradient magnitudes. By adapting the gradients to have roughly equal magnitudes across all tasks, GradNorm improves training stability and final performance. We demonstrate its effectiveness on several multitask learning benchmarks including classification, segmentation, and depth prediction tasks.}
+}
+
+@article{Nabian2021CMAME,
+  title = {Efficient training of physics-informed neural networks via importance sampling},
+  author = {Nabian, Mohammad Amin and Gladstone, Rini Jasmine and Meidani, Hadi},
+  journal = {Computer Methods in Applied Mechanics and Engineering},
+  volume = {384},
+  pages = {113964},
+  year = {2021},
+  doi = {10.1016/j.cma.2021.113964},
+  abstract = {We propose an importance sampling strategy for efficiently training physics-informed neural networks (PINNs). By adaptively re-sampling collocation points in regions with high PDE residuals, we reduce the number of training points required for convergence and improve solution accuracy. The adaptive collocation strategy is particularly effective for problems with steep gradients, discontinuities, or localized features. We demonstrate the effectiveness of this approach on several benchmark problems in computational mechanics.}
+}
+
+@misc{Vyas2024SOAP,
+  title = {SOAP: Improving and Stabilizing Shampoo using Adam},
+  author = {Vyas, Nikhil and Morwani, Depen and Zhao, Rosie and Kwun, Mujin and Shapira, Itai and Brandfonbrener, David and Janson, Lucas and Kakade, Sham},
+  year = {2024},
+  eprint = {2409.11321},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
+  url = {https://arxiv.org/abs/2409.11321},
+  note = {Updated Jan 2025},
+  abstract = {There is growing evidence of the effectiveness of Shampoo, a higher-order preconditioning method, over Adam in deep learning optimization tasks. However, Shampoo's drawbacks include additional hyperparameters and computational overhead when compared to Adam. This work establishes a formal connection between Shampoo and Adafactor, showing that Shampoo is equivalent to running Adafactor in the eigenbasis of Shampoo's preconditioner. This insight leads to the design of SOAP: Shampoo with Adam in the Preconditioner's eigenbasis. SOAP mitigates performance degradation by continually updating the running average of the second moment in the current coordinate basis. In the large batch regime, SOAP reduces the number of iterations by over 40\% and wall clock time by over 35\% compared to AdamW, with approximately 20\% improvements compared to Shampoo.}
+}
+
+@article{Sirovich1987QAM,
+  title = {Turbulence and the dynamics of coherent structures. I. Coherent structures},
+  author = {Sirovich, Lawrence},
+  journal = {Quarterly of Applied Mathematics},
+  volume = {45},
+  number = {3},
+  pages = {561--571},
+  year = {1987},
+  doi = {10.1090/qam/910462},
+  abstract = {The notion of coherent structures in turbulent flows is examined from a theoretical perspective. We introduce the Proper Orthogonal Decomposition (POD) as a method to extract the most energetic modes from turbulent flow data. This decomposition provides an optimal basis for representing the flow field in terms of a minimal number of modes, capturing the essential dynamics of coherent structures. The method is particularly useful for turbulence modeling and low-dimensional approximations of complex fluid flows.}
+}
+
+@inproceedings{Sitzmann2020SIREN,
+  title = {Implicit Neural Representations with Periodic Activation Functions},
+  author = {Sitzmann, Vincent and Martel, Julien N. P. and Bergman, Alexander W. and Lindell, David B. and Wetzstein, Gordon},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume = {33},
+  pages = {7462--7473},
+  year = {2020},
+  url = {https://arxiv.org/abs/2006.09661},
+  abstract = {Implicitly defined, continuous, differentiable signal representations parameterized by neural networks have emerged as a powerful paradigm, offering many possible benefits over conventional discrete representations. However, current network architectures for such implicit neural representations are incapable of modeling signals with fine detail, and fail to represent a signal's spatial and temporal derivatives, despite the fact that these are essential to many physical signals. We propose to leverage periodic activation functions for implicit neural representations and show that these networks, dubbed sinusoidal representation networks or Sirens, are ideally suited for representing complex natural signals and their derivatives. We demonstrate that Sirens outperform ReLU-based architectures on a range of tasks, including solving boundary value problems, learning implicit representations of images and 3D shapes, and representing audio and video signals.}
+}
+
+@inproceedings{Kingma2015Adam,
+  title = {Adam: A Method for Stochastic Optimization},
+  author = {Kingma, Diederik P. and Ba, Jimmy},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year = {2015},
+  url = {https://arxiv.org/abs/1412.6980},
+  abstract = {We introduce Adam, an algorithm for first-order gradient-based optimization of stochastic objective functions, based on adaptive estimates of lower-order moments. The method is straightforward to implement, is computationally efficient, has little memory requirements, is invariant to diagonal rescaling of the gradients, and is well suited for problems that are large in terms of data and/or parameters. The method is also appropriate for non-stationary objectives and problems with very noisy and/or sparse gradients. The hyper-parameters have intuitive interpretations and typically require little tuning.}
+}
+
+@article{leith1968diffusion,
+  title={Diffusion approximation for two-dimensional turbulence},
+  author={Leith, Cecil E},
+  journal={Physics of Fluids},
+  volume={11},
+  number={3},
+  pages={671--672},
+  year={1968}
+}
+
+@misc{patel2024turbulencemodelaugmentedphysics,
+      title={Turbulence model augmented physics informed neural networks for mean flow reconstruction}, 
+      author={Yusuf Patel and Vincent Mons and Olivier Marquet and Georgios Rigas},
+      year={2024},
+      eprint={2306.01065},
+      archivePrefix={arXiv},
+      primaryClass={physics.flu-dyn},
+      url={https://arxiv.org/abs/2306.01065}, 
+      abstract={Experimental measurements and numerical simulations of turbulent flows are characterised by a trade-off between accuracy and resolution. In this study, we combine accurate sparse pointwise mean velocity measurements with the Reynolds-Averaged Navier-Stokes (RANS) equations using data assimilation methods. Importantly, we bridge the gap between data assimilation (DA) using Physics-Informed Neural Networks (PINNs) and variational methods based on classical spatial discretisation of the flow equations, by comparing both approaches on the same turbulent flow case. Firstly, by constraining the PINN with sparse data and the under-determined RANS equations without closure, we show that the mean flow is reconstructed to a higher accuracy than a RANS solver using the Spalart-Allmaras (SA) turbulence model. Secondly, we propose the SA turbulence model augmented PINN (PINN-DA-SA), which outperforms the former approach by up to 73% reduction in mean velocity reconstruction error with coarse measurements. The additional SA physics constraints improve flow reconstructions in regions with high velocity and pressure gradients and separation. Thirdly, we compare the PINN-DA-SA approach to a variational data assimilation using the same sparse velocity measurements and physics constraints. The PINN-DA-SA achieves lower reconstruction error across a range of data resolutions. This is attributed to discretisation errors in the variational methodology that are avoided by PINNs. We demonstrate the method using high fidelity measurements from direct numerical simulation of the turbulent periodic hill at Re = 5600.}
+}
+
+@misc{du2022stateestimationminimalturbulent,
+      title={State estimation in minimal turbulent channel flow: A comparative study of 4DVar and PINN}, 
+      author={Yifan Du and Mengze Wang and Tamer A. Zaki},
+      year={2022},
+      eprint={2210.09424},
+      archivePrefix={arXiv},
+      primaryClass={physics.flu-dyn},
+      url={https://arxiv.org/abs/2210.09424}, 
+      abstract={The state of turbulent, minimal-channel flow is estimated from spatio-temporal sparse observations of the velocity, using both a physics-informed neural network (PINN) and adjoint-variational data assimilation (4DVar). The performance of PINN is assessed against the benchmark results from 4DVar. The PINN is efficient to implement, takes advantage of automatic differentiation to evaluate the governing equations, and does not require the development of an adjoint model. In addition, the flow evolution is expressed in terms of the network parameters which have a far smaller dimension than the predicted trajectory in state space or even just the initial condition of the flow. Provided adequate observations, network architecture and training, the PINN can yield satisfactory estimates of the the flow field, both for the missing velocity data and the entirely unobserved pressure field. However, accuracy depends on the network architecture, and the dependence is not known a priori. In comparison to 4DVar estimation which becomes progressively more accurate over the observation horizon, the PINN predictions are generally less accurate and maintain the same level of errors throughout the assimilation time window. Another notable distinction is the capacity to accurately forecast the flow evolution: while the 4DVar prediction depart from the true flow state gradually and according to the Lyapunov exponent, the PINN is entirely inaccurate immediately beyond the training time horizon unless re-trained. Most importantly, while 4DVar satisfies the discrete form of the governing equations point-wise to machine precision, in PINN the equations are only satisfied in an L2 sense.}
+}
+
+@article{Clark_Di_Leoni_2023,
+   title={Reconstructing turbulent velocity and pressure fields from under-resolved noisy particle tracks using physics-informed neural networks},
+   volume={64},
+   ISSN={1432-1114},
+   url={http://dx.doi.org/10.1007/s00348-023-03629-4},
+   DOI={10.1007/s00348-023-03629-4},
+   number={5},
+   journal={Experiments in Fluids},
+   publisher={Springer Science and Business Media LLC},
+   author={Clark Di Leoni, Patricio and Agarwal, Karuna and Zaki, Tamer A. and Meneveau, Charles and Katz, Joseph},
+   year={2023},
+   month=may,
+   abstract={Volume-resolving imaging techniques are rapidly advancing progress in experimental fluid mechanics. However, reconstructing the full and structured Eulerian velocity and pressure fields from sparse and noisy particle tracks obtained experimentally remains a significant challenge. We introduce a new method for this reconstruction, based on Physics-Informed Neural Networks (PINNs). The method uses a Neural Network regularized by the Navier-Stokes equations to interpolate the velocity data and simultaneously determine the pressure field. We compare this approach to the state-of-the-art Constrained Cost Minimization method [1]. Using data from direct numerical simulations and various types of synthetically generated particle tracks, we show that PINNs are able to accurately reconstruct both velocity and pressure even in regions with low particle density and small accelerations. PINNs are also robust against increasing the distance between particles and the noise in the measurements, when studied under synthetic and experimental conditions.}
+}
+
+@article{von_Saldern_2022,
+author = {von Saldern, Jakob G. R. and Reumschüssel, Johann Moritz and Kaiser, Thomas and Sieber, Moritz and Oberleithner, Kilian},
+year = {2022},
+month = {10},
+pages = {},
+title = {Mean flow data assimilation based on physics-informed neural networks},
+volume = {34},
+journal = {Physics of Fluids},
+doi = {10.1063/5.0116218},
+abstract = {Physics-informed neural networks (PINNs) can be used to solve partial differential equations (PDEs) and identify hidden variables by incorporating the governing equations into neural network training. In this study, we apply PINNs to the assimilation of turbulent mean flow data and investigate the method's ability to identify inaccessible variables and closure terms from sparse data. Using high-fidelity large-eddy simulation (LES) data and particle image velocimetry (PIV) measured mean fields, we show that PINNs are suitable for simultaneously identifying multiple missing quantities in turbulent flows and providing continuous and differentiable mean fields consistent with the provided PDEs. In this way, consistent and complete mean states can be provided, which are essential for linearized mean field methods. The presented method does not require a grid or discretization scheme, is easy to implement, and can be used for a wide range of applications, making it a very promising tool for mean field-based methods in fluid mechanics.}
+}
+
+
+@Article{fluids8020043,
+AUTHOR = {Pioch, Fabian and Harmening, Jan Hauke and Müller, Andreas Maximilian and Peitzmann, Franz-Josef and Schramm, Dieter and el Moctar, Ould},
+TITLE = {Turbulence Modeling for Physics-Informed Neural Networks: Comparison of Different RANS Models for the Backward-Facing Step Flow},
+JOURNAL = {Fluids},
+VOLUME = {8},
+YEAR = {2023},
+NUMBER = {2},
+ARTICLE-NUMBER = {43},
+URL = {https://www.mdpi.com/2311-5521/8/2/43},
+ISSN = {2311-5521},
+ABSTRACT = {Physics-informed neural networks (PINN) can be used to predict flow fields with a minimum of simulated or measured training data. As most technical flows are turbulent, PINNs based on the Reynolds-averaged Navier–Stokes (RANS) equations incorporating a turbulence model are needed. Several studies demonstrated the capability of PINNs to solve the Naver–Stokes equations for laminar flows. However, little work has been published concerning the application of PINNs to solve the RANS equations for turbulent flows. This study applied a RANS-based PINN approach to a backward-facing step flow at a Reynolds number of 5100. The standard k-ω model, the mixing length model, an equation-free νt and an equation-free pseudo-Reynolds stress model were applied. The results compared favorably to DNS data when provided with three vertical lines of labeled training data. For five lines of training data, all models predicted the separated shear layer and the associated vortex more accurately.},
+DOI = {10.3390/fluids8020043}
+}
+
+@article{10.1063/5.0211680,
+    author = {Hosseini, Mohammad Yasin and Shiri, Yousef},
+    title = {Flow field reconstruction from sparse sensor measurements with physics-informed neural networks},
+    journal = {Physics of Fluids},
+    volume = {36},
+    number = {7},
+    pages = {073606},
+    year = {2024},
+    month = {07},
+    abstract = {In the realm of experimental fluid mechanics, accurately reconstructing high-resolution flow fields is notably challenging due to often sparse and incomplete data across time and space domains. This is exacerbated by the limitations of current experimental tools and methods, which leave critical areas without measurable data. This research suggests a feasible solution to this problem by employing an inverse physics-informed neural network (PINN) to merge available sparse data with physical laws. The method's efficacy is demonstrated using flow around a cylinder as a case study, with three distinct training sets. One was the sparse velocity data from a domain, and the other two datasets were limited velocity data obtained from the domain boundaries and sensors around the cylinder wall. The coefficient of determination (R2) coefficient and mean squared error (RMSE) metrics, indicative of model performance, have been determined for the velocity components of all models. For the 28 sensors model, the R2 value stands at 0.996 with an associated RMSE of 0.0251 for the u component, while for the v component, the R2 value registers at 0.969, accompanied by an RMSE of 0.0169. The outcomes indicate that the method can successfully recreate the actual velocity field with considerable precision with more than 28 sensors around the cylinder, highlighting PINN's potential as an effective data assimilation technique for experimental fluid mechanics.},
+    issn = {1070-6631},
+    doi = {10.1063/5.0211680},
+    url = {https://doi.org/10.1063/5.0211680},
+    eprint = {https://pubs.aip.org/aip/pof/article-pdf/doi/10.1063/5.0211680/20030168/073606_1_5.0211680.pdf},
+}
+
+@article{10.1063/5.0218611,
+    author = {Chaurasia, Nagendra Kumar and Chakraborty, Shubhankar},
+    title = {Reconstruction of the turbulent flow field with sparse measurements using physics-informed neural network},
+    journal = {Physics of Fluids},
+    volume = {36},
+    number = {8},
+    pages = {085187},
+    year = {2024},
+    month = {08},
+    abstract = {Accurate high-resolution flow field prediction based on limited experimental data is a complex task. This research introduces an innovative framework leveraging physics-informed neural network (PINN) to reconstruct high-resolution flow fields using sparse particle image velocimetry measurements for flow over a periodic hill and high-fidelity computational fluid dynamics data for flow over a curved backward-facing step. Model training utilized mean flow measurements, with increased measurement sparsity achieved through various curation strategies. The resulting flow field reconstruction demonstrated marginal error in both test cases, showcasing the ability of the framework to reconstruct the flow field with limited measurement data accurately. Additionally, the study successfully predicted flow fields under two different noise levels, closely aligning with experimental and high-fidelity results (experimental, direct numerical simulation, or large eddy simulation) for both cases. Hyperparameter tuning conducted on the periodic hill case has been applied to the curved backward-facing step case. This research underscores the potential of PINN as an emerging method for turbulent flow field prediction via data assimilation, offering reduced computational costs even with sparse, noisy measurements.},
+    issn = {1070-6631},
+    doi = {10.1063/5.0218611},
+    url = {https://doi.org/10.1063/5.0218611},
+    eprint = {https://pubs.aip.org/aip/pof/article-pdf/doi/10.1063/5.0218611/20131202/085187_1_5.0218611.pdf},
+}
+
+@misc{wang2023solutionmultiplicityeffectsdata,
+      title={Solution multiplicity and effects of data and eddy viscosity on Navier-Stokes solutions inferred by physics-informed neural networks}, 
+      author={Zhicheng Wang and Xuhui Meng and Xiaomo Jiang and Hui Xiang and George Em Karniadakis},
+      year={2023},
+      eprint={2309.06010},
+      archivePrefix={arXiv},
+      primaryClass={physics.flu-dyn},
+      url={https://arxiv.org/abs/2309.06010}, 
+      abstract={Physics-informed neural networks (PINNs) have emerged as a new simulation paradigm for fluid flows and are especially effective for inverse and hybrid problems. However, vanilla PINNs often fail in forward problems, especially at high Reynolds (Re) number flows. Herein, we study systematically the classical lid-driven cavity flow at Re=2,000, 3,000 and 5,000. We observe that vanilla PINNs obtain two classes of solutions, one class that agrees with direct numerical simulations (DNS), and another that is an unstable solution to the Navier-Stokes equations and not physically realizable. We attribute this solution multiplicity to singularities and unbounded vorticity, and we propose regularization methods that restore a unique solution within 1\% difference from the DNS solution. In particular, we introduce a parameterized entropy-viscosity method as artificial eddy viscosity and identify suitable parameters that drive the PINNs solution towards the DNS solution. Furthermore, we solve the inverse problem by subsampling the DNS solution, and identify a new eddy viscosity distribution that leads to velocity and pressure fields almost identical to their DNS counterparts. Surprisingly, a single measurement at a random point suffices to obtain a unique PINNs DNS-like solution even without artificial viscosity, which suggests possible pathways in simulating high Reynolds number turbulent flows using vanilla PINNs.}
+}

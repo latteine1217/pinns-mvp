@@ -40,7 +40,7 @@ physics:
 # 損失權重
 losses:
   data_weight: 1.0
-  boundary_weight: 1.0
+  wall_constraint_weight: 1.0
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0
   continuity_weight: 1.0

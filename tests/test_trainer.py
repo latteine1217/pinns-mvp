@@ -65,7 +65,7 @@ def mock_physics():
     """模擬物理模組（2D NS 方程）"""
     physics = Mock()
     
-    # 模擬 residual_unified() 方法（2D PINN）
+    # 模擬 residual() 方法（2D PINN）
     def mock_residual(coords, predictions, **kwargs):
         """返回固定的殘差（用於測試）"""
         batch_size = coords.shape[0]
@@ -77,7 +77,6 @@ def mock_physics():
         }
     
     physics.residual = Mock(side_effect=mock_residual)
-    physics.residual_unified = Mock(side_effect=mock_residual)  # 新增：統一接口
     physics.compute_momentum_residuals = None  # 標記為標準 PINN (非 VS-PINN)
     physics.scale_coordinates = Mock(side_effect=lambda x: x if isinstance(x, torch.Tensor) else torch.tensor(x))  # 恆等映射
     physics.state_dict = Mock(return_value={})  # 返回空字典
@@ -159,19 +158,25 @@ def basic_config():
 @pytest.fixture
 def training_data_2d(device):
     """2D PINN 訓練資料"""
+    x_pde = torch.randn(50, 1, device=device)
+    y_pde = torch.randn(50, 1, device=device)
+    coords_pde_spatial = torch.cat([x_pde, y_pde], dim=1)
+    x_bc = torch.cat([
+        torch.ones(10, 1, device=device),    # 上壁面 y=1
+        -torch.ones(10, 1, device=device),   # 下壁面 y=-1
+    ], dim=0)
+    y_bc = torch.cat([
+        torch.ones(10, 1, device=device),
+        -torch.ones(10, 1, device=device),
+    ], dim=0)
+    coords_bc_spatial = torch.cat([x_bc, y_bc], dim=1)
+    x_sensors = torch.randn(10, 1, device=device)
+    y_sensors = torch.randn(10, 1, device=device)
+    coords_sensors_spatial = torch.cat([x_sensors, y_sensors], dim=1)
     return {
-        'x_pde': torch.randn(50, 1, device=device),
-        'y_pde': torch.randn(50, 1, device=device),
-        'x_bc': torch.cat([
-            torch.ones(10, 1, device=device),    # 上壁面 y=1
-            -torch.ones(10, 1, device=device),   # 下壁面 y=-1
-        ], dim=0),
-        'y_bc': torch.cat([
-            torch.ones(10, 1, device=device),
-            -torch.ones(10, 1, device=device),
-        ], dim=0),
-        'x_sensors': torch.randn(10, 1, device=device),
-        'y_sensors': torch.randn(10, 1, device=device),
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
         'u_sensors': torch.randn(10, 1, device=device),
         'v_sensors': torch.randn(10, 1, device=device),
         'p_sensors': torch.randn(10, 1, device=device),
@@ -181,22 +186,28 @@ def training_data_2d(device):
 @pytest.fixture
 def training_data_3d(device):
     """3D VS-PINN 訓練資料"""
+    x_pde = torch.randn(50, 1, device=device)
+    y_pde = torch.randn(50, 1, device=device)
+    z_pde = torch.randn(50, 1, device=device)
+    coords_pde_spatial = torch.cat([x_pde, y_pde, z_pde], dim=1)
+    x_bc = torch.cat([
+        torch.ones(10, 1, device=device),
+        -torch.ones(10, 1, device=device),
+    ], dim=0)
+    y_bc = torch.cat([
+        torch.ones(10, 1, device=device),
+        -torch.ones(10, 1, device=device),
+    ], dim=0)
+    z_bc = torch.randn(20, 1, device=device)
+    coords_bc_spatial = torch.cat([x_bc, y_bc, z_bc], dim=1)
+    x_sensors = torch.randn(10, 1, device=device)
+    y_sensors = torch.randn(10, 1, device=device)
+    z_sensors = torch.randn(10, 1, device=device)
+    coords_sensors_spatial = torch.cat([x_sensors, y_sensors, z_sensors], dim=1)
     return {
-        'x_pde': torch.randn(50, 1, device=device),
-        'y_pde': torch.randn(50, 1, device=device),
-        'z_pde': torch.randn(50, 1, device=device),
-        'x_bc': torch.cat([
-            torch.ones(10, 1, device=device),
-            -torch.ones(10, 1, device=device),
-        ], dim=0),
-        'y_bc': torch.cat([
-            torch.ones(10, 1, device=device),
-            -torch.ones(10, 1, device=device),
-        ], dim=0),
-        'z_bc': torch.randn(20, 1, device=device),
-        'x_sensors': torch.randn(10, 1, device=device),
-        'y_sensors': torch.randn(10, 1, device=device),
-        'z_sensors': torch.randn(10, 1, device=device),
+        'coords_pde_spatial': coords_pde_spatial,
+        'coords_bc_spatial': coords_bc_spatial,
+        'coords_sensors_spatial': coords_sensors_spatial,
         'u_sensors': torch.randn(10, 1, device=device),
         'v_sensors': torch.randn(10, 1, device=device),
         'p_sensors': torch.randn(10, 1, device=device),
@@ -320,8 +331,8 @@ class TestTrainerStep:
         assert not np.isinf(result['total_loss'])
         assert result['total_loss'] >= 0
         
-        # 檢查物理模組被調用（residual_unified 是新接口）
-        assert mock_physics.residual_unified.called
+        # 檢查物理模組被調用
+        assert mock_physics.residual.called
     
     def test_step_3d_vs_pinn(self, simple_model_3d, mock_physics_vs, mock_losses, basic_config, device, training_data_3d):
         """測試 3D VS-PINN 單步訓練"""
@@ -678,6 +689,8 @@ class TestTrainerCheckpointing:
                 'epoch': 15,
                 'model_state_dict': trainer1.model.state_dict(),
                 'optimizer_state_dict': trainer1.optimizer.state_dict(),
+                'physics_state_dict': trainer1.physics.state_dict(),
+                'normalization': trainer1.data_normalizer.get_metadata(),
                 'history': {'loss': [1.0, 0.8, 0.6]},
             }, checkpoint_path)
             

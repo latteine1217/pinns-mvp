@@ -35,21 +35,16 @@ def load_checkpoint(checkpoint_path, device='cpu'):
     # 處理兩種配置格式
     if 'fourier_features' in model_config and isinstance(model_config['fourier_features'], dict):
         ff_config = model_config['fourier_features']
-        if 'fourier_m' in ff_config:
-            use_fourier = ff_config['enabled']
-            fourier_m = ff_config['fourier_m']
-            fourier_sigma = ff_config['fourier_sigma']
-            trainable_fourier = ff_config.get('trainable', False)
-        else:
-            use_fourier = model_config.get('use_fourier', False)
-            fourier_m = model_config.get('fourier_m', 16)
-            fourier_sigma = model_config.get('fourier_sigma', 4.0)
-            trainable_fourier = model_config.get('fourier_trainable', False)
+        ff_type = ff_config.get('type', 'standard')
+        use_fourier = ff_type != 'disabled'
+        fourier_m = ff_config.get('fourier_m', 16)
+        fourier_sigma = ff_config.get('fourier_sigma', 4.0)
+        trainable_fourier = ff_config.get('trainable_fourier', False)
     else:
         use_fourier = model_config.get('use_fourier', False)
         fourier_m = model_config.get('fourier_m', 16)
         fourier_sigma = model_config.get('fourier_sigma', 4.0)
-        trainable_fourier = model_config.get('fourier_trainable', False)
+        trainable_fourier = model_config.get('trainable_fourier', False)
     
     model = PINNNet(
         in_dim=model_config['in_dim'],

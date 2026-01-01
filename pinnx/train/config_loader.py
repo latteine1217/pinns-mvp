@@ -17,7 +17,7 @@
     >>> 
     >>> # 推導損失權重
     >>> base_weights, adaptive_terms = derive_loss_weights(
-    ...     loss_cfg=config['loss'],
+    ...     loss_cfg=config['losses'],
     ...     prior_weight=config.get('prior_weight', 0.1),
     ...     is_vs_pinn=True
     ... )
@@ -161,17 +161,7 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
     # 處理 fourier_features.type 格式（新版格式）
     if 'fourier_features' in model_cfg and isinstance(model_cfg['fourier_features'], dict):
         ff_cfg = model_cfg['fourier_features']
-        # 🔁 向後相容：舊版配置常用 fourier_features.enabled 來開關 Fourier
-        # 優先規則：
-        #   1) 若 enabled 明確為 False → 視為 disabled（即使 type=standard）
-        #   2) 其餘情況沿用 type（缺省 standard）
-        enabled = ff_cfg.get('enabled', None)
-        if enabled is False:
-            ff_type = 'disabled'
-            # 同步寫回，避免後續流程出現 enabled=False 但 type=standard 的矛盾狀態
-            ff_cfg['type'] = 'disabled'
-        else:
-            ff_type = ff_cfg.get('type', 'standard')
+        ff_type = ff_cfg.get('type', 'standard')
         
         # 處理 type="disabled"
         if ff_type == 'disabled':
@@ -185,6 +175,10 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
             model_cfg['use_fourier'] = True
             model_cfg['fourier_m'] = ff_cfg.get('fourier_m', 32)
             model_cfg['fourier_sigma'] = ff_cfg.get('fourier_sigma', 5.0)
+            if 'trainable_fourier' in ff_cfg:
+                model_cfg['trainable_fourier'] = ff_cfg.get('trainable_fourier', False)
+            if 'fourier_use_2pi' in ff_cfg:
+                model_cfg['fourier_use_2pi'] = ff_cfg.get('fourier_use_2pi', True)
             logging.debug(f"✅ Fourier Features 已啟用 (type='{ff_type}', m={model_cfg['fourier_m']})")
         
         else:
@@ -194,7 +188,8 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
     model_cfg.setdefault('use_fourier', True)  # 默認啟用 Fourier
     model_cfg.setdefault('fourier_m', 32)
     model_cfg.setdefault('fourier_sigma', 1.0)
-    model_cfg.setdefault('fourier_trainable', False)
+    model_cfg.setdefault('trainable_fourier', False)
+    model_cfg.setdefault('fourier_use_2pi', True)
 
     config['model'] = model_cfg
 
@@ -237,7 +232,7 @@ def derive_loss_weights(
     根據配置推導基礎權重與可調整的損失項列表
     
     Args:
-        loss_cfg: 損失配置字典（來自 config['loss']）
+        loss_cfg: 損失配置字典（來自 config['losses']）
         prior_weight: 先驗損失權重（來自 config 頂層或默認值）
         is_vs_pinn: 是否為 VS-PINN 模式
         
@@ -249,7 +244,7 @@ def derive_loss_weights(
     處理邏輯:
         1. 從配置讀取各損失項權重，未設置則使用預設值
         2. 非 VS-PINN 模式下過濾 VS_ONLY_LOSSES
-        3. 處理特殊情況（如 boundary_weight 合併到 wall_constraint）
+        3. 處理特殊情況（如 periodicity 在非 VS-PINN 模式下的啟用條件）
         4. 生成自適應調整列表（排除 prior，除非其權重 > 0）
         
     範例:
@@ -287,12 +282,6 @@ def derive_loss_weights(
     
     # 設置 prior 權重
     base_weights['prior'] = float(loss_cfg.get('prior_weight', prior_weight))
-    
-    # 處理 boundary_weight（舊配置兼容）
-    if 'boundary_weight' in loss_cfg:
-        current_wall = base_weights.get('wall_constraint', 0.0)
-        base_weights['wall_constraint'] = current_wall + float(loss_cfg['boundary_weight'])
-        logging.debug(f"將 boundary_weight 合併到 wall_constraint: {base_weights['wall_constraint']}")
     
     # 生成自適應調整項列表（排除 prior）
     adaptive_terms = [name for name in base_weights if name != 'prior']

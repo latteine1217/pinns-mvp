@@ -63,7 +63,7 @@ class TestRANSIntegration:
         print("✅ 測試 2 通過: VS-PINN + RANS 整合成功")
     
     def test_vs_pinn_without_rans(self, device):
-        """測試 3: VS-PINN 未啟用 RANS（向後相容）"""
+        """測試 3: VS-PINN 未啟用 RANS"""
         physics = VSPINNChannelFlow(enable_rans=False)
         
         assert physics.enable_rans is False

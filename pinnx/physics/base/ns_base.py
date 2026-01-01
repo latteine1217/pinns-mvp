@@ -14,7 +14,6 @@ Navier-Stokes Base Class Module
 設計哲學：
 - DRY 原則：所有 N-S 求解器共用邏輯集中此處
 - 可擴展：子類可覆蓋特定項（如 RANS 加入湍流項）
-- 向後兼容：保留原有接口名稱
 
 作者：PINNs-MVP 團隊
 日期：2025-12-15

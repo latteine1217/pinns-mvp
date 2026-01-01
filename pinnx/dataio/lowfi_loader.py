@@ -9,7 +9,7 @@
 ✅ RANSReader: 3D Channel Flow RANS k-ε 模型專用
 ✅ SpatialInterpolator: 空間插值到 PINN 網格
 
-=== 已棄用 (DEPRECATED - Retained for backward compatibility) ===
+=== 已棄用 (DEPRECATED) ===
 ⚠️ NetCDFReader: 專案僅支援 HDF5 格式
 ⚠️ LESReader: LES 模型不在專案範圍內
 ⚠️ DownsampledDNSProcessor: DNS 下採樣不使用

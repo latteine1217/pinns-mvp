@@ -32,7 +32,8 @@ def check_gradient_flow(model, physics, coords_pde, u_pred, loss_name=""):
     # 計算損失
     residual = None
     if loss_name == "continuity":
-        residual = physics.compute_continuity_residual(coords_pde, u_pred)
+        u, v, _ = physics.parse_velocity_pressure(u_pred)
+        residual = physics.compute_continuity_residual(coords_pde, [u, v])
         loss = torch.mean(residual ** 2)
     elif loss_name == "momentum_x":
         residuals = physics.compute_momentum_residuals(coords_pde, u_pred)
@@ -133,7 +134,8 @@ def check_autograd_graph(coords_pde, u_pred, physics):
     
     # 與物理模組計算的結果比較
     print(f"\n3️⃣ 物理模組計算的連續性殘差:")
-    continuity_residual = physics.compute_continuity_residual(coords_pde, u_pred)
+    u, v, _ = physics.parse_velocity_pressure(u_pred)
+    continuity_residual = physics.compute_continuity_residual(coords_pde, [u, v])
     print(f"   殘差: mean={continuity_residual.mean().item():.6f}, std={continuity_residual.std().item():.6f}")
     print(f"   requires_grad: {continuity_residual.requires_grad}")
     print(f"   grad_fn: {continuity_residual.grad_fn}")

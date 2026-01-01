@@ -229,7 +229,7 @@ def main():
     print(f"{'='*80}")
     print(f"\n📂 Loading sensor coordinates: {sensor_path}")
     
-    sensor_data = np.load(sensor_path)
+    sensor_data = np.load(sensor_path, allow_pickle=True)
     
     print(f"   Available keys: {list(sensor_data.keys())}")
     
@@ -256,8 +256,19 @@ def main():
     # 合併所有資料
     print(f"💾 Saving to: {output_path}")
     
-    # 複製原始 sensor 文件的所有 metadata
-    output_data = {key: sensor_data[key] for key in sensor_data.keys()}
+    # 複製原始 sensor 文件的所有 metadata (僅數值型)
+    output_data = {}
+    for key in sensor_data.keys():
+        try:
+            # 嘗試轉換為 numpy array，跳過無法序列化的 object
+            value = sensor_data[key]
+            if isinstance(value, np.ndarray) and value.dtype == object:
+                # 跳過 object dtype（如字串列表）
+                continue
+            output_data[key] = value
+        except Exception:
+            # 跳過無法處理的 key
+            continue
     
     # 添加提取的值
     output_data['u_sensors'] = sensor_values['u']
