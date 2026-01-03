@@ -74,6 +74,10 @@ model:
     type: disabled
   initialization:
     type: xavier_normal
+  output_variables:
+  - u
+  - v
+  - p
 physics:
   type: kolmogorov_flow_2d
   nu: 0.039374

@@ -77,6 +77,10 @@ model:
     type: siren
     first_omega_0: 30.0
     hidden_omega_0: 30.0
+  output_variables:
+  - u
+  - v
+  - p
 physics:
   type: kolmogorov_flow_2d
   nu: 0.039374

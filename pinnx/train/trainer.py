@@ -390,52 +390,59 @@ class Trainer:
         data_batch: Optional[Dict[str, torch.Tensor]] = None
     ) -> List[str]:
         """
-        根據輸出維度推斷對應的物理變量順序。
+        從配置中獲取輸出變量順序（Fail Fast，必須明確配置）
         
-        優先級：
-        1. 配置 (model.output_variables / model.variable_names / model.variables)
-        2. 模型屬性 (variable_names 或 get_variable_names())
-        3. 常用啟發式（u,v,w,p,S）
+        要求：
+            model.output_variables 必須在配置中明確定義
+        
+        Args:
+            out_dim: 模型輸出維度
+            context: 呼叫上下文（用於錯誤訊息）
+            data_batch: 資料批次（未使用，保留介面相容性）
+        
+        Returns:
+            變數名稱列表，例如 ['u', 'v', 'p']
+        
+        Raises:
+            KeyError: 配置中缺少 model.output_variables
+            ValueError: output_variables 長度與 out_dim 不一致
+        
+        Note:
+            P0-3 重構：移除所有 fallback 和啟發式猜測
+            若配置文件缺少 output_variables，請執行：
+                python scripts/tools/add_output_variables.py --config <file>
         """
         if out_dim <= 0:
             return []
         
+        # Fail Fast: 只接受明確的 model.output_variables
         model_cfg = self.config.get('model', {})
-        explicit_order = model_cfg.get('output_variables') or \
-            model_cfg.get('variable_names') or \
-            model_cfg.get('variables')
-        if explicit_order:
-            explicit = list(explicit_order)
-            if len(explicit) >= out_dim:
-                return explicit[:out_dim]
+        output_variables = model_cfg.get('output_variables')
         
-        attr_order = getattr(self.model, 'variable_names', None)
-        if attr_order is None and hasattr(self.model, 'get_variable_names'):
-            try:
-                attr_order = self.model.get_variable_names()
-            except Exception:
-                attr_order = None
-        if attr_order:
-            attr_list = list(attr_order)
-            if len(attr_list) >= out_dim:
-                return attr_list[:out_dim]
+        if output_variables is None:
+            raise KeyError(
+                f"Config missing required key: model.output_variables\n"
+                f"Context: {context}\n"
+                f"Expected format:\n"
+                f"  model:\n"
+                f"    output_variables: [u, v, p]  # List of variable names\n"
+                f"\n"
+                f"To add output_variables to old configs, run:\n"
+                f"  python scripts/tools/add_output_variables.py --config <file>"
+            )
         
-        if out_dim == 1:
-            return ['u']
-        if out_dim == 2:
-            return ['u', 'v']
-        if out_dim == 3:
-            return ['u', 'v', 'p']
-        if out_dim == 4:
-            return ['u', 'v', 'w', 'p']
-        if out_dim == 5:
-            return ['u', 'v', 'w', 'p', 'S']
+        # 驗證長度
+        var_list = list(output_variables)
+        if len(var_list) != out_dim:
+            raise ValueError(
+                f"Mismatch between model.output_variables length ({len(var_list)}) "
+                f"and model output dimension ({out_dim})\n"
+                f"Context: {context}\n"
+                f"output_variables: {var_list}\n"
+                f"Please update config to ensure len(output_variables) == out_dim"
+            )
         
-        default_order = ['u', 'v', 'w', 'p', 'S']
-        if out_dim <= len(default_order):
-            return default_order[:out_dim]
-        
-        return [f'var_{i}' for i in range(out_dim)]
+        return var_list
     
     def _prepare_model_coords(
         self,

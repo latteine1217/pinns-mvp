@@ -88,6 +88,11 @@ model:
     friction_velocity: 0.04997
     channel_half_height: 1.0
     viscous_length: 0.001
+  output_variables:
+  - u
+  - v
+  - w
+  - p
 physics:
   type: vs_pinn_channel_flow
   nu: 5.0e-05
