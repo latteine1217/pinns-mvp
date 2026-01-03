@@ -1,0 +1,165 @@
+# ====================================================================
+# Sweep E1: Efficiency Analysis (計算成本與效率分析)
+# ====================================================================
+# 目的：量化不同模型架構的計算成本（訓練時間、記憶體、推理速度）
+# 對應：補充實驗 - 計算效率維度
+# Group: efficiency_analysis
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search
+
+metric:
+  name: metrics/efficiency_score  # 綜合指標：精度/訓練時間
+  goal: maximize
+
+parameters:
+  # 基礎配置檔案
+  config:
+    value: configs/templates/2d_quick_baseline.yml
+
+  # 主要對比：不同複雜度的模型架構
+  model.type:
+    values: ["standard_mlp", "fourier_vs_mlp"]
+
+  # 模型寬度（參數量）
+  model.width:
+    values: [128, 256, 512]  # 小、中、大
+
+  # 模型深度
+  model.depth:
+    values: [4, 6, 8]  # 淺、中、深
+
+  # Fourier features（影響計算成本）
+  model.fourier_features.type:
+    values: ["disabled", "standard"]
+
+  # Batch size（影響訓練速度）
+  training.batch_size:
+    values: [5000, 10000, 15000]
+
+  # 固定其他參數
+  sensors.K:
+    value: 100
+
+  sensors.selection_method:
+    value: qr_pivot
+
+  data.source:
+    value: kolmogorov_dns
+
+  data.dataset:
+    value: re50_kf4
+
+  # 實驗組織
+  experiment.name:
+    value: "Re50_K100_qr_efficiency_analysis"
+
+  experiment.group:
+    value: "efficiency_analysis"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "e1_efficiency"]
+
+  experiment.experiment_id:
+    value: "E1"
+
+# ====================================================================
+# 追蹤指標（必須在訓練腳本中實作）
+# ====================================================================
+#
+# 1. 訓練時間指標：
+#    - total_wall_time: 總訓練時間（秒）
+#    - time_per_epoch: 每個 epoch 平均時間（秒）
+#    - time_to_convergence: 達到目標精度（L2 < 15%）的時間（秒）
+#    - gpu_hours: GPU 使用時數
+#
+# 2. 記憶體使用：
+#    - peak_gpu_memory: 峰值 GPU 記憶體（MB）
+#    - model_parameters: 模型參數量
+#    - activation_memory: 激活值記憶體（MB）
+#
+# 3. 推理速度：
+#    - inference_time_per_sample: 單樣本推理時間（ms）
+#    - throughput: 吞吐量（samples/sec）
+#    - inference_gpu_memory: 推理時 GPU 記憶體（MB）
+#
+# 4. 計算複雜度：
+#    - forward_flops: 前向傳播 FLOPs
+#    - backward_flops: 反向傳播 FLOPs
+#    - total_flops: 總 FLOPs（訓練完成）
+#
+# 5. 效率指標（組合）：
+#    - efficiency_score: L2_accuracy / training_time（精度/時間）
+#    - memory_efficiency: L2_accuracy / peak_memory（精度/記憶體）
+#    - inference_efficiency: L2_accuracy / inference_time（精度/推理時間）
+#
+# ====================================================================
+# WandB 記錄範例
+# ====================================================================
+#
+# wandb.log({
+#     # 訓練時間
+#     'timing/total_wall_time': total_time,
+#     'timing/time_per_epoch': avg_epoch_time,
+#     'timing/time_to_convergence': convergence_time,
+#     'timing/gpu_hours': gpu_hours,
+#
+#     # 記憶體
+#     'memory/peak_gpu_memory_mb': peak_memory,
+#     'memory/model_parameters': num_params,
+#     'memory/activation_memory_mb': activation_mem,
+#
+#     # 推理
+#     'inference/time_per_sample_ms': inference_time,
+#     'inference/throughput': throughput,
+#     'inference/gpu_memory_mb': inference_mem,
+#
+#     # 效率
+#     'efficiency/score': l2_accuracy / training_time,
+#     'efficiency/memory_efficiency': l2_accuracy / peak_memory,
+#     'efficiency/inference_efficiency': l2_accuracy / inference_time,
+#
+#     # 最終精度
+#     'metrics/L2_uvp_rel': l2_error,
+# })
+#
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_e1_efficiency_analysis.yaml
+#
+# 2. 啟動 agent（單 GPU，避免硬體差異）:
+#    CUDA_VISIBLE_DEVICES=0 wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 多個 runs（不同模型寬度、深度、batch size）
+#    - 可繪製 Pareto frontier：精度 vs 訓練時間
+#    - 可分析「加倍參數量」對精度與時間的影響
+#
+# 4. 評估指標：
+#    - Pareto frontier: L2 error vs training time
+#    - Memory scaling: model size vs GPU memory
+#    - Inference speed: model size vs inference time
+#    - Efficiency score: 精度/時間 trade-off
+#
+# 5. 視覺化建議：
+#    - Scatter plot: training_time (x) vs L2_error (y), size=model_params
+#    - Bar chart: model 架構 vs efficiency_score
+#    - Line chart: model_width vs [training_time, L2_error]（雙 Y 軸）
+#    - Heatmap: width × depth → training_time
+#
+# 6. 論文亮點：
+#    - 證明「Full 模型」雖然參數多，但訓練時間增加有限（< 2×）
+#    - 量化 Fourier Features 的計算成本（vs 精度收益）
+#    - 提供「精度-時間」Pareto frontier，幫助實務選型
+#    - 證明方法的計算效率優於 Vanilla PINN（更快達到目標精度）
+#
+# 7. 注意事項：
+#    - **必須在相同硬體執行**（避免硬體差異影響結果）
+#    - 建議單 GPU 執行（CUDA_VISIBLE_DEVICES=0）
+#    - 記錄硬體資訊：GPU 型號、CUDA 版本、PyTorch 版本
+#    - 關閉其他背景程序，確保計時準確
+#    - 推理時間測試建議用固定網格（512×512）
+# ====================================================================

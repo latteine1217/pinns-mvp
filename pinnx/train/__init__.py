@@ -29,11 +29,19 @@ from .config_loader import (
     VS_ONLY_LOSSES
 )
 
-from .factory import (
+from .model_physics_factory import (
     get_device,
     create_model,
     create_physics,
-    create_optimizer
+    list_available_models,
+    list_available_physics,
+)
+
+from .factories import (
+    create_optimizer,
+    create_scheduler,
+    list_available_optimizers,
+    list_available_schedulers,
 )
 
 from .schedulers import (
@@ -78,11 +86,18 @@ __all__ = [
     'DEFAULT_WEIGHTS',
     'VS_ONLY_LOSSES',
     
-    # 工廠函數
+    # 工廠函數（Registry Pattern）
     'get_device',
     'create_model',
     'create_physics',
     'create_optimizer',
+    'create_scheduler',
+    
+    # 工廠註冊表查詢
+    'list_available_models',
+    'list_available_physics',
+    'list_available_optimizers',
+    'list_available_schedulers',
     
     # 學習率調度器
     'WarmupCosineScheduler',

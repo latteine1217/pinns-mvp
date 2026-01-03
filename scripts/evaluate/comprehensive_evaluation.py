@@ -122,7 +122,6 @@ def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device
             config['model']['fourier_features'] = {}
         
         if has_fourier and fourier_dim:  # Fourier enabled
-            config['model']['use_fourier'] = True
             config['model']['fourier_features']['type'] = 'standard'
             # 從 B 矩陣推斷 m
             fourier_m = input_proj_shape.shape[1]
@@ -131,7 +130,6 @@ def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device
                 config['model']['fourier_features']['fourier_sigma'] = 5.0
             logger.info(f"✅ Config adjusted to Fourier ENABLED (m={fourier_m})")
         else:  # Fourier disabled
-            config['model']['use_fourier'] = False
             config['model']['fourier_features']['type'] = 'disabled'
             config['model']['fourier_features']['fourier_m'] = 0
             config['model']['fourier_features']['fourier_sigma'] = 0.0
@@ -164,7 +162,7 @@ def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device
         config['physics']['type'] = 'channel_flow_3d'  # 使用普通物理類型
     
     # 創建模型架構
-    from pinnx.train.factory import create_model, create_physics
+    from pinnx.train.model_physics_factory import create_model, create_physics
     base_model = create_model(config, device, statistics=statistics)
     
     # 恢復原始 physics type（用於後續 physics 創建）

@@ -164,7 +164,7 @@ def create_a1_ablations():
     config_with['experiment']['description'] = 'A1: Full with Fourier Features'
     config_with['lowfi_prior']['enabled'] = False
     config_with['losses']['prior_weight'] = 0.0
-    config_with['model']['fourier_features']['enabled'] = True
+    config_with['model']['fourier_features']['type'] = 'standard'
     config_with['output'] = {
         'checkpoint_dir': './checkpoints/experiments/A1_with_fourier_K100',
         'results_dir': './results/experiments/A1_with_fourier_K100',
@@ -179,7 +179,6 @@ def create_a1_ablations():
     config_without['experiment']['description'] = 'A1: Full without Fourier Features'
     config_without['lowfi_prior']['enabled'] = False
     config_without['losses']['prior_weight'] = 0.0
-    config_without['model']['fourier_features']['enabled'] = False
     config_without['model']['fourier_features']['type'] = 'disabled'
     config_without['model']['fourier_features']['fourier_m'] = 0
     config_without['model']['fourier_features']['fourier_sigma'] = 0.0

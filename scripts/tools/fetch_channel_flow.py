@@ -74,7 +74,6 @@ class ChannelFlowConfig:
     # 時間參數
     time_range: Optional[List[float]] = None  # [0.0, 26.0]
     dt: float = 0.0065
-    time_average_window: Optional[List[float]] = None  # DEPRECATED: 未實作時間平均 [20.0, 26.0]
     
     # 2D 切片設定
     slice_plane: str = "xy"  # xy, xz, yz
@@ -90,9 +89,6 @@ class ChannelFlowConfig:
             self.domain_z = [0.0, 3 * np.pi]
         if self.time_range is None:
             self.time_range = [0.0, 26.0]
-        # ⚠️  time_average_window 目前未使用（保留為未來擴展）
-        if self.time_average_window is None:
-            self.time_average_window = [20.0, 26.0]  # 未實作時間平均功能
 
 
 class ChannelFlowDataFetcher:

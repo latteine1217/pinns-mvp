@@ -1087,7 +1087,7 @@ cp .env.example .env
 cp configs/templates/2d_quick_baseline.yml configs/my_experiment.yml
 
 # 4. 執行訓練
-python scripts/train.py --cfg configs/my_experiment.yml
+python scripts/train/train.py --cfg configs/my_experiment.yml
 
 # 5. 監控進度
 tail -f log/my_experiment/training.log
@@ -1230,7 +1230,7 @@ tail -f log/my_experiment/training.log
 | RWF | `pinnx/models/fourier_mlp.py` | `RWFLinear` |
 | GradNorm | `pinnx/losses/weighting.py` | `GradNormWeighter` |
 | 訓練器 | `pinnx/train/trainer.py` | `Trainer` |
-| 主腳本 | `scripts/train.py` | `main()` |
+| 主腳本 | `scripts/train/train.py` | `main()` |
 
 ### B. 配置檔案位置
 

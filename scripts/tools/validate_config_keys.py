@@ -56,6 +56,19 @@ KNOWN_LOSS_KEYS = {
     'normalize_losses', 'warmup_epochs',
 }
 
+# 已移除的舊鍵名（觸發錯誤；不再提供向後相容）
+REMOVED_KEY_PATHS = {
+    ('losses', 'div_weight'): "continuity_weight",
+    ('losses', 'boundary_weight'): "wall_constraint_weight",
+    ('model', 'use_fourier'): "model.fourier_features",
+    ('model', 'fourier_m'): "model.fourier_features.fourier_m",
+    ('model', 'fourier_sigma'): "model.fourier_features.fourier_sigma",
+    ('model', 'trainable_fourier'): "model.fourier_features.trainable_fourier",
+    ('model', 'fourier_use_2pi'): "model.fourier_features.fourier_use_2pi",
+    ('model', 'fourier_multiscale'): "removed (use standard fourier_features only)",
+    ('model', 'fourier_features', 'enabled'): "model.fourier_features.type",
+}
+
 # =============================================================================
 # 檢查函數
 # =============================================================================
@@ -114,6 +127,22 @@ def check_config_keys(config_path: str) -> Tuple[bool, List[str], List[str]]:
                 f"   位置: 配置檔案頂層\n"
                 f"   影響: 損失權重配置將被忽略，所有權重預設為 1.0\n"
                 f"   修復: 將 '{wrong_key}:' 改為 '{correct_key}:'"
+            )
+
+    # 檢查 1.5: 舊鍵名（已移除向後相容）
+    for path, replacement in REMOVED_KEY_PATHS.items():
+        cursor = config
+        found = True
+        for key in path:
+            if not isinstance(cursor, dict) or key not in cursor:
+                found = False
+                break
+            cursor = cursor[key]
+        if found:
+            dotted_path = ".".join(path)
+            errors.append(
+                f"❌ 使用已移除的舊鍵名 '{dotted_path}'\n"
+                f"   修復: 改為 {replacement}"
             )
     
     # 檢查 2: 檢查 losses 段落內容

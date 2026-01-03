@@ -1,0 +1,60 @@
+# ====================================================================
+# Sweep S1: Sensor Strategy Comparison (感測器策略對比)
+# ====================================================================
+# 目的：比較 Random vs QR-pivot 選點策略對重建精度的影響
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - S1
+# Group: kflow_sensor_strategy
+# ====================================================================
+
+program: scripts/train/train.py
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - --cfg
+  - ${cfg}
+method: grid  # Grid search（只有 2 個選項）
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # ✅ 使用「完整可跑」的 case configs，避免 template 結構與資料集不匹配
+  cfg:
+    values:
+      - configs/sweeps/cases/s1_random_K100_2d_re50.yml
+      - configs/sweeps/cases/s1_qr_K100_2d_re50.yml
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_s1_sensor_strategy.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 2 個 runs (Random vs QR-pivot)
+#    - 可比較：
+#      * L2(u,v,∇p) 誤差
+#      * 散度（‖∇·u‖）
+#      * 條件數（sensor quality metric）
+#      * 感測點空間分佈
+#
+# 4. 評估指標：
+#    - L2_uvp_rel: 全場相對 L2 誤差
+#    - divergence_mean/max: 不可壓縮性
+#    - sensor_condition_number: 感測器矩陣條件數
+#
+# 5. 視覺化建議：
+#    - 感測點分佈圖（Random vs QR 並排，背景為渦度場）
+#    - Bar chart: Random vs QR 的 L2 誤差對比
+#    - 近壁放大圖（如果是 channel flow）
+#
+# 6. 注意事項：
+#    - 需要預先生成 Random 感測器檔案（如果不存在）
+#    - QR-pivot 通常在高梯度區域聚集，Random 則均勻分佈
+#    - 兩者使用相同的模型架構（Vanilla MLP）確保公平對比
+# ====================================================================

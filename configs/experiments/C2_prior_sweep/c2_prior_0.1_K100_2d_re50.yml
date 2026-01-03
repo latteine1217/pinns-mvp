@@ -5,6 +5,14 @@ experiment:
   device: auto
   precision: float32
   description: 'C2: RANS Prior weight=0.1'
+  group: kflow_prior
+  tags:
+  - kflow_re50
+  - K100
+  - full
+  - leith_prior
+  - c2_prior_sweep
+  experiment_id: C2
 reproducibility:
   deterministic: true
   benchmark: false
@@ -44,19 +52,17 @@ data:
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
   enabled: true
-  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4.h5
-  data_type: rans
+  data_path: ./data/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5
+  data_type: leith
   rans_structure:
     group_path: /mean_field
     field_mapping:
       u: u
       v: v
-      k: k
       nu_t: nu_t
-      epsilon: epsilon
     coord_mapping:
-      X: X
-      Y: Y
+      x: x
+      y: y
   interpolation:
     method: linear
     extrapolation_mode: nearest
@@ -65,7 +71,7 @@ lowfi_prior:
   variable_weights:
     u: 1.0
     v: 1.0
-    p: 0.5
+    p: 0.0
   spatial_weighting:
     enabled: false
     boundary_penalty: 2.0
@@ -145,7 +151,7 @@ losses:
   causal_weighting: true
   causal_eps: 0.5
   causal_n_bins: 10
-  merge_momentum: true  # 🔥 合併 X/Y 動量項為單一向量損失 (Kolmogorov Flow)
+  merge_momentum: true
 training:
   optimizer:
     type: soap
@@ -154,13 +160,10 @@ training:
     - 0.9
     - 0.999
     weight_decay: 1.0e-05
-  lr: 0.001
-  weight_decay: 1.0e-05
   lr_scheduler:
     type: exponential
     gamma: 0.9998
   epochs: 10000
-  max_epochs: 10000
   batch_size: 15000
   validation_freq: 50
   checkpoint_freq: 100

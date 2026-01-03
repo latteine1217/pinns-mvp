@@ -297,6 +297,41 @@ class ResNetPINN(nn.Module):
 def create_resnet_model(config: dict) -> nn.Module:
     """Factory function for creating ResNetPINN from config dict."""
     
+    # 嚴格配置：不再支援扁平 Fourier 鍵名（避免隱式相容）
+    removed_flat_keys = [
+        'use_fourier',
+        'fourier_m',
+        'fourier_sigma',
+        'trainable_fourier',
+        'fourier_use_2pi',
+        'fourier_multiscale',
+    ]
+    for key in removed_flat_keys:
+        if key in config:
+            raise ValueError(
+                f"Deprecated/removed config key: '{key}'. Use 'fourier_features' dict instead."
+            )
+
+    ff_cfg = config.get('fourier_features')
+    if not isinstance(ff_cfg, dict):
+        raise ValueError("Model config missing required dict: 'fourier_features'")
+
+    ff_type = ff_cfg.get('type')
+    if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+        raise ValueError("fourier_features.type must be 'standard' / 'axis_selective' / 'disabled'")
+
+    use_fourier = ff_type != 'disabled'
+    if use_fourier:
+        fourier_m = int(ff_cfg.get('fourier_m'))
+        fourier_sigma = float(ff_cfg.get('fourier_sigma'))
+        if fourier_m <= 0:
+            raise ValueError("fourier_features.fourier_m must be > 0 when enabled")
+    else:
+        fourier_m = 0
+        fourier_sigma = 0.0
+
+    trainable_fourier = bool(ff_cfg.get('trainable_fourier', False))
+
     # Handle VS-PINN input scaling
     input_scale_factors = None
     if 'input_scale_factors' in config:
@@ -309,12 +344,12 @@ def create_resnet_model(config: dict) -> nn.Module:
         out_dim=config.get('out_dim', 4),
         width=config.get('width', 256),
         depth=config.get('depth', 6),
-        fourier_m=config.get('fourier_m', 32),
-        fourier_sigma=config.get('fourier_sigma', 5.0),
-        fourier_multiscale=config.get('fourier_multiscale', False),
+        fourier_m=fourier_m,
+        fourier_sigma=fourier_sigma,
+        fourier_multiscale=False,
         activation=config.get('activation', 'tanh'),
-        use_fourier=config.get('use_fourier', True),
-        trainable_fourier=config.get('trainable_fourier', False),
+        use_fourier=use_fourier,
+        trainable_fourier=trainable_fourier,
         use_rwf=config.get('use_rwf', False),
         rwf_scale_std=config.get('rwf_scale_std', 0.1),
         sine_omega_0=config.get('sine_omega_0', 1.0),

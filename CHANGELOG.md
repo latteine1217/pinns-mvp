@@ -7,6 +7,44 @@
 
 ---
 
+## [1.2.2] - 2026-01-03
+
+### ✨ Added
+- **配置驗證工具**: 全新的配置檔案驗證系統
+  - `pinnx/utils/config_validator.py`: 核心驗證邏輯類別
+  - `scripts/tools/validate_config.py`: CLI 獨立驗證工具
+  - 支援常見錯誤檢測（如 `loss` vs `losses` 拼寫錯誤）
+  - 支援批次驗證與嚴格模式
+- **早期配置檢查**: `Trainer.__init__()` 中整合 `_validate_config_early()`
+  - Fail-fast 機制：在初始化前攔截錯誤配置
+  - 清晰的錯誤訊息與修復建議
+
+### 📚 Changed
+- **文檔簡化**: 總文檔行數減少 21%（4,781 → 3,761 行）
+  - `README.md`: 103 行（-42%），移除冗餘表格
+  - `docs/CONFIG_GUIDE.md`: 232 行，合併 3 個配置文檔為單一來源
+  - 任務導向結構："我想要..." 引導式說明
+- **文檔歸檔**: 舊配置文檔移至 `docs/archive/`
+  - `CONFIG_MANAGEMENT_GUIDE.md` → `docs/archive/`
+  - `CONFIG_REFERENCE.md` → `docs/archive/`
+
+### 🐛 Fixed
+- **配置靜默失敗**: 修復 `loss:` 錯寫導致使用預設權重的問題
+  - 現在會明確報錯並提供正確寫法 (`losses:`)
+- **文檔重複**: 消除配置說明在 3 個檔案中的重複內容
+
+### 📊 Statistics
+- **文檔減少**: -21% 總文檔行數（-1,020 行）
+- **配置文檔**: -68% 行數（727 → 232 行）
+- **核心文檔**: 從 9 個減至 7 個活躍文檔
+
+### 🎯 Philosophy Alignment
+- **Pragmatism**: 解決配置靜默失敗的真實痛點
+- **Simplicity**: 單一配置文檔來源（`standard_config_template.yml`）
+- **Good Taste**: 清晰錯誤訊息，消除調試猜測
+
+---
+
 ## [1.2.0] - 2025-12-30
 
 ### ✨ Added

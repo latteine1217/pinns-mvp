@@ -5,6 +5,14 @@ experiment:
   device: auto
   precision: float32
   description: 'S2: K-scan with K=50 sensors (QR-pivot)'
+  group: kflow_sensor_strategy
+  tags:
+  - kflow_re50
+  - qr_pivot
+  - K50
+  - vanilla_mlp
+  - s2_kscan
+  experiment_id: S2
 reproducibility:
   deterministic: true
   benchmark: false
@@ -108,7 +116,7 @@ losses:
   normalize_losses: false
   adaptive_weighting: false
   causal_weighting: false
-  merge_momentum: true  # 🔥 合併 X/Y 動量項為單一向量損失 (Kolmogorov Flow)
+  merge_momentum: true
 training:
   optimizer:
     type: adam
@@ -117,12 +125,9 @@ training:
     - 0.9
     - 0.999
     weight_decay: 0.0
-  lr: 0.001
-  weight_decay: 0.0
   lr_scheduler:
     type: constant
   epochs: 10000
-  max_epochs: 10000
   batch_size: 10000
   validation_freq: 100
   checkpoint_freq: 200

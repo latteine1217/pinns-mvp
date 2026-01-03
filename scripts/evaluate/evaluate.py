@@ -63,14 +63,21 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Tuple[torch.nn
     out_dim = model_cfg.get('out_dim', 3)  # (u, v, p)
     width = model_cfg.get('width', 128)
     depth = model_cfg.get('depth', 6)
-    fourier_m = model_cfg.get('fourier_m', 32)
-    fourier_sigma = model_cfg.get('fourier_sigma', 1.0)
+    ff_cfg = model_cfg.get('fourier_features')
+    if not isinstance(ff_cfg, dict) or 'type' not in ff_cfg:
+        raise KeyError("Missing required config key: model.fourier_features.type")
+
+    ff_type = ff_cfg.get('type', 'disabled')
+    use_fourier = ff_type != 'disabled'
+    fourier_m = int(ff_cfg.get('fourier_m', 0)) if use_fourier else 0
+    fourier_sigma = float(ff_cfg.get('fourier_sigma', 0.0)) if use_fourier else 0.0
 
     model = PINNNet(
         in_dim=in_dim,
         out_dim=out_dim,
         width=width,
         depth=depth,
+        use_fourier=use_fourier,
         fourier_m=fourier_m,
         fourier_sigma=fourier_sigma
     ).to(device)
@@ -151,7 +158,8 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Tuple[torch.nn
         logger.info(f"   Loss: {loss_val:.6e}")
     else:
         logger.info("   Loss: N/A")
-    logger.info(f"   架構: {width}×{depth}, Fourier M={fourier_m}")
+    fourier_info = f", Fourier M={fourier_m}" if use_fourier else ", Fourier disabled"
+    logger.info(f"   架構: {width}×{depth}{fourier_info}")
 
     return model, config
 

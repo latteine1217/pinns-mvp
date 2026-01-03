@@ -251,7 +251,7 @@ def main():
             return
             
         # Load model and inference (Simplified integration)
-        from pinnx.train.factory import create_model, get_device
+        from pinnx.train.model_physics_factory import create_model, get_device
         device = get_device('auto')
         
         print(f"Loading checkpoint: {args.checkpoint}")

@@ -503,7 +503,7 @@ def main():
     # === 載入模型和配置 ===
     logger.info(f"載入檢查點: {args.checkpoint}")
     
-    from pinnx.train.factory import create_model, get_device
+    from pinnx.train.model_physics_factory import create_model, get_device
     
     device = get_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)

@@ -1,0 +1,450 @@
+# =============================================================================
+# 標準配置模板 (Standard Configuration Template)
+# =============================================================================
+# 用途：定義所有可用的配置鍵、預設值與說明
+# 版本：v1.0 (2025-12-19)
+# 更新：修復 config key 不一致問題，統一使用正確鍵名
+# =============================================================================
+
+# =============================================================================
+# 實驗基本設定 (Experiment Settings)
+# =============================================================================
+experiment:
+  name: "default_experiment"          # 實驗名稱 (預設: "default_experiment")
+  version: "v1.0"                     # 實驗版本 (預設: "v1.0")
+  seed: 42                            # 隨機種子 (預設: 42)
+  device: "auto"                      # 設備 (預設: "auto" | "cpu" | "cuda" | "mps")
+  precision: "float32"                # 精度 (預設: "float32" | "float64")
+  description: "Standard experiment"  # 實驗描述 (預設: "")
+
+# =============================================================================
+# 重現性設定 (Reproducibility)
+# =============================================================================
+reproducibility:
+  deterministic: true                 # 確定性模式 (預設: true)
+  benchmark: false                    # CUDNN benchmark (預設: false)
+  num_workers: 4                      # 資料載入 workers (預設: 4)
+
+# =============================================================================
+# 資料配置 (Data Configuration)
+# =============================================================================
+data:
+  source: "jhtdb"                     # 資料來源 (預設: "jhtdb" | "custom")
+  dataset: "channel"                  # 資料集名稱 (預設: "channel")
+  
+  # JHTDB 配置 (jhtdb_config)
+  jhtdb_config:
+    enabled: true                     # 啟用 JHTDB (預設: true)
+    dataset_name: "channel"           # JHTDB 資料集名稱 (預設: "channel")
+    description: "Channel flow"       # 資料集描述 (預設: "")
+    
+    # 計算域配置 (domain)
+    domain:
+      x: [0.0, 25.13]                 # x 範圍 (必填)
+      y: [-1.0, 1.0]                  # y 範圍 (必填)
+      z: [0.0, 9.42]                  # z 範圍 (必填)
+    
+    # 解析度配置 (resolution)
+    resolution:
+      x: 2048                         # x 方向解析度 (預設: 2048)
+      y: 512                          # y 方向解析度 (預設: 512)
+      z: 1536                         # z 方向解析度 (預設: 1536)
+    
+    time_range: [0.0, 26.0]          # 時間範圍 (預設: [0.0, 26.0])
+    dt: 0.0065                        # 時間步長 (預設: 0.0065)
+    variables: ['u', 'v', 'w', 'p']   # 變數列表 (預設: ['u', 'v', 'w', 'p'])
+  
+  normalize: true                     # 資料標準化 (預設: true)
+  cache_dir: "./data/jhtdb/cache"    # 快取目錄 (預設: "./data/jhtdb/cache")
+
+# =============================================================================
+# ⚠️ 低保真先驗配置 (Low-Fidelity Prior) - 關鍵配置段
+# =============================================================================
+lowfi_prior:
+  enabled: false                      # 啟用 RANS 先驗 (預設: false)
+  data_path: ""                       # RANS 資料路徑 (必填 if enabled=true)
+  data_type: "rans"                   # 資料類型 (預設: "rans" | "les")
+  
+  # RANS 資料結構 (rans_structure)
+  rans_structure:
+    group_path: "/mean_field"         # HDF5 group 路徑 (預設: "/mean_field")
+    
+    # 場變數映射 (field_mapping)
+    field_mapping:
+      u: "u"                          # 速度 u (預設: "u")
+      v: "v"                          # 速度 v (預設: "v")
+      w: "w"                          # 速度 w (預設: "w")
+      k: "k"                          # 湍流動能 k (預設: "k")
+      nu_t: "nu_t"                    # 渦黏度 nu_t (預設: "nu_t")
+      epsilon: "epsilon"              # 耗散率 epsilon (預設: "epsilon")
+    
+    # 座標映射 (coord_mapping)
+    coord_mapping:
+      X: "X"                          # x 座標 (預設: "X")
+      Y: "Y"                          # y 座標 (預設: "Y")
+      Z: "Z"                          # z 座標 (預設: "Z")
+  
+  # 插值配置 (interpolation)
+  interpolation:
+    method: "linear"                  # 插值方法 (預設: "linear" | "cubic")
+    extrapolation_mode: "nearest"     # 外插模式 (預設: "nearest" | "constant")
+    quality_check: true               # 品質檢查 (預設: true)
+  
+  # 前處理配置 (preprocessing)
+  preprocessing:
+    enabled: true                     # 啟用前處理 (預設: true)
+  
+  # 先驗權重 (Prior Loss Weights)
+  consistency_weight: 0.1             # 一致性權重 (預設: 0.1)
+  variable_weights:
+    u: 1.0                            # u 變數權重 (預設: 1.0)
+    v: 1.0                            # v 變數權重 (預設: 1.0)
+    w: 1.0                            # w 變數權重 (預設: 1.0)
+    p: 0.5                            # p 變數權重 (預設: 0.5)
+  
+  # 空間加權 (spatial_weighting)
+  spatial_weighting:
+    enabled: false                    # 啟用空間加權 (預設: false)
+    boundary_penalty: 2.0             # 邊界懲罰 (預設: 2.0)
+    center_weight: 1.0                # 中心權重 (預設: 1.0)
+
+# =============================================================================
+# 標準化配置 (Normalization)
+# =============================================================================
+normalization:
+  type: "training_data_norm"          # 標準化類型 (預設: "training_data_norm")
+  params: {}                          # 標準化參數 (預設: {})
+  noise_sigma: 0.0                    # 噪聲標準差 (預設: 0.0)
+  dropout_prob: 0.0                   # 資料遺失率 (預設: 0.0)
+  
+  # 切片配置 (slice_config) - 2D 專用
+  slice_config:
+    plane: "xy"                       # 切片平面 (預設: "xy" | "xz" | "yz")
+    z_position: 4.71                  # z 位置 (預設: 域中點)
+    steady_state: true                # 穩態假設 (預設: true)
+
+# =============================================================================
+# 感測器配置 (Sensors Configuration)
+# =============================================================================
+sensors:
+  K: 100                              # 感測點數量 (預設: 100)
+  selection_method: "qr_pivot"        # 選點方法 (預設: "qr_pivot" | "random" | "uniform")
+  spatial_coverage: "optimal"         # 空間覆蓋 (預設: "optimal" | "uniform" | "boundary")
+
+# =============================================================================
+# 模型架構 (Model Architecture)
+# =============================================================================
+model:
+  type: "fourier_vs_mlp"              # 模型類型 (預設: "fourier_vs_mlp" | "siren")
+  in_dim: 3                           # 輸入維度 (預設: 3 for 3D, 2 for 2D)
+  out_dim: 4                          # 輸出維度 (預設: 4 for [u,v,w,p])
+  width: 256                          # 網路寬度 (預設: 256)
+  depth: 8                            # 網路深度 (預設: 8)
+  activation: "sine"                  # 激活函數 (預設: "sine" | "tanh" | "gelu")
+  
+  # ⚠️ Fourier 特徵配置 (fourier_features) - 重要特徵
+  fourier_features:
+    type: "standard"                  # Fourier 類型 (預設: "standard" | "axis_selective" | "disabled")
+    fourier_m: 32                     # Fourier 模數 (預設: 32, 0=禁用)
+    fourier_sigma: 5.0                # Fourier 標準差 (預設: 5.0)
+    trainable_fourier: false          # Fourier kernel 是否可訓練 (jaxpi 對齊: true)
+    fourier_use_2pi: true             # 是否乘上 2π (jaxpi 對齊: false)
+    
+    # Axis-Selective 配置 (type="axis_selective" 時使用)
+    axes_config:                      # 初始軸配置 (預設: 全軸 [1,2])
+      x: [1, 2]
+      y: []
+      z: [1, 2]
+    full_axes_config:                 # 完整軸配置 (預設: [1,2,4,8])
+      x: [1, 2, 4, 8]
+      y: []
+      z: [1, 2, 4, 8]
+    domain_lengths:                   # 域長度 (必填 if axis_selective)
+      x: 25.13
+      y: 2.0
+      z: 9.42
+  
+  # 輸出變數順序 (output_variables)
+  output_variables: ['u', 'v', 'w', 'p']  # 輸出順序 (預設: ['u', 'v', 'w', 'p'])
+  
+  # 縮放配置 (scaling)
+  scaling:
+    learnable: true                   # 可學習縮放 (預設: true)
+    input_norm: "channel_flow"        # 輸入標準化 (預設: "channel_flow" | "none")
+    output_norm: "friction_velocity"  # 輸出標準化 (預設: "friction_velocity" | "none")
+    friction_velocity: 0.04997        # 摩擦速度 u_tau (必填 if output_norm)
+    channel_half_height: 1.0          # 通道半高 h (預設: 1.0)
+    viscous_length: 1.0e-3            # 黏性長度 l_nu (預設: 1e-3)
+  
+  # 梯度檢查點 (use_gradient_checkpointing)
+  use_gradient_checkpointing: false   # 啟用梯度檢查點 (預設: false, ⚠️ 與 PINNs 不相容)
+
+# =============================================================================
+# ⚠️ 物理設定 (Physics Configuration) - 核心配置段
+# =============================================================================
+physics:
+  type: "vs_pinn_channel_flow"        # 物理類型 (預設: "vs_pinn_channel_flow" | "navier_stokes")
+  nu: 5.0e-5                          # 運動黏度 (必填, 無預設值)
+  rho: 1.0                            # 密度 (預設: 1.0)
+  
+  # VS-PINN 配置 (vs_pinn)
+  vs_pinn:
+    # 縮放因子 (scaling_factors)
+    scaling_factors:
+      N_x: 2.0                        # x 方向縮放 (預設: 2.0)
+      N_y: 12.0                       # y 方向縮放 (預設: 12.0)
+      N_z: 2.0                        # z 方向縮放 (預設: 2.0)
+    
+    # 損失配置 (loss_config)
+    loss_config:
+      warmup_epochs: 0                # 預熱 epochs (預設: 0)
+    
+    # 邊界配置 (boundary_config)
+    boundary_config:
+      boundary_band_width: 5.0e-3     # 邊界帶寬度 (預設: 5e-3)
+    
+    # RANS 整合 (enable_rans)
+    enable_rans: false                # 啟用 RANS 源項 (預設: false)
+  
+  # 通道流配置 (channel_flow)
+  channel_flow:
+    Re_tau: 1000.0                    # 摩擦雷諾數 (必填, 無預設值)
+    Re_bulk: 39998.0                  # 體積雷諾數 (必填, 無預設值)
+    u_tau: 0.04997                    # 摩擦速度 (必填, 無預設值)
+    pressure_gradient: 0.0025         # 壓力梯度 (必填, 無預設值)
+  
+  # 計算域 (domain)
+  domain:
+    x_range: [0.0, 25.13]             # x 範圍 (必填)
+    y_range: [-1.0, 1.0]              # y 範圍 (必填)
+    z_range: [0.0, 9.42]              # z 範圍 (必填 for 3D)
+    wall_positions: [0.0, 2.0]        # 壁面位置 (預設: [0.0, 2.0])
+  
+  # 邊界條件 (boundary_conditions)
+  boundary_conditions:
+    wall_velocity: [0.0, 0.0, 0.0]    # 壁面速度 (預設: [0,0,0] 無滑移)
+    wall_location: [-1.0, 1.0]        # 壁面位置 (預設: y_range)
+    periodic_x: true                  # x 方向週期性 (預設: true)
+    periodic_z: true                  # z 方向週期性 (預設: true)
+    pressure_driven: true             # 壓力驅動 (預設: true)
+    mean_pressure_gradient: 0.0025    # 平均壓力梯度 (預設: 0.0025)
+
+# =============================================================================
+# ⚠️ 損失函數權重 (Loss Weights) - 關鍵配置段，已修復鍵名
+# =============================================================================
+# ⚠️ 注意：必須使用 'losses' (複數) 而非 'loss' (單數)
+losses:
+  # === 基礎損失權重 (Base Loss Weights) ===
+  data_weight: 10.0                   # 資料損失權重 (預設: 10.0)
+  
+  # === PDE 損失權重 (PDE Loss Weights) ===
+  momentum_x_weight: 1.0              # x 動量方程權重 (預設: 2.0)
+  momentum_y_weight: 1.0              # y 動量方程權重 (預設: 2.0)
+  momentum_z_weight: 1.0              # z 動量方程權重 (預設: 2.0)
+  continuity_weight: 1.0              # 連續方程權重 (預設: 2.0)
+  
+  # === 約束損失權重 (Constraint Loss Weights) ===
+  wall_constraint_weight: 10.0        # 壁面約束權重 (預設: 10.0)
+  periodicity_weight: 10.0            # 週期性約束權重 (預設: 5.0)
+  pressure_gradient_weight: 1.0       # 壓力梯度權重 (預設: 1.0)
+  
+  # === VS-PINN 專屬損失權重 (VS-PINN Only) ===
+  inlet_weight: 10.0                  # 入口邊界權重 (預設: 10.0)
+  initial_condition_weight: 100.0     # 初始條件權重 (預設: 100.0)
+  bulk_velocity_weight: 2.0           # 體積速度權重 (預設: 2.0)
+  centerline_dudy_weight: 1.0         # 中線 du/dy 權重 (預設: 1.0)
+  centerline_v_weight: 1.0            # 中線 v 權重 (預設: 1.0)
+  pressure_reference_weight: 0.0      # 壓力參考權重 (預設: 0.0)
+  
+  # === 先驗損失權重 (Prior Loss Weights) ===
+  prior_weight: 0.1                   # 先驗一致性權重 (預設: 0.1)
+  
+  # === 正則化權重 (Regularization Weights) ===
+  source_l1: 1.0e-6                   # 源項 L1 正則 (預設: 1e-6)
+  gradient_penalty: 1.0e-4            # 梯度懲罰 (預設: 1e-4)
+  
+  # === 自適應權重配置 (Adaptive Weighting) ===
+  adaptive_weighting: false           # 啟用自適應權重 (預設: false, GradNorm)
+  weight_update_freq: 1000            # 權重更新頻率 (預設: 1000)
+  grad_norm_alpha: 1.5                # GradNorm alpha 參數 (預設: 1.5)
+  
+  # 自適應損失項列表 (adaptive_loss_terms)
+  adaptive_loss_terms:                # 可自適應調整的損失項 (預設: 全部 PDE 項)
+    - data
+    - momentum_x
+    - momentum_y
+    - momentum_z
+    - continuity
+    - wall_constraint
+    - periodicity
+  
+  # === 因果權重 (Causal Weighting) ===
+  causal_weighting: false             # 啟用因果權重 (預設: false)
+  # causal_eps: 1.0                   # 因果強度 ε (jaxpi: chunk-based)
+  # causal_n_bins: 10                 # 時間分塊數 (jaxpi: num_chunks)
+
+# =============================================================================
+# 訓練設定 (Training Configuration)
+# =============================================================================
+training:
+  # === 優化器配置 (optimizer) ===
+  optimizer:
+    type: "adam"                      # 優化器類型 (預設: "adam" | "soap" | "lbfgs")
+    lr: 1.0e-3                        # 學習率 (預設: 1e-3)
+    weight_decay: 1.0e-5              # 權重衰減 (預設: 1e-5)
+    
+    # SOAP 專屬參數
+    precondition_frequency: 2         # 預條件頻率 (預設: 2, SOAP only)
+    shampoo_beta: -1                  # Shampoo beta (預設: -1, SOAP only)
+  
+  # === 學習率調度器 (lr_scheduler) ===
+  lr_scheduler:
+    type: "step"                      # 調度器類型 (預設: "step" | "cosine" | "plateau")
+    step_size: 1000                   # 步長 (預設: 1000, step only)
+    gamma: 0.9                        # 衰減率 (預設: 0.9, step only)
+  
+  # === 訓練超參數 (Training Hyperparameters) ===
+  epochs: 1000                        # 訓練 epochs (預設: 1000)
+  batch_size: 1024                    # 批次大小 (預設: 1024)
+  
+  # === 驗證與日誌 (Validation & Logging) ===
+  validation_freq: 50                 # 驗證頻率 (預設: 50)
+  checkpoint_freq: 100                # 檢查點保存頻率 (預設: 100)
+  log_interval: 10                    # 日誌輸出間隔 (預設: 10)
+  
+  # === 早停機制 (Early Stopping) ===
+  early_stopping:
+    enabled: false                    # 啟用早停 (預設: false)
+    patience: 100                     # 耐心 epochs (預設: 100)
+    min_delta: 1.0e-6                 # 最小改善量 (預設: 1e-6)
+  
+  # === 採樣配置 (Sampling) ===
+  sampling:
+    pde_points: 10000                 # PDE 採樣點數 (預設: 10000)
+    boundary_points: 2000             # 邊界採樣點數 (預設: 2000)
+    wall_clustering: 0.0              # 壁面聚類係數 (預設: 0.0, 0-1)
+    
+    # 自適應配點 (adaptive_collocation)
+    adaptive_collocation:
+      enabled: false                  # 啟用自適應配點 (預設: false)
+  
+  # === 梯度裁剪 (Gradient Clipping) ===
+  gradient_clip: 1.0                  # 梯度裁剪閾值 (預設: 1.0, 0=禁用)
+  
+  # === 時間窗口訓練 (Time Window Training) ===
+  # 用於長時間範圍（> 2 T_eddy）的時間演化問題
+  # 分段訓練可避免後期誤差累積
+  num_time_windows: 1                 # 時間窗口數量 (預設: 1 = 單域訓練)
+  time_window_overlap: 0.0            # 窗口重疊比例 (預設: 0.0 = 無重疊，基於 JAXpi)
+  
+  # === 混合精度訓練 (AMP) ===
+  amp:
+    enabled: false                    # 啟用 AMP (預設: false, ⚠️ 僅支援 CUDA)
+
+# =============================================================================
+# Fourier 退火配置 (Fourier Annealing)
+# =============================================================================
+fourier_annealing:
+  enabled: false                      # 啟用 Fourier 退火 (預設: false)
+  # 其他退火參數可根據需求添加
+
+# =============================================================================
+# 課程學習配置 (Curriculum Learning)
+# =============================================================================
+curriculum:
+  enable: false                       # 啟用課程學習 (預設: false)
+  is_transition: false                # 是否為階段過渡 (預設: false, 內部使用)
+  stage_name: ""                      # 階段名稱 (預設: "", 內部使用)
+  
+  # 權重配置 (weights)
+  weights: {}                         # 階段權重 (預設: {})
+
+# =============================================================================
+# 集成學習配置 (Ensemble Learning)
+# =============================================================================
+ensemble:
+  enable: false                       # 啟用集成學習 (預設: false)
+
+# =============================================================================
+# 評估設定 (Evaluation Configuration)
+# =============================================================================
+evaluation:
+  grid_resolution: [128, 64, 64]      # 評估網格解析度 (預設: [128, 64, 64])
+  
+  # 評估指標 (metrics)
+  metrics:                            # 評估指標列表 (預設: L2, 守恆性)
+    - "relative_l2"
+    - "mass_conservation"
+    - "wall_shear_stress"
+    - "mean_velocity_profile"
+  
+  # 驗收閾值 (thresholds)
+  thresholds:
+    l2_error: 0.30                    # L2 誤差閾值 (預設: 0.30)
+    mass_conservation_error: 1.0e-3   # 質量守恆誤差 (預設: 1e-3)
+    wall_shear_stress_error: 0.30     # 壁面剪應力誤差 (預設: 0.30)
+
+# =============================================================================
+# ⚠️ 物理驗證配置 (Physics Validation) - 重要功能
+# =============================================================================
+physics_validation:
+  enabled: true                       # 啟用物理驗證 (預設: true)
+  strict_mode: false                  # 嚴格模式 (預設: false, true=拒絕保存)
+  save_metrics: true                  # 保存物理指標 (預設: true)
+  
+  # 驗證閾值 (thresholds)
+  thresholds:
+    mass_conservation: 1.0e-2         # 質量守恆閾值 (預設: 1e-2)
+    momentum_conservation: 1.0e-1     # 動量守恆閾值 (預設: 1e-1)
+    boundary_condition: 1.0e-3        # 邊界條件閾值 (預設: 1e-3)
+
+# =============================================================================
+# 日誌與儲存 (Logging & Output)
+# =============================================================================
+logging:
+  level: "info"                       # 日誌級別 (預設: "info" | "debug" | "warning")
+  log_freq: 10                        # 日誌頻率 (預設: 10)
+  save_predictions: false             # 保存預測結果 (預設: false)
+  wandb: true                         # 啟用 W&B (預設: true)
+  save_loss_history: true             # 保存損失歷史 (預設: true)
+  save_weight_evolution: false        # 保存權重演化 (預設: false)
+  log_nonlinearities: false           # 記錄 alpha 非線性係數 (PirateNet/ResNet)
+
+output:
+  checkpoint_dir: "./checkpoints"     # 檢查點目錄 (預設: "./checkpoints")
+  results_dir: "./results"            # 結果目錄 (預設: "./results")
+  visualization_dir: "./visualizations"  # 視覺化目錄 (預設: "./visualizations")
+
+# =============================================================================
+# 配置鍵名一致性說明
+# =============================================================================
+# ⚠️ 重要：已知問題修復 (2025-12-19)
+# 
+# 問題：配置鍵名不一致導致權重配置被忽略
+# 
+# 錯誤用法：
+#   loss:                    # ❌ 單數，LossManager 讀不到
+#     momentum_y_weight: 0.3
+# 
+# 正確用法：
+#   losses:                  # ✅ 複數，正確鍵名
+#     momentum_y_weight: 0.3
+# 
+# 程式碼行為：
+#   - loss_manager.py (line 73): config.get('losses', {})
+#   - trainer.py (line 98):      config.get('losses', {})
+#   - factory.py (line 867):     config.get('losses', {})
+# 
+# 結論：統一使用 'losses' (複數) 作為標準鍵名
+# 
+# =============================================================================
+
+# =============================================================================
+# 版本更新日誌
+# =============================================================================
+# v1.0 (2025-12-19):
+#   - 初始版本，整合所有配置鍵
+#   - 修復 losses/loss 鍵名不一致問題
+#   - 添加所有預設值註解
+#   - 標註必填欄位 (nu, Re_tau, etc.)
+# =============================================================================

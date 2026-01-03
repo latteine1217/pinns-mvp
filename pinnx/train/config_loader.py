@@ -2,7 +2,7 @@
 配置載入與標準化模組
 
 提供 YAML 配置檔案的載入、標準化與損失權重推導功能。
-確保配置格式一致性，支援嵌套與扁平兩種配置格式。
+確保配置格式一致性，並對已移除的舊鍵名採取 fail-fast。
 
 主要功能:
     - load_config: 載入並標準化 YAML 配置
@@ -14,7 +14,7 @@
     >>> 
     >>> # 載入配置
     >>> config = load_config('configs/channel_flow.yml')
-    >>> 
+    >>>
     >>> # 推導損失權重
     >>> base_weights, adaptive_terms = derive_loss_weights(
     ...     loss_cfg=config['losses'],
@@ -98,8 +98,8 @@ def load_config(config_path: str) -> Dict[str, Any]:
         
     範例:
         >>> config = load_config('configs/channel_flow.yml')
-        >>> print(config['model']['use_fourier'])
-        True
+        >>> print(config['model']['fourier_features']['type'])
+        axis_selective
     """
     config_file = Path(config_path)
     
@@ -120,12 +120,11 @@ def load_config(config_path: str) -> Dict[str, Any]:
 
 def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    標準化配置結構，支持嵌套和扁平兩種格式
-    
-    處理重構後的統一格式：
-        1. model.fourier_features.{type, fourier_m, fourier_sigma} → 
-           model.{use_fourier, fourier_m, fourier_sigma}
-        2. 確保所有必要字段都有默認值
+    標準化配置結構（僅做結構性/安全性修補，不做向後相容轉換）
+
+    原則：
+        - 舊鍵名（如 model.use_fourier / model.fourier_m）已移除：若出現直接拋錯。
+        - Fourier 配置只接受 model.fourier_features（含 type/fourier_m/fourier_sigma/...）。
     
     Args:
         config: 原始配置字典
@@ -133,22 +132,8 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         標準化後的配置字典
         
-    範例:
-        >>> # 標準格式（fourier_features.type）
-        >>> config = {
-        ...     'model': {
-        ...         'fourier_features': {
-        ...             'type': 'disabled',
-        ...             'fourier_m': 0,
-        ...             'fourier_sigma': 0.0
-        ...         }
-        ...     }
-        ... }
-        >>> normalized = normalize_config_structure(config)
-        >>> print(normalized['model']['use_fourier'])
-        False
-        >>> print(normalized['model']['fourier_m'])
-        0
+    Note:
+        若你在遷移舊配置，請先跑 scripts/tools/validate_config_keys.py 取得明確替換路徑。
     """
     model_cfg = config.get('model', {})
     
@@ -158,38 +143,38 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
             "`model.fourier` 結構已移除，請改用 `model.fourier_features`"
         )
 
-    # 處理 fourier_features.type 格式（新版格式）
-    if 'fourier_features' in model_cfg and isinstance(model_cfg['fourier_features'], dict):
-        ff_cfg = model_cfg['fourier_features']
-        ff_type = ff_cfg.get('type', 'standard')
-        
-        # 處理 type="disabled"
-        if ff_type == 'disabled':
-            model_cfg['use_fourier'] = False
-            model_cfg['fourier_m'] = 0
-            model_cfg['fourier_sigma'] = 0.0
-            logging.debug("✅ Fourier Features 已禁用 (type='disabled')")
-        
-        # 處理 type="standard" 或其他啟用類型
-        elif ff_type in ['standard', 'axis_selective']:
-            model_cfg['use_fourier'] = True
-            model_cfg['fourier_m'] = ff_cfg.get('fourier_m', 32)
-            model_cfg['fourier_sigma'] = ff_cfg.get('fourier_sigma', 5.0)
-            if 'trainable_fourier' in ff_cfg:
-                model_cfg['trainable_fourier'] = ff_cfg.get('trainable_fourier', False)
-            if 'fourier_use_2pi' in ff_cfg:
-                model_cfg['fourier_use_2pi'] = ff_cfg.get('fourier_use_2pi', True)
-            logging.debug(f"✅ Fourier Features 已啟用 (type='{ff_type}', m={model_cfg['fourier_m']})")
-        
-        else:
-            raise ValueError(f"未知的 fourier_features.type='{ff_type}'，請更新配置")
-    
-    # 設置默認值（如果未設置）
-    model_cfg.setdefault('use_fourier', True)  # 默認啟用 Fourier
-    model_cfg.setdefault('fourier_m', 32)
-    model_cfg.setdefault('fourier_sigma', 1.0)
-    model_cfg.setdefault('trainable_fourier', False)
-    model_cfg.setdefault('fourier_use_2pi', True)
+    # 禁止使用已移除的扁平 Fourier 鍵名（避免隱式相容/靜默行為）
+    removed_flat_keys = {
+        'use_fourier': "model.fourier_features.type",
+        'fourier_m': "model.fourier_features.fourier_m",
+        'fourier_sigma': "model.fourier_features.fourier_sigma",
+        'trainable_fourier': "model.fourier_features.trainable_fourier",
+        'fourier_use_2pi': "model.fourier_features.fourier_use_2pi",
+        'fourier_multiscale': "model.fourier_features.type (axis_selective/standard) + config",
+    }
+    for key, replacement in removed_flat_keys.items():
+        if key in model_cfg:
+            raise ValueError(
+                f"已移除的舊鍵名: model.{key}\n"
+                f"請改用: {replacement}"
+            )
+
+    ff_cfg = model_cfg.get('fourier_features')
+    if not isinstance(ff_cfg, dict):
+        raise ValueError("缺少必要配置: model.fourier_features（必須是 dict）")
+
+    ff_type = ff_cfg.get('type')
+    if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+        raise ValueError(
+            "model.fourier_features.type 必須是 'standard' / 'axis_selective' / 'disabled'"
+        )
+
+    if ff_type != 'disabled':
+        if 'fourier_m' not in ff_cfg or 'fourier_sigma' not in ff_cfg:
+            raise ValueError(
+                "Fourier features 啟用時必須提供 "
+                "model.fourier_features.fourier_m 與 model.fourier_features.fourier_sigma"
+            )
 
     config['model'] = model_cfg
 

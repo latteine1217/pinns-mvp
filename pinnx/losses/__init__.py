@@ -34,7 +34,7 @@ from .residuals import (
     BoundaryConditionLoss,
     InitialConditionLoss,
     PeriodicBoundaryLoss,
-    gradient
+    compute_gradients
 )
 
 from .priors import (
@@ -551,7 +551,7 @@ __all__ = [
     'BoundaryConditionLoss',
     'InitialConditionLoss',
     'PeriodicBoundaryLoss',
-    'gradient',
+    'compute_gradients',
     
     # 先驗損失
     'LowFidelityConsistencyLoss',

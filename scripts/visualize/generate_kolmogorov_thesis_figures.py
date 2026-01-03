@@ -31,19 +31,15 @@ def load_checkpoint(checkpoint_path, device='cpu'):
     model_config = config['model']
     block_type = model_config.get('block_type', 'dense')
     
-    # 處理兩種配置格式
-    if 'fourier_features' in model_config and isinstance(model_config['fourier_features'], dict):
-        ff_config = model_config['fourier_features']
-        ff_type = ff_config.get('type', 'standard')
-        use_fourier = ff_type != 'disabled'
-        fourier_m = ff_config.get('fourier_m', 16)
-        fourier_sigma = ff_config.get('fourier_sigma', 4.0)
-        trainable_fourier = ff_config.get('trainable_fourier', False)
-    else:
-        use_fourier = model_config.get('use_fourier', False)
-        fourier_m = model_config.get('fourier_m', 16)
-        fourier_sigma = model_config.get('fourier_sigma', 4.0)
-        trainable_fourier = model_config.get('trainable_fourier', False)
+    ff_config = model_config.get('fourier_features')
+    if not isinstance(ff_config, dict) or 'type' not in ff_config:
+        raise KeyError("Missing required config key: model.fourier_features.type")
+
+    ff_type = ff_config.get('type', 'disabled')
+    use_fourier = ff_type != 'disabled'
+    fourier_m = int(ff_config.get('fourier_m', 0)) if use_fourier else 0
+    fourier_sigma = float(ff_config.get('fourier_sigma', 0.0)) if use_fourier else 0.0
+    trainable_fourier = bool(ff_config.get('trainable_fourier', False))
     
     model = PINNNet(
         in_dim=model_config['in_dim'],

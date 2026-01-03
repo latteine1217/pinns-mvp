@@ -10,14 +10,6 @@ DataIO 模組 (Simplified)
 ✅ JHTDBClient: JHTDB 資料客戶端
 ✅ ChannelFlowLoader: 通道流專用載入器
 
-=== 已棄用 (DEPRECATED) ===
-⚠️ NetCDFReader: 專案僅支援 HDF5 格式
-⚠️ LESReader: LES 模型不在專案範圍內
-⚠️ DownsampledDNSProcessor: DNS 下採樣不使用
-
-注意: LowFiLoader 類別為舊版實作,實際訓練管道使用
-      scripts/train/train.py::load_rans_prior_data() 直接載入。
-
 參考文檔: docs/LOWFI_PRIOR_GUIDE.md
 """
 

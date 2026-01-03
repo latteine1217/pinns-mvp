@@ -1,18 +1,12 @@
 """
 低保真資料載入器 (Simplified)
 
-提供統一介面載入 RANS、粗LES、下採樣DNS 等低保真資料,
-並支援插值到 PINN 訓練網格,作為軟先驗使用。
+提供統一介面載入低保真資料（例如 RANS prior），並支援插值到 PINN 訓練網格作為軟先驗使用。
 
 === 支援的功能 (SUPPORTED) ===
 ✅ HDF5Reader: 讀取 .h5/.hdf5 檔案
 ✅ RANSReader: 3D Channel Flow RANS k-ε 模型專用
 ✅ SpatialInterpolator: 空間插值到 PINN 網格
-
-=== 已棄用 (DEPRECATED) ===
-⚠️ NetCDFReader: 專案僅支援 HDF5 格式
-⚠️ LESReader: LES 模型不在專案範圍內
-⚠️ DownsampledDNSProcessor: DNS 下採樣不使用
 
 注意: 實際訓練管道使用 scripts/train/train.py::load_rans_prior_data()
       直接用 h5py 載入,而非使用此模組的 LowFiLoader 類別。
@@ -33,13 +27,6 @@ from scipy.interpolate import RegularGridInterpolator, RBFInterpolator
 from scipy.spatial.distance import cdist
 
 # 檔案格式支援
-try:
-    import netCDF4 as nc
-    HAS_NETCDF = True
-except ImportError:
-    HAS_NETCDF = False
-    logging.warning("NetCDF4 not available, NetCDF files cannot be loaded")
-
 try:
     import h5py
     HAS_HDF5 = True

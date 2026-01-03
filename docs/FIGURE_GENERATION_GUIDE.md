@@ -427,7 +427,7 @@ done
 
 2. **訓練模型**（各實驗配置）：
    ```bash
-   python scripts/train/train.py --config configs/experiments/S2_k_scan/s2_qr_K50_2d_re50.yml
+   python scripts/train/train.py --cfg configs/experiments/S2_k_scan/s2_qr_K50_2d_re50.yml
    ```
 
 3. **評估與生成 metrics.json**：
@@ -451,7 +451,7 @@ done
 ## 引用與相關文檔
 
 - **實驗計畫**：`docs/EXPERIMENT_COMPARISON_PLAN.md`
-- **配置參考**：`docs/CONFIG_REFERENCE.md`
+- **配置指南**：`docs/CONFIG_GUIDE.md`
 - **快速開始**：`docs/QUICK_START.md`
 - **腳本說明**：`scripts/README.md`
 
@@ -471,3 +471,9 @@ done
 **最後更新**：2025-12-14  
 **腳本版本**：v1.0  
 **維護者**：PINNs-MVP 專案團隊
+
+---
+
+**文檔維護**: PINNs-MVP 團隊  
+**版本**: 2.0.0  
+**最後更新**: 2026-01-03

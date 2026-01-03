@@ -59,8 +59,21 @@
 5. 文件同步
    - 配置變更一定更新：
      - `standard_config_template.yml`
-     - `CONFIG_MANAGEMENT_GUIDE.md`
-   - 重要決策一定記錄：`context/decisions_log.md`
+     - `docs/CONFIG_GUIDE.md`
+   - 重要決策一定記錄：`context/decisions/decisions_log.md`
+6. 會話記錄（Session Documentation）
+   - **所有會話總結必須保存至 `context/session_logs/`**
+   - 命名格式：
+     - `SESSION_SUMMARY_YYYY-MM-DD_<主題>.md`（會話總結）
+     - `SESSION_LOG_YYYY-MM-DD_<主題>.md`（詳細日誌）
+     - `<主題>_REPORT_YYYY-MM-DD.md`（技術報告）
+   - 內容要求：
+     - 問題診斷與解決方案
+     - 關鍵決策與理由
+     - 修改的文件清單
+     - 量化成果（行數、效能等）
+     - 下一步建議
+   - **禁止將會話文件留在專案根目錄**
 
 ## ⚠️ 不可違反的工程鐵律（Hard Rules）
 

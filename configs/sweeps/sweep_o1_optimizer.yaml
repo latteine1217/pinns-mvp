@@ -1,0 +1,75 @@
+# ====================================================================
+# Sweep O1: Optimizer Comparison (優化器對比)
+# ====================================================================
+# 目的：比較 Adam vs SOAP vs AdamW 的收斂速度與最終精度
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - O1
+# Group: optimizer_comparison
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search 覆蓋所有組合
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # 基礎配置檔案
+  config:
+    value: configs/templates/2d_medium_ablation.yml
+
+  # 主要掃描參數：優化器類型
+  training.optimizer.type:
+    values: ["adam", "soap", "adamw"]
+
+  # 次要掃描：學習率（每個優化器最佳範圍不同）
+  training.optimizer.lr:
+    values: [1e-3, 5e-4, 1e-4]
+
+  # SOAP 專屬參數（只在 optimizer=soap 時生效）
+  training.optimizer.precondition_frequency:
+    value: 2  # PirateNet 論文設定
+
+  # AdamW 專屬參數
+  training.optimizer.weight_decay:
+    value: 1e-5
+
+  # 實驗組織（動態標記需要在訓練腳本中處理）
+  experiment.name:
+    value: "Re50_K100_qr_optimizer_comparison"
+
+  experiment.group:
+    value: "optimizer_comparison"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "full", "o1_optimizer"]
+
+  experiment.experiment_id:
+    value: "O1"
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_o1_optimizer.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 9 個 runs (3 optimizers × 3 learning rates)
+#    - 可比較：
+#      * 達標 epoch（L2 < 15% 的最小 epoch）
+#      * Wall-time（實際訓練時間）
+#      * 最終精度（best L2_uvp_rel）
+#
+# 4. 評估指標：
+#    - 收斂速度：epochs_to_target, wall_time_to_target
+#    - 最終精度：best_L2_uvp_rel
+#    - 穩定性：loss 曲線波動程度
+#
+# 5. 注意事項：
+#    - SOAP 需要額外記憶體（preconditioner）
+#    - L-BFGS 不在此 sweep（需要特殊處理）
+#    - 建議用相同硬體執行（避免 wall-time 比較失真）
+# ====================================================================

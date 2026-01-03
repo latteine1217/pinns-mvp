@@ -556,42 +556,15 @@ def create_scaled_pinn(model_config: Dict,
     # 建立基礎模型
     base_model = create_pinn_model(model_config)
     
-    # 建立尺度器
+    # 尺度器（舊接口）已移除：統一改用 pinnx.utils.normalization.UnifiedNormalizer + model.scaling
     input_scaler = None
     output_scaler = None
-    
+
     if scaler_config:
-        if 'input' in scaler_config:
-            input_cfg = scaler_config['input']
-            if input_cfg['type'] == 'standard':
-                raise ValueError(
-                    "StandardScaler is deprecated. Use 'vs' type with VSScaler or handle normalization "
-                    "in data preprocessing with UnifiedNormalizer from pinnx.utils.normalization"
-                )
-            elif input_cfg['type'] == 'vs':
-                input_scaler = VSScaler(
-                    input_cfg.get('mu_in'),
-                    input_cfg.get('std_in'),
-                    input_cfg.get('mu_out'),
-                    input_cfg.get('std_out'),
-                    learnable=input_cfg.get('learnable', True)
-                )
-        
-        if 'output' in scaler_config:
-            output_cfg = scaler_config['output']
-            if output_cfg['type'] == 'standard':
-                raise ValueError(
-                    "StandardScaler is deprecated. Use 'vs' type with VSScaler or handle normalization "
-                    "in data preprocessing with UnifiedNormalizer from pinnx.utils.normalization"
-                )
-            elif output_cfg['type'] == 'vs':
-                output_scaler = VSScaler(
-                    output_cfg.get('mu_in'),
-                    output_cfg.get('std_in'),
-                    output_cfg.get('mu_out'),
-                    output_cfg.get('std_out'),
-                    learnable=output_cfg.get('learnable', True)
-                )
+        raise ValueError(
+            "scaler_config is no longer supported. "
+            "Use pinnx.utils.normalization.UnifiedNormalizer and model.scaling instead."
+        )
     
     return ScaledPINNWrapper(
         base_model=base_model,

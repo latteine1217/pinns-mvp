@@ -1,0 +1,44 @@
+# ====================================================================
+# Sweep S2: K-Scan (感測點數量掃描)
+# ====================================================================
+# 目的：量化「極端稀疏」下 K 值對重建精度的影響
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - S2
+# Group: kflow_sensor_strategy
+# ====================================================================
+
+program: scripts/train/train.py
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - --cfg
+  - ${cfg}
+method: grid  # Grid search 確保覆蓋所有 K 值
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # ✅ 使用「完整可跑」的 case configs，避免 K 與 sensor_file 的 pairing 產生 cross-product
+  cfg:
+    values:
+      - configs/sweeps/cases/s2_qr_K30_2d_re50.yml
+      - configs/sweeps/cases/s2_qr_K50_2d_re50.yml
+      - configs/sweeps/cases/s2_qr_K80_2d_re50.yml
+      - configs/sweeps/cases/s2_qr_K100_2d_re50.yml
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_s2_k_scan.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 4 個 runs (K=30, 50, 80, 100)
+#    - 可繪製 K-error 曲線（論文 Figure 用）
+#    - 找到最小 K 門檻值（達成 L2 < 15% 的最小 K）
+# ====================================================================

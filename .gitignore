@@ -33,6 +33,13 @@ scripts/archive_*/
 scripts/archived_*/
 scripts/archive*/
 
+# Session files in root directory (should be in context/)
+SESSION_*.md
+*_SUMMARY_*.md
+*_LOG_*.md
+*_REPORT_*.md
+REFACTORING_*.md
+
 # External dependencies (nested git repos)
 external/
 

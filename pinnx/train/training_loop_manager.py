@@ -116,7 +116,10 @@ class TrainingLoopManager:
         
         # 8. 驗證指標
         self._add_validation_metrics(log_dict, loss_dict)
-        
+
+        # 9. 損失權重（GradNorm 與應用權重）
+        self._add_loss_weights(log_dict, loss_dict)
+
         # 一次性記錄所有指標
         wandb.log(log_dict)
     
@@ -201,7 +204,35 @@ class TrainingLoopManager:
             log_dict['Validation/relative_l2'] = loss_dict['val_loss']
         if 'val_mse' in loss_dict:
             log_dict['Validation/mse'] = loss_dict['val_mse']
-    
+
+    def _add_loss_weights(self, log_dict: Dict, loss_dict: Dict):
+        """
+        記錄損失權重（GradNorm 與應用權重）
+
+        記錄兩類權重：
+        1. GradNorm 動態權重（gradnorm_weights）- 梯度範數平衡計算的權重
+        2. 應用權重（applied_weights）- 實際應用到損失的最終權重（組合了配置、GradNorm、課程學習等）
+
+        Args:
+            log_dict: WandB 日誌字典
+            loss_dict: 訓練步驟返回的損失字典
+        """
+        # 記錄 GradNorm 動態權重
+        if 'gradnorm_weights' in loss_dict:
+            gradnorm_weights = loss_dict['gradnorm_weights']
+            if isinstance(gradnorm_weights, dict):
+                for key, value in gradnorm_weights.items():
+                    # 記錄到 Weights/GradNorm/ 路徑下
+                    log_dict[f'Weights/GradNorm/{key}'] = float(value)
+
+        # 記錄實際應用的最終權重
+        if 'applied_weights' in loss_dict:
+            applied_weights = loss_dict['applied_weights']
+            if isinstance(applied_weights, dict):
+                for key, value in applied_weights.items():
+                    # 記錄到 Weights/Applied/ 路徑下
+                    log_dict[f'Weights/Applied/{key}'] = float(value)
+
     def log_hyperparameters(self, current_lr: float, epoch: int):
         """
         記錄訓練超參數
@@ -542,7 +573,7 @@ class TrainingLoopManager:
                 old_info = fourier_annealing.get_info()
                 
                 # 執行更新
-                max_epochs = config.get('train', {}).get('epochs', config.get('train', {}).get('max_epochs', 1000))
+                max_epochs = int(config['training']['epochs'])
                 fourier_annealing.update_fourier_features(
                     fourier_module,
                     current_epoch=epoch,

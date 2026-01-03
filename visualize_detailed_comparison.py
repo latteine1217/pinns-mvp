@@ -51,7 +51,7 @@ def load_dns_data(h5_path, t_eval=25.0):
 def load_model_and_predict(checkpoint_path, x, y):
     """載入模型並進行預測"""
     from pinnx.models.fourier_mlp import PINNNet
-    from pinnx.train.factory import create_model
+    from pinnx.train.model_physics_factory import create_model
 
     print(f"📥 載入 checkpoint: {checkpoint_path}")
 

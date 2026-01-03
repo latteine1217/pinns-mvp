@@ -62,7 +62,6 @@ normalization:
                                       #   - 3d_full：完整 3D 域（不切片）
     z_position: 4.71                  # 切片位置（若為 xy/xz 平面）
     steady_state: true                # 是否使用穩態（時間平均）
-    time_average_window: [20.0, 26.0] # 時間平均窗口（統計穩定區間）
 
 # ====================================================================
 # 5. 感測點配置（稀疏採樣）
@@ -298,10 +297,6 @@ training:
     precondition_frequency: 2         # 預條件更新頻率（每 N 步）
     shampoo_beta: -1                  # Shampoo beta 參數（-1=自動）
 
-  # 向後兼容（部分腳本仍從頂層讀取）
-  lr: 1.0e-3
-  weight_decay: 1.0e-5
-
   # 學習率調度器
   lr_scheduler:
     type: "step"                      # 調度器選項：
@@ -324,7 +319,6 @@ training:
   epochs: 2000                        # 總訓練 epochs
                                       # 快速測試：100-500
                                       # 標準訓練：2000-5000
-  max_epochs: 2000                    # 最大 epochs（與 epochs 一致）
   batch_size: 1024                    # 批次大小（PDE 碰撞點數）
                                       # GPU 記憶體 < 8GB：512
                                       # GPU 記憶體 ≥ 8GB：1024-2048

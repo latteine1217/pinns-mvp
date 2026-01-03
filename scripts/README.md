@@ -230,12 +230,7 @@ python scripts/train/train.py --cfg configs/quick_test_rans_prior.yml
 **結構**:
 ```
 archive/
-├── deprecated_sensors/      V5/V6 感測點方法
-├── experiments/             參數探索與實驗
-├── old_evaluation/          舊版訓練腳本
-├── one_time_checks/         一次性檢查工具
-├── paper_figures/           論文圖表生成
-└── visualization_variants/  視覺化重複功能
+└── debug_2024_11/           舊版診斷腳本（保留作參考）
 ```
 
 **注意**: Archive 腳本可能與當前代碼不相容,僅供參考。

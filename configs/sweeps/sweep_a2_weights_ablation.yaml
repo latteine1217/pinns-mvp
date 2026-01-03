@@ -1,0 +1,70 @@
+# ====================================================================
+# Sweep A2: Adaptive Weights Ablation (自適應權重消融)
+# ====================================================================
+# 目的：量化 GradNorm 動態權重與 Loss 標準化對收斂速度與最終精度的貢獻
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - A2
+# Group: kflow_ablation
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search（只有 2 個選項）
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # 直接指定兩個完整配置檔案（避免組合爆炸）
+  config:
+    values:
+      - configs/experiments/A2_ablation_weights/a2_without_adaptive_K100_2d_re50.yml
+      - configs/experiments/A2_ablation_weights/a2_with_adaptive_K100_2d_re50.yml
+
+  # 實驗組織
+  experiment.group:
+    value: "kflow_ablation"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "full", "a2_weights_ablation"]
+
+  experiment.experiment_id:
+    value: "A2"
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_a2_weights_ablation.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 2 個 runs (without adaptive weights vs with adaptive weights)
+#    - 量化 GradNorm + Loss Normalization 的組合貢獻
+#    - 特別關注收斂速度（epochs/wall-time to target）
+#
+# 4. 評估指標：
+#    - L2_uvp_rel: 最終精度
+#    - epochs_to_target: 達標所需 epochs（L2 < 15%）
+#    - wall_time_to_target: 達標所需實際時間
+#    - loss_balance: data vs PDE loss 的平衡度
+#    - divergence_mean/max: 不可壓縮性（避免權重失衡）
+#
+# 5. 視覺化建議：
+#    - Convergence curves: loss vs epoch（w/o vs w/ adaptive）
+#    - Bar chart: epochs_to_target 對比
+#    - Loss component evolution: 各 loss 項隨 epoch 的權重變化
+#    - Final L2 error comparison
+#
+# 6. 論文亮點：
+#    - 動態權重加速收斂 ≥ 30%（達標 epoch 減少）
+#    - 避免 data vs PDE trade-off（兩者都滿足）
+#    - GradNorm 自動平衡多個物理約束
+#
+# 7. 注意事項：
+#    - 除了 adaptive_weighting + normalize_losses，其他所有設定保持一致
+#    - 兩者都使用 Fourier、SOAP、ResNet（只切動態權重）
+#    - 建議記錄 wall-time（需在相同硬體執行）
+#    - Without adaptive 可能需要手動調權重（或直接 fixed weights）
+# ====================================================================

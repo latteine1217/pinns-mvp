@@ -36,15 +36,18 @@ def create_model_from_checkpoint(checkpoint):
 
     config = checkpoint['config']
     model_cfg = config.get('model', {})
+    ff_cfg = model_cfg.get('fourier_features')
+    if not isinstance(ff_cfg, dict) or 'type' not in ff_cfg:
+        raise KeyError("Missing required config key: model.fourier_features.type")
 
     # 從 checkpoint state_dict 推斷正確的參數
     state_dict = checkpoint['model_state_dict']
 
     # 檢查 Fourier B 矩陣尺寸 --> fourier_m
     if 'fourier.B' in state_dict:
-        fourier_m = state_dict['fourier.B'].shape[1]
+        fourier_m = int(state_dict['fourier.B'].shape[1])
     else:
-        fourier_m = 16
+        fourier_m = 0
 
     # 檢查輸出層尺寸 --> out_dim
     if 'output_layer.bias' in state_dict:
@@ -65,6 +68,9 @@ def create_model_from_checkpoint(checkpoint):
     print(f"   in_dim={in_dim}, out_dim={out_dim}, fourier_m={fourier_m}")
     print(f"   ResNet blocks: {has_resnet}")
 
+    use_fourier = ('fourier.B' in state_dict)
+    fourier_sigma = float(ff_cfg.get('fourier_sigma', 0.0)) if use_fourier else 0.0
+
     # 創建模型
     model = PINNNet(
         in_dim=in_dim,
@@ -72,9 +78,9 @@ def create_model_from_checkpoint(checkpoint):
         width=model_cfg.get('width', 256),
         depth=model_cfg.get('depth', 6),
         activation=model_cfg.get('activation', 'swish'),
-        use_fourier=True,
+        use_fourier=use_fourier,
         fourier_m=fourier_m,
-        fourier_sigma=model_cfg.get('fourier_features', {}).get('fourier_sigma', 4.0),
+        fourier_sigma=fourier_sigma,
         use_residual=has_resnet
     )
 

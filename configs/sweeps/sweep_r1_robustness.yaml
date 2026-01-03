@@ -1,0 +1,75 @@
+# ====================================================================
+# Sweep R1: Robustness Test (魯棒性測試)
+# ====================================================================
+# 目的：測試噪聲與 dropout 對重建精度的影響
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - R1
+# Group: robustness
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search 覆蓋所有噪聲/dropout 組合
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # 基礎配置檔案
+  config:
+    value: configs/templates/2d_medium_ablation.yml
+
+  # 主要掃描參數 1：噪聲水準
+  data.sensor_noise:
+    values: [0.0, 0.01, 0.03]  # 0%, 1%, 3%
+
+  # 主要掃描參數 2：Dropout 比例（需要在訓練腳本中支援）
+  data.sensor_dropout:
+    values: [0.0, 0.1]  # 0%, 10%
+
+  # 統計：每個組合跑 3 seeds
+  experiment.seed:
+    values: [42, 123, 456]
+
+  # 實驗組織
+  experiment.name:
+    value: "Re50_K100_qr_robustness"
+
+  experiment.group:
+    value: "robustness"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "full", "r1_robustness"]
+
+  experiment.experiment_id:
+    value: "R1"
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_r1_robustness.yaml
+#
+# 2. 啟動 agent（建議多 GPU 並行）:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 18 個 runs (3 noise × 2 dropout × 3 seeds)
+#    - 可計算每個 (noise, dropout) 組合的：
+#      * Mean ± Std L2 error (3 seeds)
+#      * 成功率（達標比例）
+#
+# 4. 評估指標：
+#    - L2_uvp_rel: mean ± std (across 3 seeds)
+#    - Divergence: mean ± std
+#    - Success rate: 達標比例 (L2 < threshold)
+#
+# 5. 可視化建議：
+#    - Heatmap: noise (x) vs dropout (y), color=mean L2
+#    - Error bars: noise vs L2 ± std
+#    - 對照 clean data baseline
+#
+# 6. 注意事項：
+#    - sensor_dropout 功能需要在 data loading 中實作
+#    - 噪聲應為 Gaussian noise: sensor_value * (1 + N(0, σ))
+#    - 3D 實驗可先跑 1 seed（成本高）
+# ====================================================================

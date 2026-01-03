@@ -1,0 +1,70 @@
+# ====================================================================
+# Sweep C1: Prior Comparison (先驗對比)
+# ====================================================================
+# 目的：比較無 RANS 先驗 vs 有 RANS 先驗對重建精度的影響
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - C1
+# Group: kflow_prior
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search（只有 2 個選項）
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # 直接指定兩個完整配置檔案（避免組合爆炸）
+  config:
+    values:
+      - configs/experiments/C1_prior_comparison/c1_no_prior_K100_2d_re50.yml
+      - configs/experiments/C1_prior_comparison/c1_with_prior_K100_2d_re50.yml
+
+  # 實驗組織
+  experiment.group:
+    value: "kflow_prior"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "full", "c1_prior_comparison"]
+
+  experiment.experiment_id:
+    value: "C1"
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_c1_prior_comparison.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 2 個 runs (no prior vs with prior)
+#    - 量化 RANS 先驗的貢獻（特別是壓力場重建）
+#    - 驗證「低保真引導」的有效性
+#
+# 4. 評估指標：
+#    - L2_uvp_rel: 全場相對 L2 誤差（特別是 p 和 ∇p）
+#    - pressure_gradient_l2: 壓力梯度誤差（關鍵指標）
+#    - divergence_mean/max: 不可壓縮性
+#    - improvement_over_rans: 相較於 RANS 單獨的改善
+#
+# 5. 視覺化建議：
+#    - Bar chart: no prior vs with prior 的 L2 誤差對比
+#    - Pressure field reconstruction: DNS vs RANS vs No-Prior vs With-Prior
+#    - Pressure gradient (∇p) comparison（避免 gauge 問題）
+#    - Error reduction: (RANS error - PINN error) / RANS error
+#
+# 6. 論文亮點：
+#    - 證明「速度感測器 + RANS 先驗」可重建壓力場
+#    - RANS 提供「物理合理的初始猜測」，PINN 根據稀疏測量修正
+#    - 量化 RANS 引導的改善程度（目標：壓力誤差從 100% → < 30%）
+#
+# 7. 注意事項：
+#    - 除了 lowfi_prior.enabled (false vs true)，其他所有設定保持一致
+#    - With-prior 使用固定 prior_weight（建議 0.1-0.3，可參考 C2 sweep 結果）
+#    - 需要確保 RANS 數據檔案存在且格式正確
+#    - 2D Kolmogorov 先跑，驗證概念後再升級到 3D Channel flow
+#    - 3D Channel flow 的 prior 對壓力重建更關鍵（JHTDB 高 Re 場景）
+# ====================================================================

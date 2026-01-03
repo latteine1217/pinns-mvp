@@ -883,12 +883,15 @@ def create_pinn_model(config: dict) -> nn.Module:
             - out_dim: 輸出維度
             - width: 隱藏層寬度
             - depth: 網路深度
-            - fourier_m: Fourier 特徵數量
-            - fourier_sigma: Fourier 頻率尺度
             - activation: 激活函數 (tanh/swish/sine/gelu)
-            - use_fourier: 是否啟用 Fourier Features
             - use_residual: 是否啟用殘差連接
             - use_rwf: 是否啟用 Random Weight Factorization
+            - fourier_features: Fourier 配置（必填）
+                - type: 'standard' | 'axis_selective' | 'disabled'
+                - fourier_m: Fourier 特徵數量（type != disabled 必填）
+                - fourier_sigma: Fourier 頻率尺度（type != disabled 必填）
+                - trainable_fourier: Fourier kernel 是否可訓練
+                - fourier_use_2pi: 是否乘上 2π
 
     Returns:
         PINNNet 模型實例
@@ -912,6 +915,45 @@ def create_pinn_model(config: dict) -> nn.Module:
     model_type = config.get('type', 'fourier_vs_mlp')
 
     if model_type == 'fourier_vs_mlp':
+        # 嚴格配置：不再支援扁平 Fourier 鍵名（避免隱式相容）
+        removed_flat_keys = [
+            'use_fourier',
+            'fourier_m',
+            'fourier_sigma',
+            'trainable_fourier',
+            'fourier_use_2pi',
+            'fourier_multiscale',
+        ]
+        for key in removed_flat_keys:
+            if key in config:
+                raise ValueError(
+                    f"Deprecated/removed config key: '{key}'. "
+                    "Use 'fourier_features' dict instead."
+                )
+
+        ff_cfg = config.get('fourier_features')
+        if not isinstance(ff_cfg, dict):
+            raise ValueError("Model config missing required dict: 'fourier_features'")
+
+        ff_type = ff_cfg.get('type')
+        if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+            raise ValueError(
+                "fourier_features.type must be 'standard' / 'axis_selective' / 'disabled'"
+            )
+
+        use_fourier = ff_type != 'disabled'
+        if use_fourier:
+            fourier_m = int(ff_cfg.get('fourier_m'))
+            fourier_sigma = float(ff_cfg.get('fourier_sigma'))
+            if fourier_m <= 0:
+                raise ValueError("fourier_features.fourier_m must be > 0 when enabled")
+        else:
+            fourier_m = 0
+            fourier_sigma = 0.0
+
+        trainable_fourier = bool(ff_cfg.get('trainable_fourier', False))
+        fourier_use_2pi = bool(ff_cfg.get('fourier_use_2pi', True))
+
         # 處理 VS-PINN 縮放因子
         input_scale_factors = None
         if 'input_scale_factors' in config:
@@ -924,13 +966,13 @@ def create_pinn_model(config: dict) -> nn.Module:
             out_dim=config.get('out_dim', 4),
             width=config.get('width', 256),
             depth=config.get('depth', 5),
-            fourier_m=config.get('fourier_m', 32),
-            fourier_sigma=config.get('fourier_sigma', 5.0),
-            fourier_multiscale=config.get('fourier_multiscale', False),
+            fourier_m=fourier_m,
+            fourier_sigma=fourier_sigma,
+            fourier_multiscale=False,
             activation=config.get('activation', 'tanh'),
-            use_fourier=config.get('use_fourier', True),
-            trainable_fourier=config.get('trainable_fourier', False),
-            fourier_use_2pi=config.get('fourier_use_2pi', True),
+            use_fourier=use_fourier,
+            trainable_fourier=trainable_fourier,
+            fourier_use_2pi=fourier_use_2pi,
             use_residual=config.get('use_residual', False),
             use_layer_norm=config.get('use_layer_norm', False),
             use_input_projection=config.get('use_input_projection', False),
@@ -1090,4 +1132,3 @@ if __name__ == "__main__":
         print(f"   {key:20s}: {value}")
 
     print("\n✅ 所有測試通過！")
-

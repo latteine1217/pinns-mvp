@@ -185,22 +185,9 @@ def create_scaler_from_data(input_data: torch.Tensor,
         已擬合的尺度器
         
     Note:
-        StandardScaler 和 MinMaxScaler 已棄用。
-        請使用 pinnx.utils.normalization.UnifiedNormalizer 進行資料預處理。
+        本專案僅支援 VSScaler。資料前處理請使用 pinnx.utils.normalization.UnifiedNormalizer。
     """
-    if scaler_type == "standard":
-        raise ValueError(
-            "StandardScaler is deprecated. Use pinnx.utils.normalization.UnifiedNormalizer "
-            "with mode='training_data_norm' for data preprocessing."
-        )
-        
-    elif scaler_type == "minmax":
-        raise ValueError(
-            "MinMaxScaler is deprecated. Use pinnx.utils.normalization.UnifiedNormalizer "
-            "with custom min/max ranges if needed."
-        )
-        
-    elif scaler_type == "vs":
+    if scaler_type == "vs":
         input_dim = input_data.shape[1]
         output_dim = output_data.shape[1] if output_data is not None else 1
         init_method = kwargs.get('init_method', "standard")
@@ -213,8 +200,7 @@ def create_scaler_from_data(input_data: torch.Tensor,
         )
         scaler.fit(input_data, output_data)
         
-    else:
-        raise ValueError(f"不支援的尺度器類型: {scaler_type}。僅支援 'vs'。")
+    raise ValueError(f"不支援的尺度器類型: {scaler_type}。僅支援 'vs'。")
     
     return scaler
 
@@ -236,8 +222,7 @@ def denormalize_gradients(gradients: torch.Tensor,
         物理空間的梯度
         
     Note:
-        StandardScaler 和 MinMaxScaler 已棄用。
-        現在僅支援 VSScaler 的梯度反標準化。
+        僅支援 VSScaler 的梯度反標準化。
     """
     if isinstance(scaler, VSScaler):
         # VS-PINN 梯度變換

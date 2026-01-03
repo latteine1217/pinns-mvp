@@ -61,7 +61,7 @@ class Trainer:
     def __init__(
         self,
         model: nn.Module,
-        physics: Any,  # 支援 NSEquations2D 或 VS-PINN
+        physics: Any,
         losses: Dict[str, nn.Module],
         config: Dict[str, Any],
         device: torch.device,
@@ -71,8 +71,8 @@ class Trainer:
         training_data: Optional[Dict[str, torch.Tensor]] = None,
     ):
         """
-        初始化訓練器
-        
+        初始化訓練器（重構版：拆分為多個職責清晰的子方法）
+
         Args:
             model: PINN 模型
             physics: 物理方程模組
@@ -84,6 +84,72 @@ class Trainer:
             channel_data_cache: 通道流資料快取（可選）
             training_data: 訓練資料（用於自動計算標準化統計量，可選）
         """
+        # ========== 配置驗證（Fail Fast）==========
+        self._validate_config_early(config)
+        
+        # 基本組件初始化
+        self._init_basic_components(model, physics, losses, config, device,
+                                    weighters, input_normalizer, channel_data_cache)
+
+        # 標準化器初始化與驗證
+        self._init_normalizers(config, training_data)
+
+        # 訓練狀態初始化
+        self._init_training_state(config)
+
+        # WandB 初始化
+        self._init_wandb(config)
+
+        # 損失組件初始化
+        self._init_loss_components()
+
+        # 訓練組件初始化
+        self._init_training_components()
+
+        # 指標追蹤工具初始化
+        self._init_metrics_tracking(config)
+
+        logging.info(f"✅ Trainer 初始化完成（設備: {device}）")
+
+    # ========================================================================
+    # 初始化輔助方法（拆分自 __init__，遵循單一職責原則）
+    # ========================================================================
+    
+    def _validate_config_early(self, config: Dict[str, Any]) -> None:
+        """
+        配置早期驗證（Fail Fast 原則）
+        
+        在初始化任何組件之前檢查配置，避免 Silent Failure。
+        
+        Args:
+            config: 完整訓練配置
+        
+        Raises:
+            KeyError: 發現常見配置錯誤
+        """
+        from pinnx.utils.config_validator import quick_check_common_errors
+        
+        # 快速檢查最常見的錯誤
+        error_msg = quick_check_common_errors(config)
+        if error_msg:
+            raise KeyError(
+                f"\n{'=' * 80}\n"
+                f"❌ 配置驗證失敗:\n\n{error_msg}\n"
+                f"{'=' * 80}\n"
+            )
+
+    def _init_basic_components(
+        self,
+        model: nn.Module,
+        physics: Any,
+        losses: Dict[str, nn.Module],
+        config: Dict[str, Any],
+        device: torch.device,
+        weighters: Optional[Dict[str, Any]],
+        input_normalizer: Optional[InputTransform],
+        channel_data_cache: Optional[Dict[str, Any]]
+    ):
+        """初始化基本組件"""
         self.model = model
         self.physics = physics
         self.losses = losses
@@ -92,23 +158,24 @@ class Trainer:
         self.weighters = weighters or {}
         self.input_normalizer = input_normalizer
         self.channel_data_cache = channel_data_cache or {}
-        
-        # 訓練配置提取
+
+        # 提取常用配置
         self.train_cfg = config['training']
         self.loss_cfg = config.get('losses', {})
         self.log_cfg = config.get('logging', {})
         self.physics_type = config.get('physics', {}).get('type', '')
         self.is_vs_cfg = self.physics_type == 'vs_pinn_channel_flow'
-        
-        # ⭐ Phase 5: 檢測模型實際輸入維度（支援 2D/3D 混合配置）
+
+        # 檢測模型輸入維度
         self.model_input_dim = self._detect_model_input_dim(model, config)
         logging.info(f"🔍 檢測到模型輸入維度: {self.model_input_dim}D")
-        
-        # ✅ TASK-008: 初始化輸出變量標準化器（傳遞 training_data 以支援自動計算統計量）
+
+    def _init_normalizers(self, config: Dict[str, Any], training_data: Optional[Dict[str, torch.Tensor]]):
+        """初始化標準化器並驗證統計量有效性"""
         self.data_normalizer = OutputTransform.from_config(config, training_data=training_data)
         logging.info(f"📐 OutputTransform 初始化: {self.data_normalizer}")
-        
-        # 🛡️ 驗證標準化統計量有效性（Risk #3 from audit）
+
+        # 驗證標準化統計量
         if not self.data_normalizer.has_valid_stats():
             raise RuntimeError(
                 "❌ OutputTransform 統計量無效！\n"
@@ -122,7 +189,9 @@ class Trainer:
                 "   3. 檢查 sensor data 的數值範圍是否合理\n"
                 "   4. 若某變量確實為常數，考慮使用 normalization.type='none'"
             )
-        
+
+    def _init_training_state(self, config: Dict[str, Any]):
+        """初始化訓練狀態與檢查點配置"""
         # 訓練狀態
         self.epoch = 0
         self.global_step = 0
@@ -133,84 +202,141 @@ class Trainer:
             'val_loss': [],
             'lr': [],
         }
-        
+
         # 驗證相關
         self.validation_data = None
         self.best_val_loss = float('inf')
         self.best_epoch = -1
         self.patience_counter = 0
         self.best_model_state: Optional[Dict[str, torch.Tensor]] = None
-        
+
         # 檢查點配置
         self.checkpoint_dir = Path(config.get('output', {}).get('checkpoint_dir', 'checkpoints'))
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_interval = self.train_cfg.get('checkpoint_interval', 100)
-        
-        # WandB 配置
+
+    def _init_wandb(self, config: Dict[str, Any]):
+        """初始化 WandB（提取並簡化深層嵌套邏輯）"""
         self.use_wandb = self.log_cfg.get('wandb', False)
         self.wandb_run = None
-        if self.use_wandb:
-            # 讀取 WandB 配置
-            exp_name = config.get('experiment', {}).get('name', 'default_experiment')
-            wandb_config_path = Path('.wandb_config')
-            
-            # 載入 API key
-            wandb_api_key = None
-            wandb_project = 'pinns-turbulence-reconstruction'
-            if wandb_config_path.exists():
-                with open(wandb_config_path, 'r') as f:
-                    for line in f:
-                        if line.startswith('WANDB_API_KEY='):
-                            wandb_api_key = line.split('=')[1].strip()
-                        elif line.startswith('WANDB_PROJECT='):
-                            project_value = line.split('=')[1].strip()
-                            if project_value:
-                                wandb_project = project_value
-            
-            # 初始化 WandB
-            if wandb_api_key:
-                os.environ['WANDB_API_KEY'] = wandb_api_key
-            
-            self.wandb_run = wandb.init(
-                project=wandb_project,
-                name=exp_name,
-                config=config,
-                reinit=True
-            )
-            logging.info(f"✅ WandB 已啟用，專案: {wandb_project}, 運行: {exp_name}")
-        
+
+        if not self.use_wandb:
+            return
+
+        # 讀取實驗配置
+        exp_config = config.get('experiment', {})
+        wandb_config = self._load_wandb_config()
+
+        # 初始化 WandB
+        self.wandb_run = wandb.init(
+            project=wandb_config['project'],
+            name=exp_config.get('name', 'default_experiment'),
+            group=exp_config.get('group', None),
+            tags=exp_config.get('tags', []),
+            config=config,
+            reinit=True
+        )
+
+        # 上傳 config metadata
+        self._upload_wandb_metadata(config)
+
+        # 日誌訊息
+        group = exp_config.get('group')
+        tags = exp_config.get('tags', [])
+        group_info = f", 分組: {group}" if group else ""
+        tags_info = f", 標籤: {tags}" if tags else ""
+        logging.info(
+            f"✅ WandB 已啟用，專案: {wandb_config['project']}, "
+            f"運行: {exp_config.get('name')}{group_info}{tags_info}"
+        )
+
+    def _load_wandb_config(self) -> Dict[str, str]:
+        """載入 WandB 配置（API key 與 project）"""
+        wandb_config_path = Path('.wandb_config')
+        wandb_api_key = None
+        wandb_project = 'pinns-sparse-turbulence'
+
+        if wandb_config_path.exists():
+            with open(wandb_config_path, 'r') as f:
+                for line in f:
+                    if line.startswith('WANDB_API_KEY='):
+                        wandb_api_key = line.split('=')[1].strip()
+                    elif line.startswith('WANDB_PROJECT='):
+                        project_value = line.split('=')[1].strip()
+                        if project_value:
+                            wandb_project = project_value
+
+        if wandb_api_key:
+            os.environ['WANDB_API_KEY'] = wandb_api_key
+
+        return {'project': wandb_project}
+
+    def _upload_wandb_metadata(self, config: Dict[str, Any]):
+        """上傳 config metadata 到 WandB"""
+        if 'experiment' not in config or '_config_metadata' not in config['experiment']:
+            return
+
+        metadata = config['experiment']['_config_metadata']
+        for key, value in metadata.items():
+            wandb.config.update({f'_meta_{key}': value}, allow_val_change=True)
+
+    def _init_loss_components(self):
+        """初始化損失組件（Prior Loss Manager 與 LossManager）"""
         # 訓練資料（待外部設置）
         self.training_data: Dict[str, torch.Tensor] = {}
-        
-        # 🆕 初始化 Prior Loss Manager（若配置啟用）
+
+        # 初始化 Prior Loss Manager
         self.prior_loss_manager: Optional[PriorLossManager] = None
         self._setup_prior_loss_manager()
-        
-        # 🆕 Phase 1-3: 初始化 LossManager（統一損失計算）
+
+        # 初始化 LossManager（統一損失計算）
         self.loss_manager = LossManager(
-            config=config,
-            physics=physics,
-            model=model,
-            device=device,
+            config=self.config,
+            physics=self.physics,
+            model=self.model,
+            device=self.device,
             data_normalizer=self.data_normalizer,
             prior_loss_manager=self.prior_loss_manager,
             weighters=self.weighters,
-            losses=losses
+            losses=self.losses
         )
-        logging.info(f"✅ LossManager 初始化完成")
-        
-        # 初始化訓練組件
+        logging.info("✅ LossManager 初始化完成")
+
+    def _init_training_components(self):
+        """初始化訓練組件（優化器、調度器、早停等）"""
         self._setup_optimizer()
-        self._setup_amp()  # ⭐ P0.2: AMP 混合精度
+        self._setup_amp()
         self._setup_schedulers()
         self._setup_early_stopping()
         self._setup_adaptive_sampling()
         self._setup_fourier_annealing()
-        # RANS 權重預熱已移除（2025-10-14）
         self._configure_input_transform()
-        
-        logging.info(f"✅ Trainer 初始化完成（設備: {device}）")
-    
+
+    def _init_metrics_tracking(self, config: Dict[str, Any]):
+        """初始化指標追蹤工具"""
+        from pinnx.utils import Timer, MemoryTracker, PhysicsValidator
+
+        self.timer = Timer(use_wandb=self.use_wandb)
+        self.memory_tracker = MemoryTracker(model=self.model, use_wandb=self.use_wandb)
+
+        # PhysicsValidator 配置
+        physics_validator_config = {
+            'physics': config.get('physics', {}),
+            'dimension': 3 if self.is_vs_cfg else 2,
+        }
+        if 'boundary_type' in config.get('physics', {}):
+            physics_validator_config['boundary_type'] = config['physics']['boundary_type']
+
+        self.physics_validator = PhysicsValidator(
+            config=physics_validator_config,
+            use_wandb=self.use_wandb
+        )
+
+        logging.info("✅ 指標追蹤工具初始化完成（Timer, MemoryTracker, PhysicsValidator）")
+
+    # ========================================================================
+    # 模型與配置檢測
+    # ========================================================================
+
     def _detect_model_input_dim(self, model: nn.Module, config: Dict[str, Any]) -> int:
         """
         檢測模型的實際輸入維度
@@ -361,73 +487,26 @@ class Trainer:
         return coords_physical, coords_norm, model_coords
     
     def _setup_optimizer(self):
-        """配置優化器"""
-        # 處理 optimizer 配置為字串或字典的情況
-        optimizer_raw = self.train_cfg.get('optimizer', {})
-        if isinstance(optimizer_raw, str):
-            # 簡單配置：optimizer: 'adam'
-            optimizer_name = optimizer_raw.lower()
-            optimizer_cfg = {}
-        elif isinstance(optimizer_raw, dict):
-            # 複雜配置：optimizer: {type: 'adam', lr: 0.001}
-            optimizer_name = optimizer_raw.get('type', 'adam').lower()
-            optimizer_cfg = optimizer_raw
+        """配置優化器（使用 Registry Pattern）"""
+        from pinnx.train.factories import create_optimizer
+
+        # 處理配置格式（字串或字典）
+        optimizer_config = self.train_cfg.get('optimizer', 'adam')
+
+        # 注入 lr 和 weight_decay（如果是字典格式）
+        if isinstance(optimizer_config, dict):
+            optimizer_config.setdefault('lr', self.train_cfg.get('lr', 1e-3))
+            optimizer_config.setdefault('weight_decay', self.train_cfg.get('weight_decay', 0.0))
         else:
-            # 預設為 Adam
-            optimizer_name = 'adam'
-            optimizer_cfg = {}
-        
-        # 從配置中提取參數（優先使用 optimizer_cfg，否則從 train_cfg）
-        lr = optimizer_cfg.get('lr', self.train_cfg.get('lr', 1e-3))
-        weight_decay = optimizer_cfg.get('weight_decay', self.train_cfg.get('weight_decay', 0.0))
-        
-        if optimizer_name == 'soap':
-            try:
-                from pinnx.optim.soap import SOAP  # Import from our implementation
-            except ImportError as exc:
-                raise ImportError("SOAP 優化器未找到，請檢查 pinnx/optim/soap.py") from exc
-            
-            # 提取 SOAP 專用參數
-            precondition_frequency = optimizer_cfg.get('precondition_frequency', 2)
-            shampoo_beta = optimizer_cfg.get('shampoo_beta', -1)
-            betas = optimizer_cfg.get('betas', (0.9, 0.999))
-            
-            self.optimizer = SOAP(
-                self.model.parameters(),
-                lr=lr,
-                betas=betas,
-                weight_decay=weight_decay,
-                precondition_frequency=precondition_frequency,
-                shampoo_beta=shampoo_beta
-            )
-            logging.info(f"✅ 使用 SOAP 優化器 (lr={lr}, betas={betas}, precond_freq={precondition_frequency})")
-        
-        elif optimizer_name == 'lbfgs':
-            self.optimizer = torch.optim.LBFGS(
-                self.model.parameters(),
-                lr=lr,
-                max_iter=optimizer_cfg.get('max_iter', 20),
-                history_size=optimizer_cfg.get('history_size', 100),
-                line_search_fn=optimizer_cfg.get('line_search_fn', 'strong_wolfe')
-            )
-            logging.info(f"✅ 使用 L-BFGS 優化器（lr={lr}）")
-        
-        elif optimizer_name == 'adamw':
-            self.optimizer = torch.optim.AdamW(
-                self.model.parameters(),
-                lr=lr,
-                weight_decay=weight_decay,
-                betas=tuple(optimizer_cfg.get('betas', [0.9, 0.999]))
-            )
-            logging.info(f"✅ 使用 AdamW 優化器（lr={lr}, wd={weight_decay}）")
-        
-        else:  # 預設 Adam
-            self.optimizer = torch.optim.Adam(
-                self.model.parameters(),
-                lr=lr,
-                weight_decay=weight_decay
-            )
-            logging.info(f"✅ 使用 Adam 優化器（lr={lr}, wd={weight_decay}）")
+            # 字串格式轉換為字典
+            optimizer_config = {
+                'type': optimizer_config,
+                'lr': self.train_cfg.get('lr', 1e-3),
+                'weight_decay': self.train_cfg.get('weight_decay', 0.0)
+            }
+
+        # 使用工廠創建（無條件分支！）
+        self.optimizer = create_optimizer(self.model, optimizer_config)
     
     def _setup_amp(self):
         """
@@ -493,96 +572,18 @@ class Trainer:
                 logging.info("ℹ️ AMP 配置已禁用（不符合啟用條件）")
     
     def _setup_schedulers(self):
-        """配置學習率與權重調度器"""
+        """配置學習率與權重調度器（使用 Registry Pattern）"""
+        from pinnx.train.factories import create_scheduler
+
         # 學習率調度器
         scheduler_cfg = self.train_cfg.get('lr_scheduler', {})
-        scheduler_type = scheduler_cfg.get('type', None)
-        
-        if scheduler_type == 'warmup_cosine':
-            # Warmup + CosineAnnealing 組合調度器
-            from pinnx.train.schedulers import WarmupCosineScheduler
-            warmup_epochs = scheduler_cfg.get('warmup_epochs', 10)
-            max_epochs = self.train_cfg.get('epochs', 1000)
-            base_lr = self.optimizer.param_groups[0]['lr']
-            min_lr = scheduler_cfg.get('min_lr', 1e-6)
-            
-            self.lr_scheduler = WarmupCosineScheduler(
-                self.optimizer,
-                warmup_epochs=warmup_epochs,
-                max_epochs=max_epochs,
-                base_lr=base_lr,
-                min_lr=min_lr
-            )
-            logging.info(f"✅ 使用 WarmupCosine 調度器 (warmup={warmup_epochs}, max={max_epochs})")
-        
-        elif scheduler_type == 'cosine_warm_restarts':
-            # CosineAnnealing with Warm Restarts
-            T_0 = scheduler_cfg.get('T_0', 100)
-            T_mult = scheduler_cfg.get('T_mult', 1)
-            eta_min = scheduler_cfg.get('eta_min', 1e-6)
-            
-            self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-                self.optimizer,
-                T_0=T_0,
-                T_mult=T_mult,
-                eta_min=eta_min
-            )
-            logging.info(f"✅ 使用 CosineAnnealingWarmRestarts (T_0={T_0}, T_mult={T_mult})")
-        
-        elif scheduler_type == 'cosine':
-            # 標準 CosineAnnealing 調度器
-            self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer,
-                T_max=self.train_cfg.get('epochs', 1000),
-                eta_min=scheduler_cfg.get('min_lr', 1e-6)
-            )
-            logging.info("✅ 使用 Cosine 學習率調度器")
-        
-        elif scheduler_type == 'exponential':
-            # 指數/步進衰減調度器
-            gamma = scheduler_cfg.get('gamma', 0.999)
-            step_size = scheduler_cfg.get('step_size', None)
 
-            if step_size is not None:
-                # 有 step_size：每 step_size epochs 衰減一次（使用 StepLR）
-                self.lr_scheduler = torch.optim.lr_scheduler.StepLR(
-                    self.optimizer,
-                    step_size=step_size,
-                    gamma=gamma
-                )
-                logging.info(f"✅ 使用 Step 調度器 (gamma={gamma}, step_size={step_size} epochs)")
-            else:
-                # 無 step_size：每個 epoch 都衰減（原始 ExponentialLR）
-                self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                    self.optimizer,
-                    gamma=gamma
-                )
-                logging.info(f"✅ 使用 Exponential 調度器 (gamma={gamma}, 每 epoch 衰減)")
-        
-        elif scheduler_type == 'step':
-            # StepLR 調度器
-            self.lr_scheduler = torch.optim.lr_scheduler.StepLR(
-                self.optimizer,
-                step_size=scheduler_cfg.get('step_size', 100),
-                gamma=scheduler_cfg.get('gamma', 0.5)
-            )
-            logging.info("✅ 使用 Step 學習率調度器")
-        
-        elif scheduler_type in ['none', None]:
-            # 無調度器，使用固定學習率
-            self.lr_scheduler = None
-            logging.info("ℹ️ 未配置學習率調度器，使用固定學習率")
-        
-        else:
-            # 不支援的類型
-            logging.warning(
-                f"⚠️ 未知的調度器類型 '{scheduler_type}'，使用固定學習率。"\
-                f"支援的類型：'warmup_cosine', 'cosine_warm_restarts', 'cosine', "\
-                f"'exponential', 'step', 'none'"
-            )
-            self.lr_scheduler = None
-        
-        # 權重調度器（暫時保留為 None，由外部管理）
+        if isinstance(scheduler_cfg, dict):
+            scheduler_cfg.setdefault('max_epochs', self.train_cfg.get('epochs', 1000))
+
+        self.lr_scheduler = create_scheduler(self.optimizer, scheduler_cfg)
+
+        # 權重調度器（暫時未實現）
         self.weight_scheduler = None
     
     def _setup_early_stopping(self):
@@ -729,240 +730,435 @@ class Trainer:
         epoch: int
     ) -> Dict[str, Any]:
         """
-        執行單步訓練（使用 LossManager 重構版）
-    
-        核心改進：
-        - 所有損失計算委派給 LossManager
-        - step() 只負責：資料預處理、模型forward、Loss組合、反向傳播
-        - 大幅減少代碼重複與嵌套
-    
+        執行單步訓練（激進重構版：Good Taste 原則）
+
+        將 241 行重構為 ~35 行，消除所有重複代碼。
+
         Args:
             data_batch: 訓練資料批次
             epoch: 當前 epoch
-    
+
         Returns:
             包含損失和指標的字典
         """
         self.optimizer.zero_grad()
-    
-        # ==================== 0. 前置準備 ====================
-        # 檢查是否為 VS-PINN（標準格式：預拼接空間座標）
+
+        # 1. 前向傳播（統一處理 3 類點：PDE, BC, Sensors）
+        predictions = self._forward_pass_all_points(data_batch)
+
+        # 2. 計算所有損失（委派給 LossManager）
+        losses = self._compute_all_losses(predictions, data_batch, epoch)
+
+        # 3. 動態權重調整 + 損失組合
+        total_loss, result = self._combine_and_weight_losses(losses, predictions['is_vs_pinn'], epoch)
+
+        # 4. 反向傳播與優化
+        self._backward_and_optimize(total_loss, data_batch, epoch)
+
+        # 5. 附加訓練元數據
+        self._add_training_metadata(result, losses, epoch)
+
+        return result
+
+    # ========================================================================
+    # step() 輔助方法（Phase 2 重構：消除重複代碼）
+    # ========================================================================
+
+    def _forward_pass_all_points(self, data_batch: Dict[str, torch.Tensor]) -> Dict[str, Any]:
+        """
+        統一處理所有點類型的前向傳播（PDE, BC, Sensors）
+
+        消除重複：3 處相同的座標處理 + 前向傳播邏輯合併為單一方法
+
+        Args:
+            data_batch: 訓練資料批次
+
+        Returns:
+            predictions: {
+                'pde': {coords_physical, predictions, gradients},
+                'bc': {coords_physical, predictions},
+                'sensors': {coords_physical, predictions},
+                'is_vs_pinn': bool
+            }
+        """
+        # 檢測 VS-PINN 配置
         if 'coords_pde_spatial' not in data_batch:
             raise KeyError("data_batch 缺少必要鍵: coords_pde_spatial")
         has_3d_coords = data_batch['coords_pde_spatial'].shape[1] >= 3
         is_vs_pinn = has_3d_coords and hasattr(self.physics, 'compute_momentum_residuals')
-    
-        # ==================== 1. PDE 點前向傳播 ====================
-        # ==================== 🚀 Wave 1-2 優化：使用預拼接空間座標 ====================
-        # 使用預拼接空間座標（已在數據載入時完成拼接）
-        coords_spatial = data_batch['coords_pde_spatial'].to(self.device).requires_grad_(True)
-        t_pde = data_batch.get('t_pde')
-        if t_pde is not None:
-            t_pde = t_pde.to(self.device).requires_grad_(True)
-        
-        # 如果需要時間維度，加上 t_pde
-        if t_pde is not None and self.model_input_dim > coords_spatial.shape[1]:
-            coords_full = torch.cat([coords_spatial, t_pde], dim=1)
+
+        # 處理 3 類點（消除重複！）
+        pde_batch = self._process_point_batch(
+            'coords_pde_spatial', 't_pde', data_batch,
+            require_grad=True, context='pde'
+        )
+        bc_batch = self._process_point_batch(
+            'coords_bc_spatial', 't_bc', data_batch,
+            require_grad=False, context='bc'
+        )
+        sensors_batch = self._process_point_batch(
+            'coords_sensors_spatial', 't_sensors', data_batch,
+            require_grad=False, context='sensors'
+        )
+
+        # VS-PINN 梯度緩存（Wave 2 優化）
+        gradients = self._compute_vs_pinn_gradients(pde_batch['predictions'], pde_batch['coords_physical'], is_vs_pinn)
+
+        return {
+            'pde': {
+                'coords_physical': pde_batch['coords_physical'],
+                'model_coords': pde_batch['model_coords'],
+                'predictions': pde_batch['predictions'],
+                'gradients': gradients
+            },
+            'bc': {
+                'coords_physical': bc_batch['coords_physical'],
+                'predictions': bc_batch['predictions']
+            },
+            'sensors': {
+                'coords_physical': sensors_batch['coords_physical'],
+                'predictions': sensors_batch['predictions']
+            },
+            'is_vs_pinn': is_vs_pinn
+        }
+
+    def _process_point_batch(
+        self,
+        spatial_key: str,
+        time_key: str,
+        data_batch: Dict[str, torch.Tensor],
+        require_grad: bool,
+        context: str
+    ) -> Dict[str, torch.Tensor]:
+        """
+        處理單一類型的點批次（座標 + 前向 + 反標準化）
+
+        統一的處理流程：
+        1. 提取空間座標 + 時間座標
+        2. 拼接時間維度（如果需要）
+        3. 標準化處理
+        4. 模型前向傳播
+        5. 反標準化到物理空間
+
+        Args:
+            spatial_key: 空間座標鍵名（如 'coords_pde_spatial'）
+            time_key: 時間座標鍵名（如 't_pde'）
+            data_batch: 訓練資料批次
+            require_grad: 是否需要梯度
+            context: 上下文名稱（'pde', 'bc', 'sensors'）
+
+        Returns:
+            {
+                'coords_physical': 物理空間座標,
+                'model_coords': 模型輸入座標,
+                'predictions': 物理空間預測值
+            }
+        """
+        # 檢查必要鍵
+        if spatial_key not in data_batch:
+            raise KeyError(f"data_batch 缺少必要鍵: {spatial_key}")
+
+        # 提取空間座標
+        coords_spatial = data_batch[spatial_key].to(self.device)
+        if require_grad:
+            coords_spatial = coords_spatial.requires_grad_(True)
+
+        # 提取時間座標（如果存在）
+        t_coords = data_batch.get(time_key)
+        if t_coords is not None:
+            t_coords = t_coords.to(self.device)
+            if require_grad:
+                t_coords = t_coords.requires_grad_(True)
+
+        # 拼接時間維度
+        if t_coords is not None and self.model_input_dim > coords_spatial.shape[1]:
+            coords_full = torch.cat([coords_spatial, t_coords], dim=1)
         else:
             coords_full = coords_spatial
-    
-        # 準備模型輸入（使用實例方法）
-        coords_full_physical, coords_full_norm, model_coords_pde = self._prepare_model_coords(
-            coords_full, require_grad=True, is_vs_pinn=is_vs_pinn
+
+        # 座標預處理與標準化
+        is_vs_pinn = data_batch['coords_pde_spatial'].shape[1] >= 3 and hasattr(self.physics, 'compute_momentum_residuals')
+        coords_physical, coords_norm, model_coords = self._prepare_model_coords(
+            coords_full, require_grad=require_grad, is_vs_pinn=is_vs_pinn
         )
-        coords_pde_physical = coords_full_physical
-    
-        # 模型預測 + 反標準化
-        u_pred_norm = self.model(model_coords_pde)
-        var_order = self._infer_variable_order(u_pred_norm.shape[1], context='pde')
-        u_pred_pde_physical_raw = self.data_normalizer.denormalize_batch(u_pred_norm, var_order=var_order)
-        u_pred_pde_physical: torch.Tensor = u_pred_pde_physical_raw if isinstance(u_pred_pde_physical_raw, torch.Tensor) else torch.tensor(u_pred_pde_physical_raw, device=self.device)
-    
-        # ==================== 2. 邊界條件點前向傳播 ====================
-        if 'coords_bc_spatial' not in data_batch:
-            raise KeyError("data_batch 缺少必要鍵: coords_bc_spatial")
-        coords_bc = data_batch['coords_bc_spatial'].to(self.device)
-        t_bc = data_batch.get('t_bc')
-        if t_bc is not None:
-            t_bc = t_bc.to(self.device)
-        
-        final_bc_input = torch.cat([coords_bc, t_bc], dim=1) if t_bc is not None and self.model_input_dim > coords_bc.shape[1] else coords_bc
-        coords_bc_physical, coords_bc_norm, model_coords_bc = self._prepare_model_coords(
-            final_bc_input, require_grad=False, is_vs_pinn=is_vs_pinn
+
+        # 前向傳播
+        predictions_norm = self.model(model_coords)
+
+        # 反標準化
+        var_order = self._infer_variable_order(predictions_norm.shape[1], context=context, data_batch=data_batch if context == 'sensors' else None)
+        predictions_phys_raw = self.data_normalizer.denormalize_batch(predictions_norm, var_order=var_order)
+
+        # 確保張量格式
+        predictions_phys = (
+            predictions_phys_raw if isinstance(predictions_phys_raw, torch.Tensor)
+            else torch.tensor(predictions_phys_raw, device=self.device)
         )
-    
-        u_bc_pred_norm = self.model(model_coords_bc)
-        var_order_bc = self._infer_variable_order(u_bc_pred_norm.shape[1], context='bc')
-        u_bc_pred_phys_raw = self.data_normalizer.denormalize_batch(u_bc_pred_norm, var_order=var_order_bc)
-        u_bc_pred_phys: torch.Tensor = u_bc_pred_phys_raw if isinstance(u_bc_pred_phys_raw, torch.Tensor) else torch.tensor(u_bc_pred_phys_raw, device=self.device)
-    
-        # ==================== 3. 感測器點前向傳播 ====================
-        if 'coords_sensors_spatial' not in data_batch:
-            raise KeyError("data_batch 缺少必要鍵: coords_sensors_spatial")
-        coords_sensors = data_batch['coords_sensors_spatial'].to(self.device)
-        t_sensors = data_batch.get('t_sensors')
-        if t_sensors is not None:
-            t_sensors = t_sensors.to(self.device)
-        
-        final_sensor_input = torch.cat([coords_sensors, t_sensors], dim=1) if t_sensors is not None and self.model_input_dim > coords_sensors.shape[1] else coords_sensors
-        coords_sensors_physical, coords_sensors_norm, model_coords_sensors = self._prepare_model_coords(
-            final_sensor_input, require_grad=False, is_vs_pinn=is_vs_pinn
-        )
-    
-        u_sensors_pred_norm = self.model(model_coords_sensors)
-        var_order_sensors = self._infer_variable_order(u_sensors_pred_norm.shape[1], context='sensors', data_batch=data_batch)
-        u_sensors_pred_phys_raw = self.data_normalizer.denormalize_batch(u_sensors_pred_norm, var_order=var_order_sensors)
-        u_sensors_pred_phys: torch.Tensor = u_sensors_pred_phys_raw if isinstance(u_sensors_pred_phys_raw, torch.Tensor) else torch.tensor(u_sensors_pred_phys_raw, device=self.device)
-    
-        # ==================== 4. 使用 LossManager 計算所有損失 ====================
-        # ==================== 🚀 Wave 2 優化：預計算所有梯度並緩存（針對 VS-PINN）====================
-        gradients = None
-        if is_vs_pinn and hasattr(self.physics, 'compute_momentum_residuals'):
-            # 🔍 Debug: 確認 gradient cache 啟用
-            if epoch <= 1:
-                print(f"[Wave 2 Debug] Epoch {epoch}: Gradient Cache ENABLED")
-            
-            # 建立梯度緩存
-            grad_cache = GradientCache(device=self.device)
-            
-            # 構建預測字典（物理空間）
-            if u_pred_pde_physical.shape[1] == 3:
-                # [u, v, p] → 添加 w=0
-                predictions_dict = {
-                    'u': u_pred_pde_physical[:, 0:1],
-                    'v': u_pred_pde_physical[:, 1:2],
-                    'w': torch.zeros_like(u_pred_pde_physical[:, 2:3]),
-                    'p': u_pred_pde_physical[:, 2:3]
-                }
-            elif u_pred_pde_physical.shape[1] == 4:
-                # [u, v, w, p]
-                predictions_dict = {
-                    'u': u_pred_pde_physical[:, 0:1],
-                    'v': u_pred_pde_physical[:, 1:2],
-                    'w': u_pred_pde_physical[:, 2:3],
-                    'p': u_pred_pde_physical[:, 3:4]
-                }
-            else:
-                raise ValueError(f"VS-PINN 預測維度錯誤: {u_pred_pde_physical.shape[1]}，期望 3 或 4")
-            
-            # 計算所有梯度（一次計算，多次使用）
-            gradients = grad_cache.compute_all_gradients(predictions_dict, coords_pde_physical)
-            
-            # 注意：不在這裡清除 cache，因為下面的 loss 計算需要使用 gradients
-            # cache 會在 backward() 後自動被 PyTorch 清理
-        
-        # 4.1 PDE 損失
+
+        return {
+            'coords_physical': coords_physical,
+            'model_coords': model_coords,
+            'predictions': predictions_phys
+        }
+
+    def _compute_vs_pinn_gradients(
+        self,
+        predictions: torch.Tensor,
+        coords_physical: torch.Tensor,
+        is_vs_pinn: bool
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        """
+        計算 VS-PINN 梯度緩存（Wave 2 優化）
+
+        Args:
+            predictions: 預測值 [N, n_vars]
+            coords_physical: 物理空間座標
+            is_vs_pinn: 是否為 VS-PINN
+
+        Returns:
+            梯度字典（VS-PINN）或 None
+        """
+        if not is_vs_pinn:
+            return None
+
+        from pinnx.physics.gradient_cache import GradientCache
+
+        # 建立梯度緩存
+        grad_cache = GradientCache(device=self.device)
+
+        # 構建預測字典
+        n_vars = predictions.shape[1]
+        if n_vars == 3:
+            # [u, v, p] → 添加 w=0
+            predictions_dict = {
+                'u': predictions[:, 0:1],
+                'v': predictions[:, 1:2],
+                'w': torch.zeros_like(predictions[:, 2:3]),
+                'p': predictions[:, 2:3]
+            }
+        elif n_vars == 4:
+            # [u, v, w, p]
+            predictions_dict = {
+                'u': predictions[:, 0:1],
+                'v': predictions[:, 1:2],
+                'w': predictions[:, 2:3],
+                'p': predictions[:, 3:4]
+            }
+        else:
+            raise ValueError(f"VS-PINN 預測維度錯誤: {n_vars}，期望 3 或 4")
+
+        # 計算所有梯度（一次計算，多次使用）
+        return grad_cache.compute_all_gradients(predictions_dict, coords_physical)
+
+    def _compute_all_losses(
+        self,
+        predictions: Dict[str, Any],
+        data_batch: Dict[str, torch.Tensor],
+        epoch: int
+    ) -> Dict[str, torch.Tensor]:
+        """
+        計算所有損失項（委派給 LossManager）
+
+        Args:
+            predictions: 前向傳播結果
+            data_batch: 訓練資料批次
+            epoch: 當前 epoch
+
+        Returns:
+            所有損失項的字典
+        """
+        # PDE 損失
         pde_losses = self.loss_manager.compute_pde_loss(
-            coords_pde_physical=coords_pde_physical,
-            model_coords_pde=model_coords_pde,
-            u_pred_pde_physical=u_pred_pde_physical,
+            coords_pde_physical=predictions['pde']['coords_physical'],
+            model_coords_pde=predictions['pde']['model_coords'],
+            u_pred_pde_physical=predictions['pde']['predictions'],
             data_batch=data_batch,
             epoch=epoch,
-            is_vs_pinn=is_vs_pinn,
-            gradients=gradients  # 🚀 Wave 2: 傳遞預計算的梯度
+            is_vs_pinn=predictions['is_vs_pinn'],
+            gradients=predictions['pde']['gradients']
         )
-    
-        # 4.2 邊界條件損失
+
+        # 邊界條件損失
         bc_losses = self.loss_manager.compute_bc_loss(
-            u_bc_pred_phys=u_bc_pred_phys,
+            u_bc_pred_phys=predictions['bc']['predictions'],
             data_batch=data_batch,
             epoch=epoch
         )
-    
-        # 4.3 資料監督損失
+
+        # 資料監督損失
         data_losses = self.loss_manager.compute_data_loss(
-            u_sensors_pred_phys=u_sensors_pred_phys,
+            u_sensors_pred_phys=predictions['sensors']['predictions'],
             data_batch=data_batch
         )
-    
-        # 4.4 低保真先驗損失
+
+        # 低保真先驗損失
         prior_losses = self.loss_manager.compute_lowfi_prior_loss(
-            u_pred_pde_physical=u_pred_pde_physical,
-            coords_pde_physical=coords_pde_physical,
+            u_pred_pde_physical=predictions['pde']['predictions'],
+            coords_pde_physical=predictions['pde']['coords_physical'],
             data_batch=data_batch,
             epoch=epoch
         )
-    
-        # 4.5 均值約束損失
+
+        # 均值約束損失
         mean_constraint_loss = self.loss_manager.compute_mean_constraint_loss(
-            u_pred_pde_physical=u_pred_pde_physical,
+            u_pred_pde_physical=predictions['pde']['predictions'],
             epoch=epoch
         )
-    
-        # ==================== 5. 動態權重調整與損失組合 ====================
-        # 5.1 課程學習權重
-        curriculum_config, loss_cfg = self.loss_manager.apply_curriculum_weights(epoch)
-    
-        # 5.2 構建損失項字典（供 GradNorm 使用）
-        loss_terms = {
-            'data': data_losses['data_loss'],
-            'momentum_x': pde_losses['momentum_x_loss'],
-            'momentum_y': pde_losses['momentum_y_loss'],
-            'continuity': pde_losses['continuity_loss'],
-        }
-    
-        if hasattr(self.physics, 'compute_periodic_loss'):
-            loss_terms['periodic_x'] = bc_losses['periodic_x_loss']
-            loss_terms['periodic_y'] = bc_losses['periodic_y_loss']
-        else:
-            loss_terms['wall_constraint'] = bc_losses['wall_loss']
-    
-        if is_vs_pinn:
-            loss_terms['momentum_z'] = pde_losses['momentum_z_loss']
-    
-        # 5.3 GradNorm 動態權重
-        gradnorm_weights, gradnorm_ratio = self.loss_manager.apply_gradnorm_weights(loss_terms)
-    
-        # 5.4 組合所有損失
+
+        # 合併所有損失
         all_losses = {**pde_losses, **bc_losses, **data_losses, **prior_losses}
         all_losses['mean_constraint_loss'] = mean_constraint_loss
-    
+
+        return all_losses
+
+    def _combine_and_weight_losses(
+        self,
+        losses: Dict[str, torch.Tensor],
+        is_vs_pinn: bool,
+        epoch: int
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        """
+        應用動態權重並組合損失
+
+        Args:
+            losses: 所有損失項
+            is_vs_pinn: 是否為 VS-PINN
+            epoch: 當前 epoch
+
+        Returns:
+            (total_loss, result_dict)
+        """
+        # 課程學習權重
+        curriculum_config, loss_cfg = self.loss_manager.apply_curriculum_weights(epoch)
+
+        # 構建損失項字典（供 GradNorm 使用）
+        loss_terms = {
+            'data': losses['data_loss'],
+            'momentum_x': losses['momentum_x_loss'],
+            'momentum_y': losses['momentum_y_loss'],
+            'continuity': losses['continuity_loss'],
+        }
+
+        # 邊界條件損失項
+        if hasattr(self.physics, 'compute_periodic_loss'):
+            loss_terms['periodic_x'] = losses['periodic_x_loss']
+            loss_terms['periodic_y'] = losses['periodic_y_loss']
+        else:
+            loss_terms['wall_constraint'] = losses['wall_loss']
+
+        # VS-PINN 額外的 z 方向動量
+        if is_vs_pinn:
+            loss_terms['momentum_z'] = losses['momentum_z_loss']
+
+        # GradNorm 動態權重
+        gradnorm_weights, gradnorm_ratio = self.loss_manager.apply_gradnorm_weights(loss_terms)
+
+        # 組合損失
         total_loss, result = self.loss_manager.combine_losses(
-            loss_dict=all_losses,
+            loss_dict=losses,
             loss_cfg=loss_cfg,
             gradnorm_ratio=gradnorm_ratio,
             is_vs_pinn=is_vs_pinn,
             epoch=epoch
         )
-    
-        # ==================== 6. 反向傳播與優化 ====================
-        # AMP 混合精度
-        scaled_loss = self.scaler.scale(total_loss)
-        scaled_loss.backward()
-    
-        # 梯度裁剪
-        if self.train_cfg.get('gradient_clip', 0.0) > 0:
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(),
-                self.train_cfg['gradient_clip']
-            )
-    
-        # 優化器步進
+
+        # 保存權重資訊
+        result['_curriculum_config'] = curriculum_config
+        result['_gradnorm_weights'] = gradnorm_weights
+
+        return total_loss, result
+
+    def _backward_and_optimize(
+        self,
+        total_loss: torch.Tensor,
+        data_batch: Dict[str, torch.Tensor],
+        epoch: int
+    ):
+        """
+        反向傳播、梯度裁剪、優化器步進
+
+        Args:
+            total_loss: 總損失
+            data_batch: 當前批次數據（L-BFGS closure 需要）
+            epoch: 當前 epoch（L-BFGS closure 需要）
+        """
+        # L-BFGS 特殊處理：需要 closure 重新計算損失
         if isinstance(self.optimizer, torch.optim.LBFGS):
             def closure():
-                return total_loss
+                self.optimizer.zero_grad()
+
+                # 重新前向傳播
+                predictions = self._forward_pass_all_points(data_batch)
+
+                # 重新計算損失
+                losses = self._compute_all_losses(predictions, data_batch, epoch)
+
+                # 重新組合損失
+                total_loss_new, _ = self._combine_and_weight_losses(
+                    losses, predictions['is_vs_pinn'], epoch
+                )
+
+                # 反向傳播
+                total_loss_new.backward()
+
+                return total_loss_new
+
+            # L-BFGS 優化步進
             self.optimizer.step(closure)
+
         else:
+            # 一階優化器（Adam, AdamW, SOAP, etc.）
+            # AMP 混合精度
+            scaled_loss = self.scaler.scale(total_loss)
+            scaled_loss.backward()
+
+            # 梯度裁剪
+            if self.train_cfg.get('gradient_clip', 0.0) > 0:
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.train_cfg['gradient_clip']
+                )
+
+            # 優化器步進
             self.scaler.step(self.optimizer)
             self.scaler.update()
-    
+
         # 學習率調度器更新
         if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'current_step'):
             self.lr_scheduler.step()
-    
-        # ==================== 7. 附加課程學習與 GradNorm 信息 ====================
+
+    def _add_training_metadata(
+        self,
+        result: Dict[str, Any],
+        losses: Dict[str, torch.Tensor],
+        epoch: int
+    ):
+        """
+        附加訓練元數據到結果字典
+
+        Args:
+            result: 結果字典（會被原地修改）
+            losses: 損失字典
+            epoch: 當前 epoch
+        """
+        # 課程學習資訊
+        curriculum_config = result.pop('_curriculum_config', None)
         if curriculum_config is not None:
             is_curriculum_transition = curriculum_config.get('is_transition', False)
             result['_curriculum_transition'] = 1.0 if is_curriculum_transition else 0.0
             result['_curriculum_stage'] = curriculum_config.get('stage_name', 'unknown')
             if 'lr' in curriculum_config:
                 result['_curriculum_lr'] = curriculum_config['lr']
-    
+
+        # GradNorm 權重資訊
+        gradnorm_weights = result.pop('_gradnorm_weights', None)
         if gradnorm_weights is not None:
             result['gradnorm_weights'] = {k: float(v) for k, v in gradnorm_weights.items()}
-    
-        return result
+
+    # ========================================================================
+    # 驗證方法
+    # ========================================================================
 
     def validate(self) -> Optional[Dict[str, float]]:
         """
@@ -1048,18 +1244,71 @@ class Trainer:
             if training_mode:
                 self.model.train()
     
+    def _run_physics_validation(self) -> Optional[Dict[str, Any]]:
+        """
+        執行物理約束驗證
+
+        Returns:
+            物理驗證結果字典，若驗證失敗則返回 None
+        """
+        if self.validation_data is None:
+            return None
+
+        try:
+            # 準備驗證資料
+            coords = self.validation_data.get('coords')
+            if coords is None or coords.numel() == 0:
+                return None
+
+            coords = coords.to(self.device)
+
+            # 提取座標分量
+            if self.is_vs_cfg or coords.shape[-1] == 3:
+                # 3D: x, y, z
+                x = coords[:, 0:1].requires_grad_(True)
+                y = coords[:, 1:2].requires_grad_(True)
+                z = coords[:, 2:3].requires_grad_(True)
+            else:
+                # 2D: x, y
+                x = coords[:, 0:1].requires_grad_(True)
+                y = coords[:, 1:2].requires_grad_(True)
+                z = None
+
+            # 準備模型輸入
+            _, _, coords_for_model = self._prepare_model_coords(
+                coords, require_grad=False, is_vs_pinn=None
+            )
+
+            # 使用 PhysicsValidator 驗證
+            test_data = {'x': x, 'y': y}
+            if z is not None:
+                test_data['z'] = z
+
+            # 執行驗證
+            physics_results = self.physics_validator.validate(
+                model=self.model,
+                test_data=test_data,
+                log_to_wandb=self.use_wandb
+            )
+
+            return physics_results
+
+        except Exception as e:
+            logging.warning(f"⚠️  物理驗證執行失敗: {e}")
+            return None
+
     def _compute_validation_metrics(
-        self, 
-        preds: torch.Tensor, 
+        self,
+        preds: torch.Tensor,
         targets: torch.Tensor
     ) -> Dict[str, float]:
         """
         計算驗證指標
-        
+
         Args:
             preds: 預測值 [N, n_pred]
             targets: 目標值 [N, n_target]
-        
+
         Returns:
             驗證指標字典 {'mse': ..., 'relative_l2': ...}
         """
@@ -1111,7 +1360,7 @@ class Trainer:
         loop_helper = TrainingLoopManager(self.config, self.wandb_run)
         start_time = time.time()
         start_epoch = self.epoch
-        
+
         logging.info("=" * 80)
         logging.info("🚀 開始訓練")
         logging.info(f"   模型: {self.model.__class__.__name__}")
@@ -1120,6 +1369,9 @@ class Trainer:
         logging.info(f"   最大 Epochs: {max_epochs}")
         logging.info(f"   早停: {'啟用' if self.early_stopping_enabled else '禁用'}")
         logging.info("=" * 80)
+
+        # 🆕 啟動 Timer
+        self.timer.start()
         
         # 初始化損失字典（防止 epoch=0 時未定義）
         loss_dict = {'total_loss': 0.0, 'residual_loss': 0.0, 'bc_loss': 0.0, 'data_loss': 0.0}
@@ -1147,8 +1399,24 @@ class Trainer:
                 if val_metrics is not None:
                     loss_dict['val_loss'] = val_metrics['relative_l2']
                     loss_dict['val_mse'] = val_metrics['mse']
+
+                # 🆕 物理驗證（降低頻率：每隔 5 次驗證才做一次物理驗證）
+                physics_validation_freq = validation_freq * 5
+                if epoch % physics_validation_freq == 0 and self.validation_data is not None:
+                    try:
+                        physics_results = self._run_physics_validation()
+                        if physics_results is not None:
+                            # 記錄物理違反分數
+                            loss_dict['physics_violation_score'] = physics_results['physics_violation_score']
+                            logging.info(f"📊 物理驗證（epoch {epoch}）: 違反分數 = {physics_results['physics_violation_score']:.6e}")
+                    except Exception as e:
+                        logging.warning(f"⚠️  物理驗證失敗（epoch {epoch}）: {e}")
             
-            # 4. 記錄歷史與 WandB 日誌
+            # 4. 🆕 記錄 epoch 時間與記憶體
+            self.timer.tick(epoch=epoch, log_to_wandb=self.use_wandb)
+            self.memory_tracker.log_current(epoch=epoch, log_to_wandb=self.use_wandb)
+
+            # 5. 記錄歷史與 WandB 日誌
             loop_helper.update_history(loss_dict, epoch)
             if epoch % log_freq == 0:
                 loop_helper.log_losses_to_wandb(loss_dict, epoch)
@@ -1157,30 +1425,33 @@ class Trainer:
                     loop_helper.log_nonlinearities(self.model, epoch)
                 self.log_epoch(epoch, loss_dict)
             
-            # 5. 記錄梯度與權重統計（降低頻率）
+            # 6. 記錄梯度與權重統計（降低頻率）
             if epoch % (log_freq * 2) == 0:
                 loop_helper.log_gradients_and_weights(self.model, epoch)
-            
-            # 6. 更新全局步數
+
+            # 7. 更新全局步數
             self.global_step += 1
-            
-            # 7. 課程訓練 LR 控制
+
+            # 8. 課程訓練 LR 控制
             self._handle_curriculum_lr(loss_dict)
-            
-            # 8. 學習率調度
+
+            # 9. 學習率調度
             self._update_lr_scheduler(loss_dict)
-            
-            # 9. 檢查點保存
+
+            # 10. 檢查點保存
             if checkpoint_freq > 0 and epoch % checkpoint_freq == 0 and epoch > 0:
                 self.save_checkpoint(epoch, loss_dict)
                 logging.info(f"💾 檢查點已保存（epoch {epoch}）")
-            
-            # 10. 早停檢查
+
+            # 11. 早停檢查
             if self._check_and_handle_early_stopping(loss_dict, epoch):
                 break
-            
-            # 11. 快速收斂檢查
+
+            # 12. 快速收斂檢查（達標時記錄）
             if self._check_convergence(loss_dict, epoch):
+                # 🆕 標記達標時間
+                metric_value = loss_dict.get('val_loss', loss_dict.get('total_loss', 0.0))
+                self.timer.mark_convergence(epoch=epoch, metric_value=metric_value, log_to_wandb=self.use_wandb)
                 break
         
         # === 訓練結束 ===
@@ -1198,10 +1469,13 @@ class Trainer:
         Returns:
             (max_epochs, log_freq, checkpoint_freq, validation_freq)
         """
-        max_epochs = self.train_cfg.get('epochs', self.train_cfg.get('max_epochs', 1000))
+        epochs = self.train_cfg.get('epochs')
+        if epochs is None:
+            raise KeyError("Config missing required key: training.epochs")
+        max_epochs = int(epochs)
         log_freq = self.train_cfg.get('log_interval', self.log_cfg.get('log_freq', 50))
         checkpoint_freq = self.train_cfg.get('checkpoint_freq', 500)
-        validation_freq = self.train_cfg.get('validation_freq', self.train_cfg.get('checkpoint_interval', 100))
+        validation_freq = self.train_cfg.get('validation_freq', 100)
         return max_epochs, log_freq, checkpoint_freq, validation_freq
     
     def _handle_curriculum_lr(self, loss_dict: Dict):
@@ -1325,7 +1599,10 @@ class Trainer:
         """
         total_time = time.time() - start_time
         final_loss = loss_dict['total_loss']
-        
+
+        # 🆕 停止 Timer 並打印摘要
+        self.timer.stop()
+
         logging.info("=" * 80)
         logging.info(f"✅ 訓練完成")
         logging.info(f"   總時間: {total_time:.1f}s")
@@ -1335,6 +1612,10 @@ class Trainer:
             logging.info(f"   最佳 Epoch: {self.best_epoch}")
             logging.info(f"   最佳指標: {self.best_val_loss:.6f}")
         logging.info("=" * 80)
+
+        # 🆕 打印指標追蹤摘要
+        self.timer.print_summary()
+        self.memory_tracker.print_summary()
         
         # 保存最終檢查點
         final_checkpoint = self.save_checkpoint(final_epoch + 1, loss_dict, is_best=False)

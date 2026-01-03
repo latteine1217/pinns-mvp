@@ -54,7 +54,6 @@ data:
     plane: "xy"                       # 切片平面：xy / xz / yz
     z_position: 4.71                  # 切片位置
     steady_state: true                # 是否使用穩態（時間平均）
-    time_average_window: [20.0, 26.0] # 時間平均窗口
 
 # ====================================================================
 # 3.5. 標準化配置（輸出變數 Z-Score 標準化）
@@ -276,10 +275,11 @@ losses:
 # ====================================================================
 training:
   # 優化器
-  optimizer: "soap"                   # 優化器：adam / adamw / lbfgs / soap
+  optimizer:
+    type: "soap"                      # 優化器：adam / adamw / lbfgs / soap
                                       # ⚠️ Apple Silicon (MPS) 用戶請使用 "adam"（SOAP 不支援 float64）
-  lr: 1.0e-3                          # 學習率（Adam 典型：1e-4 ~ 1e-3）
-  weight_decay: 1.0e-5                # 權重衰減（L2 正則）
+    lr: 1.0e-3                        # 學習率（Adam 典型：1e-4 ~ 1e-3）
+    weight_decay: 1.0e-5              # 權重衰減（L2 正則）
   
   # 學習率調度器
   lr_scheduler:
@@ -289,7 +289,6 @@ training:
   
   # 訓練循環
   epochs: 5000                        # 總訓練 epochs
-  max_epochs: 5000                    # 最大 epochs（與 epochs 一致）
   batch_size: 10000                   # 批次大小（PDE 點數）
   validation_freq: 100                # 驗證頻率（每 N epochs）
   checkpoint_freq: 500                # 檢查點保存頻率

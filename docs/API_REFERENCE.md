@@ -5,13 +5,13 @@
 ### 訓練
 ```bash
 # 基本訓練
-python scripts/train.py --cfg <config.yml> [--device cuda]
+python scripts/train/train.py --cfg <config.yml>
 
 # 從檢查點恢復
-python scripts/train.py --cfg <config.yml> --resume <checkpoint.pth>
+python scripts/train/train.py --cfg <config.yml> --resume <checkpoint.pth>
 
 # Ensemble 訓練
-python scripts/train.py --cfg <config.yml> --ensemble
+python scripts/train/train.py --cfg <config.yml> --ensemble
 ```
 
 ### 評估
@@ -266,7 +266,7 @@ python scripts/validate_dns_physics.py --input data/dns.h5
 python scripts/generate_sensors_periodic_qr.py --dns-path data/dns.h5 --K 100
 
 # 5. 訓練
-python scripts/train.py --cfg configs/your_config.yml
+python scripts/train/train.py --cfg configs/your_config.yml
 
 # 6. 評估
 python scripts/evaluate.py --checkpoint checkpoints/best.pth
@@ -277,7 +277,7 @@ python scripts/visualize_results.py --checkpoint checkpoints/best.pth
 
 ### 快速測試
 ```bash
-python scripts/train.py --cfg configs/quick_test_rans_prior.yml
+python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla.yml
 ```
 
 ### 除錯流程
@@ -291,3 +291,9 @@ python scripts/visualize_qr_sensors.py --input data/sensors.npz
 # 3. 物理驗證
 python scripts/validation/physics_validation.py --checkpoint <path>
 ```
+
+---
+
+**文檔維護**: PINNs-MVP 團隊  
+**版本**: 2.0.0  
+**最後更新**: 2026-01-03

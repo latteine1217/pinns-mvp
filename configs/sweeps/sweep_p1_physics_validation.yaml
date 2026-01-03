@@ -1,0 +1,196 @@
+# ====================================================================
+# Sweep P1: Physics Validation (物理約束滿足度驗證)
+# ====================================================================
+# 目的：系統性驗證模型是否滿足物理約束（守恆定律、邊界條件）
+# 對應：補充實驗 - 物理合理性維度
+# Group: physics_validation
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search
+
+metric:
+  name: metrics/physics_violation_score  # 物理違反程度（越小越好）
+  goal: minimize
+
+parameters:
+  # 對比不同模型架構的物理約束滿足度
+  config:
+    values:
+      - configs/experiments/M1_model_comparison/m1_vanilla_K100_2d_re50.yml  # Vanilla
+      - configs/experiments/M1_model_comparison/m1_full_K100_2d_re50.yml     # Full
+      - configs/experiments/C1_prior_comparison/c1_no_prior_K100_2d_re50.yml # No prior
+      - configs/experiments/C1_prior_comparison/c1_with_prior_K100_2d_re50.yml # With prior
+
+  # 實驗組織
+  experiment.group:
+    value: "physics_validation"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "p1_physics"]
+
+  experiment.experiment_id:
+    value: "P1"
+
+# ====================================================================
+# 追蹤指標（必須在評估腳本中實作）
+# ====================================================================
+#
+# 1. 守恆定律（Conservation Laws）
+#
+#    A. 質量守恆（Mass Conservation / Incompressibility）:
+#       - divergence_mean: ‖∇·u‖ 平均值（應 ≈ 0）
+#       - divergence_max: ‖∇·u‖ 最大值
+#       - divergence_99th: ‖∇·u‖ 99th percentile
+#       - divergence_l2: ‖∇·u‖ L2 norm
+#       - divergence_relative: ‖∇·u‖ / ‖u‖（相對散度）
+#
+#    B. 動量守恆（Momentum Conservation）:
+#       - momentum_x_residual: NS 方程 x-momentum 殘差
+#       - momentum_y_residual: NS 方程 y-momentum 殘差
+#       - momentum_z_residual: NS 方程 z-momentum 殘差（3D）
+#       - momentum_residual_mean: 平均動量殘差
+#       - momentum_residual_max: 最大動量殘差
+#
+#    C. 能量守恆（Energy Conservation，如適用）:
+#       - kinetic_energy_error: TKE 誤差（vs DNS）
+#       - energy_dissipation_error: 能量耗散率誤差
+#       - enstrophy_error: 擾度誤差（2D）
+#
+# 2. 邊界條件（Boundary Conditions）
+#
+#    A. 週期邊界（Periodic BC，Kolmogorov）:
+#       - periodicity_x_error: x 方向週期性誤差
+#       - periodicity_y_error: y 方向週期性誤差
+#       - periodicity_max_violation: 最大週期性違反
+#
+#    B. 無滑移邊界（No-slip BC，Channel flow）:
+#       - wall_velocity_violation: 壁面速度違反（應 = 0）
+#       - wall_bc_max_error: 壁面 BC 最大誤差
+#
+#    C. Inlet/Outlet（如適用）:
+#       - inlet_bc_error: 入口 BC 誤差
+#       - outlet_bc_error: 出口 BC 誤差
+#
+# 3. 物理合理性（Physical Plausibility）
+#
+#    A. 壓力場:
+#       - pressure_gradient_range: ∇p 範圍檢查（物理合理性）
+#       - pressure_gradient_l2: ∇p L2 誤差（vs DNS）
+#       - pressure_gauge_invariance: 壓力 gauge 不變性檢查
+#
+#    B. 速度場:
+#       - velocity_bounds_violation: 速度超出物理範圍
+#       - velocity_gradient_max: 最大速度梯度（檢查數值震盪）
+#
+#    C. 湍流統計（3D Channel flow）:
+#       - reynolds_stress_error: Reynolds stress 誤差
+#       - tke_error: TKE 誤差
+#       - wall_shear_stress_error: τ_w 誤差
+#       - friction_coefficient_error: C_f 誤差
+#
+# 4. PDE 殘差（Residuals）
+#
+#    - pde_residual_mean: PDE 殘差平均值
+#    - pde_residual_max: PDE 殘差最大值
+#    - pde_residual_l2: PDE 殘差 L2 norm
+#    - pde_residual_spatial_distribution: 殘差空間分佈（熱圖）
+#
+# 5. 綜合物理違反分數（Composite Physics Violation Score）
+#
+#    physics_violation_score = w1 * divergence_l2
+#                            + w2 * momentum_residual_mean
+#                            + w3 * bc_violation_max
+#                            + w4 * energy_error
+#
+#    建議權重：w1=10, w2=1, w3=5, w4=0.1
+#
+# ====================================================================
+# WandB 記錄範例
+# ====================================================================
+#
+# wandb.log({
+#     # 質量守恆
+#     'physics/mass_conservation/divergence_mean': div_mean,
+#     'physics/mass_conservation/divergence_max': div_max,
+#     'physics/mass_conservation/divergence_99th': div_99,
+#     'physics/mass_conservation/divergence_l2': div_l2,
+#     'physics/mass_conservation/divergence_relative': div_rel,
+#
+#     # 動量守恆
+#     'physics/momentum_conservation/residual_x_mean': mom_x_mean,
+#     'physics/momentum_conservation/residual_y_mean': mom_y_mean,
+#     'physics/momentum_conservation/residual_max': mom_max,
+#
+#     # 能量
+#     'physics/energy/kinetic_energy_error': ke_error,
+#     'physics/energy/enstrophy_error': ens_error,
+#
+#     # 邊界條件
+#     'physics/boundary_conditions/periodicity_x_error': bc_x_error,
+#     'physics/boundary_conditions/periodicity_y_error': bc_y_error,
+#     'physics/boundary_conditions/max_violation': bc_max_viol,
+#
+#     # 物理合理性
+#     'physics/plausibility/pressure_gradient_l2': p_grad_l2,
+#     'physics/plausibility/velocity_bounds_violation': vel_bounds_viol,
+#
+#     # PDE 殘差
+#     'physics/pde_residual/mean': pde_res_mean,
+#     'physics/pde_residual/max': pde_res_max,
+#     'physics/pde_residual/l2': pde_res_l2,
+#
+#     # 綜合分數
+#     'metrics/physics_violation_score': composite_score,
+#
+#     # 湍流統計（3D）
+#     'physics/turbulence/reynolds_stress_error': rs_error,
+#     'physics/turbulence/tke_error': tke_error,
+#     'physics/turbulence/wall_shear_stress_error': tau_w_error,
+# })
+#
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_p1_physics_validation.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 4 個 runs（Vanilla, Full, No-prior, With-prior）
+#    - 可對比不同架構的物理約束滿足度
+#    - 量化「進階特徵」對物理合理性的影響
+#
+# 4. 評估指標：
+#    - 質量守恆：divergence_l2（目標 < 1e-3）
+#    - 動量守恆：momentum_residual（目標 < 1e-2）
+#    - 邊界條件：bc_violation（目標 < 1e-4）
+#    - 綜合分數：physics_violation_score（越小越好）
+#
+# 5. 視覺化建議：
+#    - Radar chart: 各架構的物理指標（質量、動量、能量、BC）
+#    - Heatmap: 散度空間分佈（DNS vs Vanilla vs Full）
+#    - Bar chart: physics_violation_score 對比
+#    - Line chart: divergence vs training epoch（收斂過程）
+#    - Scatter plot: L2_error (x) vs physics_violation_score (y)
+#
+# 6. 論文亮點：
+#    - 證明「低 L2 誤差」不等於「物理合理」（data-PDE trade-off）
+#    - 量化 Full 模型在「物理約束滿足度」上的優勢
+#    - 證明 RANS 先驗有助於改善物理合理性（不只是精度）
+#    - 提供「精度-物理違反」Pareto frontier
+#
+# 7. 注意事項：
+#    - **物理違反指標與 L2 誤差不完全相關**（可能低 L2 但高散度）
+#    - 建議在高解析度網格（512×512）評估物理指標
+#    - DNS 本身也有散度 floor（operator discretization），需報告
+#    - 3D Channel flow 需額外計算近壁統計量（τ_w, U⁺(y⁺)）
+#    - 建議繪製空間分佈圖（不只看整體統計）
+#
+# 8. 與 Thesis 的對應：
+#    - Thesis 已提到「data fitting vs incompressibility」trade-off
+#    - 本 Sweep 系統性量化此 trade-off
+#    - 可回答審查委員：「你的模型滿足 NS 方程嗎？」
+# ====================================================================

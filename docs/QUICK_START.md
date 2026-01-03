@@ -1,5 +1,19 @@
 # 快速開始指南
 
+> **版本**: 2.0.0  
+> **最後更新**: 2026-01-03  
+> **狀態**: 反映最新標準化配置
+
+---
+
+## ⚠️ 重要提醒
+
+1. **配置已標準化**（2025-12-30）：舊版別名已移除，請使用標準鍵名
+2. **訓練損失≠場誤差**（2025-12-19）：必須用後驗指標評估模型
+3. **Causal Training 已優化**（2026-01-03）：推薦啟用，性能提升 15x
+
+---
+
 ## 環境設定
 
 ```bash
@@ -52,12 +66,24 @@ python scripts/generate_kolmogorov_rans.py \
 
 ### 6. 訓練
 ```bash
-# 快速測試（100 epochs）
-python scripts/train.py --cfg configs/quick_test_rans_prior.yml
+# Baseline（no prior）
+python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla.yml
 
-# 完整訓練（1000 epochs）
-python scripts/train.py --cfg configs/kolmogorov_re50_kf4_K100_rans_prior_1k.yml
+# With Leith prior（推薦）
+python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
+
+# 啟用 Causal Training（推薦，2026-01-03）
+# 在配置文件中加入：
+# losses:
+#   causal_weighting: true
+#   causal_eps: 1.5
+#   causal_n_bins: 20
 ```
+
+**訓練監控重點**：
+- ✅ 監控 **field_l2_error**（主要指標）
+- ✅ 監控 velocity_correlation
+- ⚠️ 訓練損失僅供參考，不代表實際場誤差
 
 ### 7. 評估
 ```bash
@@ -88,7 +114,7 @@ drive.mount('/content/drive')
 %cd pinns-mvp
 
 # 4. 執行訓練
-!python scripts/train.py --cfg configs/quick_test_rans_prior.yml --device cuda
+!python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla.yml
 ```
 
 ## 檢查清單
@@ -104,11 +130,26 @@ drive.mount('/content/drive')
 - [ ] 配置啟用 loss normalization
 
 **訓練中**
-- [ ] 監控 loss 趨勢（無劇烈震盪）
-- [ ] PDE ratio > 30%
+- [ ] 監控 field_l2_error（主要指標，不是訓練損失！）
+- [ ] 檢查物理一致性（∇·u, NS 殘差）
 - [ ] 定期保存檢查點
 
 **訓練後**
-- [ ] L2 誤差 < 15%
+- [ ] 場 L2 誤差 < 15%（相對 DNS）
 - [ ] ∇·u < 1e-3, NS 殘差 < 0.1
 - [ ] 能譜符合理論（k^(-5/3), k^(-3)）
+
+---
+
+## 📚 相關文檔
+
+- **配置參考**: [CONFIG_GUIDE.md](CONFIG_GUIDE.md)
+- **API 參考**: [API_REFERENCE.md](API_REFERENCE.md)
+- **故障排除**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- **技術文檔**: [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)
+
+---
+
+**文檔維護**: PINNs-MVP 團隊  
+**版本**: 2.0.0  
+**最後更新**: 2026-01-03

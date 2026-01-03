@@ -1,0 +1,66 @@
+# ====================================================================
+# Sweep A1: Fourier Features Ablation (Fourier 特徵消融)
+# ====================================================================
+# 目的：量化 Fourier Features 對重建精度與能譜的貢獻
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - A1
+# Group: kflow_ablation
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search（只有 2 個選項）
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # 直接指定兩個完整配置檔案（避免組合爆炸）
+  config:
+    values:
+      - configs/experiments/A1_ablation_fourier/a1_without_fourier_K100_2d_re50.yml
+      - configs/experiments/A1_ablation_fourier/a1_with_fourier_K100_2d_re50.yml
+
+  # 實驗組織
+  experiment.group:
+    value: "kflow_ablation"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "full", "a1_fourier_ablation"]
+
+  experiment.experiment_id:
+    value: "A1"
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_a1_fourier_ablation.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 2 個 runs (without Fourier vs with Fourier)
+#    - 量化 Fourier Features 的單獨貢獻
+#    - 特別關注能譜（E(k)）的改善
+#
+# 4. 評估指標：
+#    - L2_uvp_rel: 全場相對 L2 誤差
+#    - energy_spectrum: 能譜重建品質（避免過度平滑）
+#    - high_freq_error: 高頻成分誤差
+#
+# 5. 視覺化建議：
+#    - Bar chart: with/without Fourier 的 L2 誤差對比
+#    - Energy spectrum: E(k) log-log plot（DNS vs w/o Fourier vs w/ Fourier）
+#    - Field reconstruction: 渦度場對比（強調高頻細節）
+#
+# 6. 論文亮點：
+#    - Fourier Features 幫助捕捉高頻湍流結構
+#    - 量化對能譜 E(k) 的改善（特別是中高波數範圍）
+#    - 證明 Fourier 是「表示能力」的關鍵貢獻之一
+#
+# 7. 注意事項：
+#    - 除了 Fourier on/off，其他所有設定保持一致（Full 配置）
+#    - 兩者都使用 SOAP、ResNet、adaptive weights（只切 Fourier）
+#    - 建議跑多 seeds（至少 2-3）確保統計顯著性
+# ====================================================================

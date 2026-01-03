@@ -337,49 +337,74 @@ class CausalWeighter:
     核心機制：
     w_k = exp(-epsilon * sum_{i<k} mean(L_i))
     其中 L_i 是第 i 個時間分塊的平均殘差平方。
+    
+    優化版本（v2.0）：
+    - 預計算因果矩陣（避免每次調用重新生成）
+    - 支援多設備（CPU/CUDA/MPS）
+    - 可選 chunk-level 返回（性能優化）
     """
     
-    def __init__(self, 
-                 epsilon: float = 1.0, 
-                 n_time_bins: int = None,
-                 num_chunks: int = 10,
-                 t_min: float = 0.0,
-                 t_max: float = 1.0,
-                 causality_strength: float = None, # 兼容舊接口
-                 time_window_size: int = None,
-                 time_window: int = None,
-                 decay_rate: float = None,
-                 temporal_decay: float = None):
+    def __init__(
+        self,
+        epsilon: float = 1.0,
+        num_chunks: int = 10,
+        t_min: float = 0.0,
+        t_max: float = 1.0,
+        device: str = 'cpu',
+    ):
         """
         Args:
             epsilon: 因果容差參數，控制權重衰減速度。值越大，對早期時間的強制性越強。
-            n_time_bins: 舊接口，對應 num_chunks（保留相容性）。
             num_chunks: 時間分塊數量（jaxpi 設定）。
             t_min: 時間域下界
             t_max: 時間域上界
+            device: 計算設備 ('cpu', 'cuda', 'mps')
         """
-        self.epsilon = epsilon if causality_strength is None else causality_strength
-        self.num_chunks = int(n_time_bins) if n_time_bins is not None else int(num_chunks)
+        self.epsilon = float(epsilon)
+        self.num_chunks = int(num_chunks)
         self.t_min = t_min
         self.t_max = t_max
+        self.device = torch.device(device) if isinstance(device, str) else device
         
-        # 兼容舊接口屬性
-        self.causality_strength = self.epsilon
-        self.time_window_size = time_window_size or time_window or 10
-        self.decay_rate = decay_rate or temporal_decay or 0.1
-
+        # 預計算因果矩陣（JAXpi 風格優化）
+        self._precompute_causal_matrix()
+        
+    
+    def _precompute_causal_matrix(self):
+        """
+        預計算因果矩陣 M (strict lower triangular)
+        
+        M[i, j] = 1 if j < i else 0
+        
+        這樣 M @ chunk_means 就是每個 chunk 之前所有 chunk 的累積損失
+        """
+        self.causal_matrix = torch.tril(
+            torch.ones((self.num_chunks, self.num_chunks), device=self.device),
+            diagonal=-1
+        )
+    
+    def to(self, device):
+        """將因果矩陣移動到指定設備"""
+        self.device = device if isinstance(device, torch.device) else torch.device(device)
+        self.causal_matrix = self.causal_matrix.to(self.device)
+        return self
+    
     def compute_weights(self, 
                        pde_losses: torch.Tensor, 
-                       time_coords: torch.Tensor) -> torch.Tensor:
+                       time_coords: torch.Tensor,
+                       return_pointwise: bool = True):
         """
-        計算每個採樣點的因果權重
+        計算每個採樣點的因果權重（優化版本）
         
         Args:
             pde_losses: 每點的 PDE 損失值 [N, 1] 或 [N] (通常為殘差平方和)
             time_coords: 對應的時間坐標 [N, 1] 或 [N]
+            return_pointwise: 若 True 返回 point-level 權重 [N, 1]；
+                             若 False 返回 chunk-level (chunk_weights, chunk_means)
             
         Returns:
-            weights: 與輸入形狀相同的權重張量 [N, 1]
+            若 return_pointwise=True: torch.Tensor [N, 1] 權重張量
+            若 return_pointwise=False: Tuple[torch.Tensor, torch.Tensor] (chunk_weights, chunk_means)
         """
         # 形狀驗證
         if pde_losses.numel() != time_coords.numel():
@@ -394,13 +419,18 @@ class CausalWeighter:
         
         device = loss_vals.device
         
-        # 1. 依時間排序（jaxpi：只依時間排序，數值大小不影響權重）
+        # 如果設備不匹配，移動因果矩陣
+        if self.causal_matrix.device != device:
+            self.causal_matrix = self.causal_matrix.to(device)
+        
+        # 1. 依時間排序
         t_sorted, sort_idx = torch.sort(t_vals)
         loss_sorted = loss_vals[sort_idx]
         n_points = loss_sorted.numel()
         if n_points == 0:
             return loss_vals.new_zeros((0, 1))
         
+        # 2. 動態調整 num_chunks（如果採樣點太少）
         num_chunks = max(1, min(self.num_chunks, n_points))
         chunk_size = n_points // num_chunks
         if chunk_size == 0:
@@ -410,45 +440,35 @@ class CausalWeighter:
         usable = chunk_size * num_chunks
         loss_main = loss_sorted[:usable].view(num_chunks, chunk_size)
         
-        # 2. 計算每個 chunk 的平均損失
+        # 3. 計算每個 chunk 的平均損失
         chunk_means = torch.mean(loss_main, dim=1)  # [num_chunks]
         
-        # 3. 建立因果矩陣 M (strict lower triangular)
-        causal_matrix = torch.tril(
-            torch.ones((num_chunks, num_chunks), device=device),
-            diagonal=-1
-        )
+        # 4. 使用預計算的因果矩陣計算 chunk 權重
+        # 如果 num_chunks 與預計算的不同（動態調整情況），使用切片
+        if num_chunks < self.num_chunks:
+            causal_matrix_used = self.causal_matrix[:num_chunks, :num_chunks]
+        else:
+            causal_matrix_used = self.causal_matrix
         
-        # 4. 計算 chunk 權重
-        chunk_weights = torch.exp(-self.epsilon * (causal_matrix @ chunk_means))
+        chunk_weights = torch.exp(-self.epsilon * (causal_matrix_used @ chunk_means))
         
-        # 5. 映射回每個採樣點
+        # 5. 若要求 chunk-level 結果，直接返回
+        if not return_pointwise:
+            return (chunk_weights, chunk_means)
+        
+        # 6. 映射回每個採樣點
         weights_sorted = torch.empty_like(loss_sorted)
         weights_sorted[:usable] = chunk_weights.repeat_interleave(chunk_size)
         if usable < n_points:
             weights_sorted[usable:] = chunk_weights[-1]
         
-        # 6. 還原到原本順序
+        # 7. 還原到原本順序
         weights = torch.empty_like(weights_sorted)
         weights[sort_idx] = weights_sorted
         
         return weights.unsqueeze(1) # [N, 1]
-
-    # 兼容舊接口
-    def compute_causal_weights(self, time_losses, time_points=None):
-        if not time_losses:
-            return []
-        loss_vals = torch.stack([loss.detach() if torch.is_tensor(loss) else torch.tensor(loss)
-                                 for loss in time_losses])
-        if time_points is None:
-            time_points = torch.arange(len(time_losses), device=loss_vals.device).float()
-        else:
-            time_points = torch.as_tensor(time_points, device=loss_vals.device).float()
-        weights = self.compute_weights(loss_vals, time_points)
-        return [float(w.item()) for w in weights.squeeze(1)]
     
-    def apply_temporal_decay(self, weights, current_epoch):
-        return weights
+    # 舊接口（time_window / compute_causal_weights / temporal_decay）已移除
 
 
 class NTKWeighter:

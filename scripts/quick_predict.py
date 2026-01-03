@@ -35,8 +35,14 @@ in_dim = actual_in_dim
 out_dim = model_cfg.get('out_dim', 3)
 width = model_cfg.get('width', 256)
 depth = model_cfg.get('depth', 8)
-fourier_m = model_cfg.get('fourier_m', 12)
-fourier_sigma = model_cfg.get('fourier_sigma', 4.0)
+ff_cfg = model_cfg.get('fourier_features')
+if not isinstance(ff_cfg, dict) or 'type' not in ff_cfg:
+    raise KeyError("Missing required config key: model.fourier_features.type")
+
+ff_type = ff_cfg.get('type', 'disabled')
+use_fourier = ff_type != 'disabled'
+fourier_m = int(ff_cfg.get('fourier_m', 0)) if use_fourier else 0
+fourier_sigma = float(ff_cfg.get('fourier_sigma', 0.0)) if use_fourier else 0.0
 
 print(f"🏗️  創建模型: in_dim={in_dim}, {depth} layers × {width} neurons, Fourier m={fourier_m}")
 
@@ -45,6 +51,7 @@ model = PINNNet(
     out_dim=out_dim,
     width=width,
     depth=depth,
+    use_fourier=use_fourier,
     fourier_m=fourier_m,
     fourier_sigma=fourier_sigma,
     block_type='resnet'

@@ -1,0 +1,65 @@
+# ====================================================================
+# Sweep M1: Model Comparison (模型架構對比)
+# ====================================================================
+# 目的：比較 Vanilla MLP vs Full (Fourier + ResNet + Adaptive) 架構
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - M1
+# Group: kflow_model_comparison
+# ====================================================================
+
+program: scripts/train/train.py
+method: grid  # Grid search（只有 2 個選項）
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # 直接指定兩個完整配置檔案（避免組合爆炸）
+  config:
+    values:
+      - configs/experiments/M1_model_comparison/m1_vanilla_K100_2d_re50.yml
+      - configs/experiments/M1_model_comparison/m1_full_K100_2d_re50.yml
+
+  # 實驗組織（動態標記）
+  experiment.group:
+    value: "kflow_model_comparison"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "m1_model_comparison"]
+
+  experiment.experiment_id:
+    value: "M1"
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_m1_model_comparison.yaml
+#
+# 2. 啟動 agent:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - 2 個 runs (Vanilla vs Full)
+#    - Vanilla: Standard MLP, tanh, no Fourier, no ResNet, Adam, fixed weights
+#    - Full: Fourier MLP, swish, ResNet, SOAP, adaptive weights
+#    - 可量化所有進階特徵的組合貢獻
+#
+# 4. 評估指標：
+#    - L2_uvp_rel: 全場相對 L2 誤差
+#    - divergence_mean/max: data vs physics trade-off
+#    - convergence_speed: epochs/wall-time to reach target
+#    - energy_spectrum: 避免 smooth field 取巧
+#
+# 5. 視覺化建議：
+#    - Bar chart: Vanilla vs Full 的 L2 誤差
+#    - Convergence curves: loss vs epoch
+#    - Energy spectrum: E(k) log-log plot
+#    - Field reconstruction: DNS vs Vanilla vs Full 三聯圖
+#
+# 6. 注意事項：
+#    - 這是最重要的對比實驗（對應 thesis baseline）
+#    - Vanilla 收斂較慢，可能需要更多 epochs
+#    - Full 版本應顯著優於 Vanilla（目標：L2 改善 ≥ 30%）
+#    - 建議先跑 Vanilla 建立 baseline，再跑 Full 做對比
+# ====================================================================

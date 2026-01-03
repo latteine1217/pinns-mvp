@@ -177,7 +177,6 @@ training:
     step_size: 500   # 快速測試: 500 epochs 衰減
 
   epochs: 1000       # 快速測試: 1000 epochs
-  max_epochs: 1000
   batch_size: 20000
   validation_freq: 50
   checkpoint_freq: 100

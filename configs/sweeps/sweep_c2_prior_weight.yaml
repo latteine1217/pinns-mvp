@@ -1,0 +1,74 @@
+# ====================================================================
+# Sweep C2: Prior Weight Sweep (低保真先驗權重掃描)
+# ====================================================================
+# 目的：找到最佳 prior weight（避免 prior 太強把 PINN 綁死）
+# 對應：EXPERIMENT_COMPARISON_PLAN.md - C2
+# Group: kflow_prior
+# ====================================================================
+
+program: scripts/train/train.py
+method: bayes  # Bayesian 優化找最佳權重
+
+metric:
+  name: metrics/L2_uvp_rel
+  goal: minimize
+
+parameters:
+  # 基礎配置檔案（需要合併 rans_prior 配置）
+  config:
+    value: configs/templates/2d_medium_ablation.yml
+
+  # 主要掃描參數：Prior 權重
+  lowfi_prior.consistency_weight:
+    min: 0.0
+    max: 0.5
+    distribution: uniform
+
+  # 次要掃描：Loss weights（避免 prior 把 PDE 壓死）
+  losses.pde_loss_weight:
+    values: [0.5, 1.0, 2.0]
+
+  losses.data_loss_weight:
+    values: [50.0, 100.0, 200.0]
+
+  # 啟用 Prior（需要在訓練腳本中支援）
+  lowfi_prior.enabled:
+    value: true
+
+  lowfi_prior.data_path:
+    value: ./data/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5
+
+  lowfi_prior.data_type:
+    value: leith
+
+  # 實驗組織
+  experiment.name:
+    value: "Re50_K100_qr_priorSweep"
+
+  experiment.group:
+    value: "kflow_prior"
+
+  experiment.tags:
+    value: ["kflow_re50", "qr_pivot", "K100", "full", "leith_prior", "c2_prior_sweep"]
+
+  experiment.experiment_id:
+    value: "C2"
+
+# ====================================================================
+# 執行方式
+# ====================================================================
+# 1. 建立 sweep:
+#    wandb sweep configs/sweeps/sweep_c2_prior_weight.yaml
+#
+# 2. 啟動 agent（可多 GPU 並行）:
+#    wandb agent your-entity/pinns-sparse-turbulence/xxxxx
+#
+# 3. 預期結果：
+#    - Bayesian 優化會自動探索最佳 prior_weight
+#    - 可繪製 prior_weight vs L2 曲線（找 sweet spot）
+#    - 建議跑 10-15 次（Bayesian 需要足夠樣本）
+#
+# 4. 注意事項：
+#    - 確保 lowfi_prior 配置正確（檔案路徑、field mapping）
+#    - Prior weight 太大 (>0.5) 可能導致模型過度依賴低保真場
+# ====================================================================

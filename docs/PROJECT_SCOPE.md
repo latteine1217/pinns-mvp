@@ -43,7 +43,7 @@ lowfi_prior:
 ```
 
 **參考文件**：
-- `docs/LEITH_PARAMETER_SELECTION_CRITERIA.md`
+- `docs/archive/experiments/LEITH_PARAMETER_SELECTION_CRITERIA.md`（歷史參考）
 - `scripts/generate/dns/generate_kolmogorov_leith.py`
 
 ---
@@ -72,8 +72,8 @@ lowfi_prior:
 ```
 
 **參考文件**：
-- `docs/RANS_INTEGRATION_SUMMARY.md`
-- `docs/RANS_PREPROCESSING_QUICKSTART.md`
+- `TECHNICAL_DOCUMENTATION.md`（系統架構）
+- `CONFIG_GUIDE.md`（RANS 配置說明）
 
 ---
 
@@ -251,12 +251,11 @@ pytest tests/ -v --cov=pinnx
 
 ## 📞 相關文件
 
-- **快速開始**: `docs/QUICK_START.md`
-- **技術文檔**: `docs/TECHNICAL_DOCUMENTATION.md`
-- **配置參考**: `docs/CONFIG_REFERENCE.md`
-- **Prior 指南**: `docs/LOWFI_PRIOR_GUIDE.md`
-- **疑難排解**: `docs/TROUBLESHOOTING.md`
-- **更新日誌**: `CHANGELOG.md`
+- **快速開始**: [QUICK_START.md](QUICK_START.md)
+- **技術文檔**: [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)
+- **配置指南**: [CONFIG_GUIDE.md](CONFIG_GUIDE.md)
+- **疑難排解**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- **更新日誌**: `../CHANGELOG.md`
 
 ---
 
@@ -280,5 +279,5 @@ pytest tests/ -v --cov=pinnx
 ---
 
 **文檔維護**: PINNs-MVP 團隊  
-**版本**: 1.0.0  
-**更新日期**: 2025-12-17
+**版本**: 1.1.0  
+**更新日期**: 2026-01-03

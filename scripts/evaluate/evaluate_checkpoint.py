@@ -57,7 +57,7 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
     model_cfg = full_cfg.get('model', {})
     
     # 使用 factory 創建模型
-    from pinnx.train.factory import create_model
+    from pinnx.train.model_physics_factory import create_model
     try:
         model = create_model(full_cfg, device)
         print(f"✅ 模型已創建（類型: {type(model).__name__}，設備: {device}）")

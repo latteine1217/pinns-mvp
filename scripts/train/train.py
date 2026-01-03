@@ -35,16 +35,42 @@ from pinnx.train.checkpointing import (
     save_checkpoint,
     load_checkpoint,
 )
-from pinnx.train.factory import (
+from pinnx.train.model_physics_factory import (
     get_device,
     create_model,
     create_physics,
+)
+from pinnx.train.factories import (
     create_optimizer,
+    create_scheduler,
 )
 from pinnx.utils.setup import (
     setup_logging,
     set_random_seed,
 )
+
+# 導入調度器模組 (Phase 1)
+from pinnx.train.schedulers import WarmupCosineScheduler, StagedWeightScheduler, CurriculumScheduler
+
+# 導入採樣模組 (Phase 2)
+from pinnx.dataio.sampling import sample_boundary_points, sample_interior_points
+
+# 導入資料載入與驗證模組 (Phase 3)
+from pinnx.dataio.validation import validate_sensor_data_quality
+from pinnx.dataio.loaders.kolmogorov import prepare_kolmogorov_training_data
+from pinnx.dataio.loaders.rans_prior import load_rans_prior_data
+
+# 導入標準化輔助模組 (Phase 4)
+from pinnx.utils.normalization_helpers import (
+    setup_output_normalization,
+    create_input_normalizer,
+)
+
+# 導入工廠函數 (Phase 5)
+from pinnx.train.loss_factory import create_loss_functions
+from pinnx.train.weighter_factory import create_weighters
+
+from pinnx.utils.config_snapshot import ConfigSnapshot  # 🆕 配置快照追蹤
 
 
 # ============================================================================
@@ -1065,7 +1091,10 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
     if loss_cfg.get('causal_weighting', False):
         weighters['causal'] = CausalWeighter(
             epsilon=loss_cfg.get('causal_eps', 1.0),
-            n_time_bins=loss_cfg.get('causal_n_bins', 10)
+            num_chunks=loss_cfg.get('causal_n_bins', 10),
+            t_min=config['data']['kolmogorov_config']['time_range'][0],
+            t_max=config['data']['kolmogorov_config']['time_range'][1],
+            device=device
         )
         logging.info(
             f"✅ Causal weighting enabled: ε={loss_cfg.get('causal_eps', 1.0):.2f}, "
@@ -2094,78 +2123,52 @@ def main():
     else:
         logger.info("Running single model training...")
         weighters = create_weighters(config, model, device, physics=physics)
-        trainer = Trainer(model, physics, losses, config, device,
-                          weighters=weighters,
-                          input_normalizer=input_normalizer,
-                          training_data=training_data_sample)
-        trainer.training_data = training_data_sample
         
-        # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）
-        # 🚨 修復：從實際 sensor data 計算標準化（避免使用損壞的 RANS prior）
-        if config.get('data', {}).get('normalize', False):
-            norm_cfg = config.get('normalization', {})
-            if norm_cfg.get('type') == 'training_data_norm' and not norm_cfg.get('params'):
-                # 🔧 FIX: 從配置讀取正確的 variable_order（支援 2D/3D）
-                variable_order = norm_cfg.get('variable_order', ['u', 'v', 'w', 'p'])
-                logger.info(f"📐 Variable order from config: {variable_order}")
-                
-                # 檢查 sensor data 是否包含實際值
-                has_sensor_values = all(
-                    f'{var}_sensors' in training_data_sample and 
-                    training_data_sample[f'{var}_sensors'].numel() > 0
-                    for var in variable_order  # 🔧 FIX: 使用配置的 variable_order
-                )
-                
-                if has_sensor_values:
-                    # ✅ 使用 K=100 sensor data（工程場景 - 稀疏測量）
-                    logger.info(f"🔧 Computing normalization from K=100 sensor data")
-                    # 🔧 FIX: 動態構建 dict，只包含 variable_order 中的變量
-                    normalization_data = {
-                        var: training_data_sample[f'{var}_sensors'].cpu().numpy()
-                        for var in variable_order
-                    }
-                else:
-                    # ❌ 失敗：training_data 中缺少必要的 sensor 數據
-                    missing_vars = [var for var in variable_order 
-                                   if f'{var}_sensors' not in training_data_sample 
-                                   or training_data_sample[f'{var}_sensors'].numel() == 0]
-                    raise ValueError(
-                        f"\n❌ CRITICAL: Cannot compute normalization!\n"
-                        f"\n"
-                        f"Required variables: {variable_order}\n"
-                        f"Missing in training_data: {missing_vars}\n"
-                        f"\n"
-                        f"Please ensure your data preparation function creates all required '<var>_sensors' fields.\n"
-                        f"For 2D problems, set normalization.variable_order: ['u', 'v', 'p']\n"
-                        f"For 3D problems, set normalization.variable_order: ['u', 'v', 'w', 'p']\n"
-                    )
-                
-                # 驗證數據質量
-                validate_sensor_data_quality(normalization_data, logger)
-                
-                # 記錄統計量供驗證
-                logger.info("📊 Sensor Normalization Statistics (K=100):")
-                for var, data in normalization_data.items():
-                    if isinstance(data, np.ndarray):
-                        logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
-                
-                from pinnx.utils.normalization import OutputTransform
-                # 🔧 FIX: 傳遞 variable_order 參數以確保正確的變量順序
-                trainer.data_normalizer = OutputTransform.from_data(
-                    normalization_data,
-                    norm_type='training_data_norm',
-                    variable_order=variable_order  # 🔧 FIX: 明確指定 variable_order
-                )
-                logger.info(f"✅ Normalization computed from K=100 sensor data")
-                logger.info(f"   Variable order: {variable_order}")
-                logger.info(f"   Normalizer: {trainer.data_normalizer}")
+        # 🆕 檢查是否啟用時間窗口訓練
+        num_windows = config['training'].get('num_time_windows', 1)
         
-        # 載入 checkpoint（若指定）
-        if args.resume:
-            logger.info(f"⏮️  載入 checkpoint: {args.resume}")
-            trainer.load_checkpoint(args.resume)
+        if num_windows > 1:
+            logger.info(f"🪟 Time Window Training enabled: {num_windows} windows")
+            from pinnx.train.time_window_trainer import TimeWindowTrainer
+            
+            # 設置輸出標準化（若配置要求）
+            normalizer = setup_output_normalization(config, training_data_sample, logger)
+            
+            # 創建 Time Window Trainer
+            window_trainer = TimeWindowTrainer(
+                config=config,
+                model=model,
+                training_data=training_data_sample,
+                device=device,
+                physics=physics,
+                losses=losses,
+                weighters=weighters,
+                input_normalizer=input_normalizer,
+                data_normalizer=normalizer
+            )
+            
+            # 序列訓練各窗口
+            train_result = window_trainer.train_sequential()
+        else:
+            logger.info("🔄 Standard single-domain training")
+            trainer = Trainer(model, physics, losses, config, device,
+                              weighters=weighters,
+                              input_normalizer=input_normalizer,
+                              training_data=training_data_sample)
+            trainer.training_data = training_data_sample
+            
+            # ✅ 設置輸出標準化（若配置要求）
+            normalizer = setup_output_normalization(config, training_data_sample, logger)
+            if normalizer:
+                trainer.data_normalizer = normalizer
+            
+            # 載入 checkpoint（若指定）
+            if args.resume:
+                logger.info(f"⏮️  載入 checkpoint: {args.resume}")
+                trainer.load_checkpoint(args.resume)
+            
+            train_result = trainer.train()
         
-        train_result = trainer.train()
         logger.info(f"Training completed. Final loss: {train_result['final_loss']:.6f}")
     
     logger.info("Training script finished successfully!")
