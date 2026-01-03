@@ -20,11 +20,11 @@ metric:
   goal: minimize
 
 parameters:
-  # ✅ 使用「完整可跑」的 case configs，避免 template 結構與資料集不匹配
+  # ✅ 使用 experiments/ 中的標準配置
   cfg:
     values:
-      - configs/sweeps/cases/s1_random_K100_2d_re50.yml
-      - configs/sweeps/cases/s1_qr_K100_2d_re50.yml
+      - configs/experiments/S1_sensor_strategy/s1_random_K100_2d_re50.yml
+      - configs/experiments/S1_sensor_strategy/s1_qr_K100_2d_re50.yml
 
 # ====================================================================
 # 執行方式

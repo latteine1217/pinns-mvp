@@ -1,6 +1,8 @@
 # 實驗對比配置組織
 
-本目錄包含系統性對比實驗的配置文件，依據 `docs/EXPERIMENT_COMPARISON_PLAN.md` 設計。
+本目錄包含系統性對比實驗的配置文件，依據論文需求設計。
+
+**注意**: 本目錄的配置被 `configs/sweeps/` 中的 WandB sweep 定義引用，用於批次實驗執行。
 
 ---
 
@@ -15,8 +17,11 @@ experiments/
 ├── A2_ablation_weights/     # 消融實驗：動態權重（GradNorm）
 ├── C1_prior_comparison/     # RANS Prior 對比（有無先驗）
 ├── C2_prior_sweep/          # RANS Prior 權重掃描（0.1/0.3/0.5）
+├── generate_experiment_configs.py  # 配置生成腳本
 └── README.md                # 本文件
 ```
+
+**總計**: 17 個實驗配置，對應 7 組對比實驗 (S1, S2, M1, A1, A2, C1, C2)
 
 ---
 

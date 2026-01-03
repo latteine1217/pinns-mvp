@@ -20,13 +20,13 @@ metric:
   goal: minimize
 
 parameters:
-  # ✅ 使用「完整可跑」的 case configs，避免 K 與 sensor_file 的 pairing 產生 cross-product
+  # ✅ 使用 experiments/ 中的標準配置
   cfg:
     values:
-      - configs/sweeps/cases/s2_qr_K30_2d_re50.yml
-      - configs/sweeps/cases/s2_qr_K50_2d_re50.yml
-      - configs/sweeps/cases/s2_qr_K80_2d_re50.yml
-      - configs/sweeps/cases/s2_qr_K100_2d_re50.yml
+      - configs/experiments/S2_k_scan/s2_qr_K30_2d_re50.yml
+      - configs/experiments/S2_k_scan/s2_qr_K50_2d_re50.yml
+      - configs/experiments/S2_k_scan/s2_qr_K80_2d_re50.yml
+      - configs/experiments/S2_k_scan/s2_qr_K100_2d_re50.yml
 
 # ====================================================================
 # 執行方式
