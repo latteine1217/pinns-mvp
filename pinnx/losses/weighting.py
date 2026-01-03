@@ -351,6 +351,10 @@ class CausalWeighter:
         t_min: float = 0.0,
         t_max: float = 1.0,
         device: str = 'cpu',
+        # 向後相容參數（舊 API）
+        time_window: Optional[int] = None,
+        causality_strength: Optional[float] = None,
+        temporal_decay: Optional[float] = None,
     ):
         """
         Args:
@@ -360,6 +364,13 @@ class CausalWeighter:
             t_max: 時間域上界
             device: 計算設備 ('cpu', 'cuda', 'mps')
         """
+        # 向後相容：映射舊參數到新參數
+        if time_window is not None:
+            num_chunks = time_window
+        if causality_strength is not None:
+            epsilon = causality_strength
+        # temporal_decay 在新版本中不使用，忽略
+        
         self.epsilon = float(epsilon)
         self.num_chunks = int(num_chunks)
         self.t_min = t_min

@@ -41,6 +41,7 @@ from pinnx.sensors.qr_pivot import (
     apply_min_distance_constraint,
     evaluate_sensor_placement
 )
+from pinnx.dataio.jhtdb_cutout_loader import JHTDBCutoutLoader
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -404,6 +405,88 @@ def generate_mock_data(n_locations: int = 256,
     return data_matrix, coords, snapshots
 
 
+def _build_snapshots_from_fields(fields: Dict[str, np.ndarray]) -> np.ndarray:
+    snapshots = []
+    for key in ['u', 'v', 'w', 'p']:
+        if key in fields:
+            snapshots.append(fields[key].reshape(-1))
+
+    if not snapshots:
+        raise ValueError("JHTDB 資料中未找到可用場 (u/v/w/p)")
+
+    return np.stack(snapshots, axis=0)
+
+
+def _subsample_locations(data_matrix: np.ndarray,
+                         coords: np.ndarray,
+                         snapshots: np.ndarray,
+                         max_points: int,
+                         random_seed: int = 0) -> tuple:
+    if coords.shape[0] <= max_points:
+        return data_matrix, coords, snapshots
+
+    rng = np.random.default_rng(random_seed)
+    indices = rng.choice(coords.shape[0], size=max_points, replace=False)
+    return data_matrix[indices], coords[indices], snapshots[:, indices]
+
+
+def load_jhtdb_data(data_path: str, max_points: int = 20000) -> tuple:
+    """
+    載入 JHTDB 資料並轉成 QR 測試格式
+
+    支援：
+    - .npz (含 coords 或 x/y/z + u/v/w/p)
+    - 目錄（優先使用 cutout_*.npz）
+    """
+    data_path_obj = Path(data_path)
+
+    if data_path_obj.is_dir():
+        cutout_files = sorted(data_path_obj.glob("cutout_*.npz"))
+        if cutout_files:
+            data_path_obj = min(cutout_files, key=lambda p: p.stat().st_size)
+            logger.info(f"使用 cutout 檔案: {data_path_obj}")
+        else:
+            logger.info("未找到 cutout_*.npz，嘗試使用 HDF5 loader")
+            loader = JHTDBCutoutLoader(data_dir=str(data_path_obj / "raw"))
+            coords_dict = loader.load_coordinates()
+            u, v, w = loader.load_velocity()
+            fields = {'u': u, 'v': v, 'w': w}
+            coords = np.stack(
+                np.meshgrid(coords_dict['x'], coords_dict['y'], coords_dict['z'], indexing='ij'),
+                axis=-1
+            ).reshape(-1, 3)
+            snapshots = _build_snapshots_from_fields(fields)
+            data_matrix = snapshots.T
+            return _subsample_locations(data_matrix, coords, snapshots, max_points=max_points)
+
+    if data_path_obj.suffix == ".npz":
+        with np.load(data_path_obj) as data:
+            if 'coords' in data:
+                coords = data['coords']
+            else:
+                if all(key in data for key in ['x', 'y', 'z']):
+                    coords = np.stack(
+                        np.meshgrid(data['x'], data['y'], data['z'], indexing='ij'),
+                        axis=-1
+                    ).reshape(-1, 3)
+                elif all(key in data for key in ['x', 'y']):
+                    z = np.array([0.0], dtype=data['x'].dtype)
+                    coords = np.stack(
+                        np.meshgrid(data['x'], data['y'], z, indexing='ij'),
+                        axis=-1
+                    ).reshape(-1, 3)
+                else:
+                    raise ValueError("NPZ 缺少 coords 或 x/y(/z)")
+
+            fields = {key: data[key] for key in ['u', 'v', 'w', 'p'] if key in data}
+
+        snapshots = _build_snapshots_from_fields(fields)
+        data_matrix = snapshots.T
+        return _subsample_locations(data_matrix, coords, snapshots, max_points=max_points)
+
+    raise ValueError(f"不支援的 data_path 格式: {data_path_obj}")
+
+
 # ============================================================================
 # 主測試流程
 # ============================================================================
@@ -411,6 +494,7 @@ def generate_mock_data(n_locations: int = 256,
 def run_all_tests(mode: str = 'mock',
                  data_path: str = None,
                  n_sensors: int = 50,
+                 max_points: int = 20000,
                  output_dir: str = 'results/qr_pivoting_tests') -> Dict[str, Any]:
     """執行所有測試"""
 
@@ -428,8 +512,7 @@ def run_all_tests(mode: str = 'mock',
     elif mode == 'full':
         if data_path is None:
             raise ValueError("完整測試模式需要提供 --data-path")
-        # TODO: 載入真實JHTDB資料
-        raise NotImplementedError("完整測試模式尚未實作")
+        data_matrix, coords, snapshots = load_jhtdb_data(data_path, max_points=max_points)
     else:
         raise ValueError(f"未知的測試模式: {mode}")
 
@@ -488,6 +571,8 @@ def main():
                        help='JHTDB資料路徑（完整測試時需要）')
     parser.add_argument('--n-sensors', type=int, default=50,
                        help='感測點數量')
+    parser.add_argument('--max-points', type=int, default=20000,
+                       help='full 模式最大點數（隨機子樣本）')
     parser.add_argument('--output', type=str, default='results/qr_pivoting_tests',
                        help='輸出目錄')
 
@@ -498,6 +583,7 @@ def main():
         mode=args.mode,
         data_path=args.data_path,
         n_sensors=args.n_sensors,
+        max_points=args.max_points,
         output_dir=args.output
     )
 

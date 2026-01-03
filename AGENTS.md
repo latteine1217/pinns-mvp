@@ -30,6 +30,14 @@
 - K ≤ 100 感測點（QR-Pivot）
 - 收斂速度提升 ≥ 30%
 
+# 專案重要規則
+- 本專案將在伺服器上運行，使用指令 `ssh junyi@140.114.120.128` 來登入伺服器
+- 使用的伺服器環境為：
+    - #SBATCH --time=14-00:00:00
+    - #SBATCH --partition=r740
+    - #SBATCH --mem=108G
+    - #SBATCH --gres=gpu:2 (兩張Nvidia P100)
+
 ## 技術規範（摘要版）
 
 - 架構：8×256 MLP + Fourier (m=12, σ=4.0) + RWF

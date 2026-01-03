@@ -459,6 +459,48 @@ def preprocess_rans_prior(
 
 # ==================== 診斷工具 ====================
 
+def _estimate_spatial_gradient_max(
+    values: torch.Tensor,
+    coords: torch.Tensor,
+    max_points: int = 2000,
+    eps: float = 1e-12
+) -> Optional[float]:
+    """
+    以最近鄰有限差分近似最大空間梯度（避免全域微分需求）
+    """
+    if coords.dim() != 2 or values.dim() != 2:
+        raise ValueError("coords 與 values 必須是 2D 張量")
+    if coords.shape[0] != values.shape[0]:
+        raise ValueError("coords 與 values 的點數必須一致")
+
+    n_points = coords.shape[0]
+    if n_points < 2:
+        return 0.0
+
+    with torch.no_grad():
+        if n_points > max_points:
+            sample_idx = torch.randperm(n_points, device=coords.device)[:max_points]
+        else:
+            sample_idx = torch.arange(n_points, device=coords.device)
+
+        coords_sample = coords[sample_idx]
+        values_sample = values[sample_idx].view(-1)
+
+        distances = torch.cdist(coords_sample, coords_sample)
+        distances.fill_diagonal_(float('inf'))
+
+        min_dist, min_idx = distances.min(dim=1)
+        neighbor_values = values_sample[min_idx]
+
+        gradients = (values_sample - neighbor_values).abs() / (min_dist + eps)
+        gradients = gradients[torch.isfinite(gradients)]
+
+        if gradients.numel() == 0:
+            return None
+
+        return gradients.max().item()
+
+
 def diagnose_turbulent_viscosity(
     nu_t: torch.Tensor,
     coords: torch.Tensor,
@@ -539,9 +581,17 @@ def diagnose_turbulent_viscosity(
             diagnosis['warnings'].append("⚠️  未找到 y+ < 5 的近壁點")
     
     # 檢查 4: 空間梯度（簡化版：只檢查鄰近點變化）
-    # TODO: 完整實作需要計算 ∇ν_t
-    diagnosis['spatial_gradient_max'] = None  # 佔位符
-    
+    try:
+        gradient_max = _estimate_spatial_gradient_max(nu_t, coords)
+        diagnosis['spatial_gradient_max'] = gradient_max
+        if coords.shape[0] > 2000:
+            diagnosis['warnings'].append(
+                "ℹ️  空間梯度估計使用子樣本（max_points=2000）"
+            )
+    except Exception as exc:
+        diagnosis['spatial_gradient_max'] = None
+        diagnosis['warnings'].append(f"⚠️  空間梯度估計失敗: {exc}")
+
     return diagnosis
 
 

@@ -83,6 +83,61 @@ class LossManager:
         self._weights_logged = False
         self._debug_printed = False
     
+    def _compute_momentum_losses(
+        self,
+        residuals: Dict[str, torch.Tensor],
+        is_vs_pinn: bool,
+        weights: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        統一計算動量損失（消除重複的條件分支）
+        
+        Args:
+            residuals: 殘差字典
+            is_vs_pinn: 是否為 VS-PINN（需要 z 動量）
+            weights: 可選點權重（形狀為 [N, 1]）
+            
+        Returns:
+            (momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss)
+        """
+        # 檢查是否使用 momentum merging
+        if 'momentum' in residuals:
+            # 合併模式：momentum 是 [N, 1, 2] 向量
+            momentum_vec = residuals['momentum']  # [N, 1, 2]
+            momentum_sq = torch.sum(momentum_vec**2, dim=-1)  # [N, 1]
+            
+            if weights is not None:
+                momentum_loss = torch.mean(weights * momentum_sq)
+            else:
+                momentum_loss = torch.mean(momentum_sq)
+            
+            momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
+            momentum_y_loss = torch.tensor(0.0, device=self.device)
+        else:
+            # 標準模式：分開的 momentum_x 和 momentum_y
+            momentum_x_sq = residuals['momentum_x']**2
+            momentum_y_sq = residuals['momentum_y']**2
+            
+            if weights is not None:
+                momentum_x_loss = torch.mean(weights * momentum_x_sq)
+                momentum_y_loss = torch.mean(weights * momentum_y_sq)
+            else:
+                momentum_x_loss = torch.mean(momentum_x_sq)
+                momentum_y_loss = torch.mean(momentum_y_sq)
+        
+        # z 動量（僅 3D VS-PINN）
+        if is_vs_pinn and 'momentum_z' in residuals:
+            momentum_z_sq = residuals['momentum_z']**2
+            momentum_z_loss = torch.mean(weights * momentum_z_sq) if weights is not None else torch.mean(momentum_z_sq)
+        else:
+            momentum_z_loss = torch.tensor(0.0, device=self.device)
+        
+        # 連續方程
+        continuity_sq = residuals['continuity']**2
+        continuity_loss = torch.mean(weights * continuity_sq) if weights is not None else torch.mean(continuity_sq)
+        
+        return momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss
+    
     def compute_pde_loss(
         self,
         coords_pde_physical: torch.Tensor,
@@ -242,6 +297,8 @@ class LossManager:
             
             # Causal Training: 計算並應用時間因果權重
             causal_weighter = self.weighters.get('causal')
+            final_weights = pde_point_weights
+            
             if causal_weighter is not None and t_pde is not None:
                 # 1. 匯總每個點的殘差平方和
                 total_res_sq = torch.zeros_like(t_pde)
@@ -258,56 +315,13 @@ class LossManager:
                         f"max={causal_weights.max():.4f}, mean={causal_weights.mean():.4f}"
                     )
                 
-                # 4. 應用權重到每個殘差項
-                final_weights = causal_weights
-                if pde_point_weights is not None:
-                    final_weights = final_weights * pde_point_weights
-                
-                # 檢查是否使用 momentum merging
-                if 'momentum' in residuals:
-                    # 合併模式：momentum 是 [N, 1, 2] 向量
-                    momentum_vec = residuals['momentum']  # [N, 1, 2]
-                    momentum_loss = torch.mean(final_weights * torch.sum(momentum_vec**2, dim=-1))
-                    momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
-                    momentum_y_loss = torch.tensor(0.0, device=self.device)
-                else:
-                    # 標準模式：分開的 momentum_x 和 momentum_y
-                    momentum_x_loss = torch.mean(final_weights * residuals['momentum_x']**2)
-                    momentum_y_loss = torch.mean(final_weights * residuals['momentum_y']**2)
-                
-                momentum_z_loss = torch.mean(final_weights * residuals['momentum_z']**2) if is_vs_pinn else torch.tensor(0.0, device=self.device)
-                continuity_loss = torch.mean(final_weights * residuals['continuity']**2)
+                # 4. 合併因果權重與點權重
+                final_weights = causal_weights if pde_point_weights is None else (causal_weights * pde_point_weights)
             
-            elif pde_point_weights is not None:
-                # 檢查是否使用 momentum merging
-                if 'momentum' in residuals:
-                    # 合併模式：momentum 是 [N, 1, 2] 向量
-                    momentum_vec = residuals['momentum']  # [N, 1, 2]
-                    momentum_loss = apply_point_weights_to_loss(torch.sum(momentum_vec**2, dim=-1), pde_point_weights)
-                    momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
-                    momentum_y_loss = torch.tensor(0.0, device=self.device)
-                else:
-                    # 標準模式：分開的 momentum_x 和 momentum_y
-                    momentum_x_loss = apply_point_weights_to_loss(residuals['momentum_x']**2, pde_point_weights)
-                    momentum_y_loss = apply_point_weights_to_loss(residuals['momentum_y']**2, pde_point_weights)
-                
-                momentum_z_loss = apply_point_weights_to_loss(residuals['momentum_z']**2, pde_point_weights) if is_vs_pinn else torch.tensor(0.0, device=self.device)
-                continuity_loss = apply_point_weights_to_loss(residuals['continuity']**2, pde_point_weights)
-            else:
-                # 檢查是否使用 momentum merging
-                if 'momentum' in residuals:
-                    # 合併模式：momentum 是 [N, 1, 2] 向量
-                    momentum_vec = residuals['momentum']  # [N, 1, 2]
-                    momentum_loss = torch.mean(torch.sum(momentum_vec**2, dim=-1))
-                    momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
-                    momentum_y_loss = torch.tensor(0.0, device=self.device)
-                else:
-                    # 標準模式：分開的 momentum_x 和 momentum_y
-                    momentum_x_loss = torch.mean(residuals['momentum_x']**2)
-                    momentum_y_loss = torch.mean(residuals['momentum_y']**2)
-                
-                momentum_z_loss = torch.mean(residuals['momentum_z']**2) if is_vs_pinn else torch.tensor(0.0, device=self.device)
-                continuity_loss = torch.mean(residuals['continuity']**2)
+            # 統一計算動量與連續方程損失（消除三重重複邏輯）
+            momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss = self._compute_momentum_losses(
+                residuals, is_vs_pinn, final_weights
+            )
         
         except Exception as e:
             logging.error(f"🚨 物理殘差計算失敗: {e}")
@@ -348,21 +362,25 @@ class LossManager:
             - periodic_x_loss, periodic_y_loss（如果有週期性邊界）
         """
         # 壁面邊界條件損失
-        y_bc = data_batch['y_bc']
-        wall_mask = (torch.abs(y_bc - 1.0) < 1e-3) | (torch.abs(y_bc + 1.0) < 1e-3)
-        wall_mask = wall_mask.squeeze()
+        wall_loss = torch.tensor(0.0, device=self.device)
         
-        if wall_mask.sum() > 0:
-            u_wall = u_bc_pred_phys[wall_mask, 0]  # u 分量
-            v_wall = u_bc_pred_phys[wall_mask, 1]  # v 分量
-            wall_loss = torch.mean(u_wall**2 + v_wall**2)
-        else:
-            wall_loss = torch.tensor(0.0, device=self.device)
-            if epoch == 0:
-                if y_bc.numel() > 0:
-                    logging.warning(f"⚠️ 未檢測到壁面邊界點！y_bc 範圍: [{y_bc.min():.6f}, {y_bc.max():.6f}]")
-                else:
-                    logging.info(f"ℹ️ 無壁面邊界點（純週期性系統，如 Kolmogorov Flow）")
+        if 'y_bc' in data_batch:
+            y_bc = data_batch['y_bc']
+            wall_mask = (torch.abs(y_bc - 1.0) < 1e-3) | (torch.abs(y_bc + 1.0) < 1e-3)
+            wall_mask = wall_mask.squeeze()
+            
+            if wall_mask.sum() > 0:
+                u_wall = u_bc_pred_phys[wall_mask, 0]  # u 分量
+                v_wall = u_bc_pred_phys[wall_mask, 1]  # v 分量
+                wall_loss = torch.mean(u_wall**2 + v_wall**2)
+            else:
+                if epoch == 0:
+                    if y_bc.numel() > 0:
+                        logging.warning(f"⚠️ 未檢測到壁面邊界點！y_bc 範圍: [{y_bc.min():.6f}, {y_bc.max():.6f}]")
+                    else:
+                        logging.info(f"ℹ️ 無壁面邊界點（純週期性系統，如 Kolmogorov Flow）")
+        elif epoch == 0:
+            logging.info(f"ℹ️ 無 y_bc 資料（可能為純週期性系統）")
         
         # 週期性邊界條件損失
         periodic_x_loss = torch.tensor(0.0, device=self.device)
@@ -815,39 +833,37 @@ class LossManager:
             loss_dict.get('prior_consistency_loss', torch.tensor(0.0, device=self.device))
         )
         
-        # 構建結果字典
-        result = {
+        # 構建結果字典（字典驅動，消除重複的 .item() 調用）
+        # 基礎損失項（必定存在）
+        base_result_keys = [
+            'data_loss', 'continuity_loss',
+            'momentum_x_loss', 'momentum_y_loss', 'momentum_z_loss',
+            'u_loss', 'v_loss', 'w_loss', 'pressure_loss'
+        ]
+        result = {key: loss_dict[key].item() for key in base_result_keys}
+        
+        # 加權損失項
+        result.update({
             'total_loss': total_loss.item(),
-            'data_loss': loss_dict['data_loss'].item(),
             'pde_loss': (weighted_momentum_loss + weighted_div_loss).item(),
             'div_loss': loss_dict['continuity_loss'].item(),
             'weighted_data_loss': weighted_data_loss.item(),
             'weighted_pde_loss': weighted_momentum_loss.item(),
             'weighted_div_loss': weighted_div_loss.item(),
             'weighted_bc_loss': weighted_bc_loss.item(),
-            'momentum_x_loss': loss_dict['momentum_x_loss'].item(),
-            'momentum_y_loss': loss_dict['momentum_y_loss'].item(),
-            'momentum_z_loss': loss_dict['momentum_z_loss'].item(),
-            'continuity_loss': loss_dict['continuity_loss'].item(),
-            'u_loss': loss_dict['u_loss'].item(),
-            'v_loss': loss_dict['v_loss'].item(),
-            'w_loss': loss_dict['w_loss'].item(),
-            'pressure_loss': loss_dict['pressure_loss'].item(),
-        }
+        })
         
-        # 添加邊界條件損失細項
-        if hasattr(self.physics, 'compute_periodic_loss'):
-            result['periodic_x_loss'] = loss_dict['periodic_x_loss'].item()
-            result['periodic_y_loss'] = loss_dict['periodic_y_loss'].item()
-        else:
-            result['wall_loss'] = loss_dict['wall_loss'].item()
+        # 邊界條件損失細項（條件式添加）
+        bc_keys = ['periodic_x_loss', 'periodic_y_loss'] if hasattr(self.physics, 'compute_periodic_loss') else ['wall_loss']
+        result.update({key: loss_dict[key].item() for key in bc_keys})
         
-        # 添加先驗一致性損失細項
+        # 先驗一致性損失細項（字典驅動）
         if self.prior_loss_manager is not None:
-            result['prior_consistency_loss'] = loss_dict.get('prior_consistency_loss', torch.tensor(0.0)).item()
-            result['prior_loss_u'] = loss_dict.get('prior_loss_u', torch.tensor(0.0)).item()
-            result['prior_loss_v'] = loss_dict.get('prior_loss_v', torch.tensor(0.0)).item()
-            result['prior_loss_p'] = loss_dict.get('prior_loss_p', torch.tensor(0.0)).item()
+            prior_keys = ['prior_consistency_loss', 'prior_loss_u', 'prior_loss_v', 'prior_loss_p']
+            result.update({
+                key: loss_dict.get(key, torch.tensor(0.0, device=self.device)).item()
+                for key in prior_keys
+            })
         
         # 應用權重字典
         applied_weights_dict = {

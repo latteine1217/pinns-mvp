@@ -91,7 +91,7 @@ def mock_physics_vs():
     physics = Mock()
     
     # 模擬 compute_momentum_residuals() 方法（VS-PINN）
-    def mock_momentum(coords, predictions, scaled_coords=None):
+    def mock_momentum(coords, predictions, scaled_coords=None, gradients=None):
         batch_size = coords.shape[0]
         return {
             'momentum_x': torch.randn(batch_size, 1),
@@ -99,7 +99,7 @@ def mock_physics_vs():
             'momentum_z': torch.randn(batch_size, 1),
         }
     
-    def mock_continuity(coords, predictions, scaled_coords=None):
+    def mock_continuity(coords, predictions, scaled_coords=None, gradients=None):
         batch_size = coords.shape[0]
         return torch.randn(batch_size, 1)
     
@@ -597,17 +597,14 @@ class TestTrainerTraining:
         assert len(trainer.history['lr']) == 10
         # 學習率應該在訓練過程中逐步下降
         # StepLR(step_size=3, gamma=0.5) 的行為：
-        # - epoch 0-1: lr=1e-3 (初始值)
-        # - epoch 2: lr 降為 5e-4 (第 3 次 step 後)
-        # - epoch 3-4: lr=5e-4
-        # - epoch 5: lr 降為 2.5e-4 (第 6 次 step 後)
-        # - epoch 6-7: lr=2.5e-4
-        # - epoch 8: lr 降為 1.25e-4 (第 9 次 step 後)
-        # - epoch 9: lr=1.25e-4
+        # - epoch 0-2: lr=1e-3 (初始值)
+        # - epoch 3-5: lr=5e-4 (第 3 次 step 後)
+        # - epoch 6-8: lr=2.5e-4 (第 6 次 step 後)
+        # - epoch 9: lr=1.25e-4 (第 9 次 step 後)
         assert trainer.history['lr'][0] == initial_lr
-        assert trainer.history['lr'][2] < trainer.history['lr'][1]  # epoch 2 時第一次下降
-        assert trainer.history['lr'][5] < trainer.history['lr'][4]  # epoch 5 時第二次下降
-        assert trainer.history['lr'][8] < trainer.history['lr'][7]  # epoch 8 時第三次下降
+        assert trainer.history['lr'][3] < trainer.history['lr'][2]  # epoch 3 時第一次下降
+        assert trainer.history['lr'][6] < trainer.history['lr'][5]  # epoch 6 時第二次下降
+        assert trainer.history['lr'][9] < trainer.history['lr'][8]  # epoch 9 時第三次下降
     
     def test_train_with_checkpointing(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
         """測試檢查點保存"""
@@ -631,11 +628,16 @@ class TestTrainerTraining:
     def test_train_fast_convergence(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
         """測試快速收斂時提前停止"""
         basic_config['training']['epochs'] = 100
+        basic_config['training']['early_stopping'] = {
+            'enabled': True,
+            'patience': 5,
+            'min_delta': 1e-6,
+        }
         
         trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
-        # Mock step() 返回極小損失
+        # Mock step() 返回極小損失（模擬快速收斂）
         original_step = trainer.step
         def mock_step(data, epoch):
             return {'total_loss': 1e-7, 'data_loss': 1e-8, 'pde_loss': 1e-8, 
@@ -647,7 +649,7 @@ class TestTrainerTraining:
         
         result = trainer.train()
         
-        # 檢查提前停止（loss < 1e-6）
+        # 檢查提前停止（因 early stopping patience 觸發，應在 100 epochs 前停止）
         assert result['epochs_completed'] < 100
 
 
