@@ -37,14 +37,14 @@ class ConfigSchema:
         self,
         required_fields: Optional[List[str]] = None,
         optional_fields: Optional[Dict[str, Any]] = None,
-        field_types: Optional[Dict[str, type]] = None,
+        field_types: Optional[Dict[str, Union[type, Tuple[type, ...]]]] = None,
         validators: Optional[Dict[str, Callable[[Any], bool]]] = None
     ):
         """
         Args:
             required_fields: 必要欄位列表
             optional_fields: 可選欄位及其預設值
-            field_types: 欄位類型約束 {field_name: expected_type}
+            field_types: 欄位類型約束 {field_name: expected_type or (type1, type2, ...)}
             validators: 自定義驗證函數 {field_name: validator_func}
         """
         self.required_fields = required_fields or []
@@ -78,9 +78,14 @@ class ConfigSchema:
             if field in config:
                 value = config[field]
                 if not isinstance(value, expected_type):
+                    # 格式化類型名稱（支援 tuple）
+                    if isinstance(expected_type, tuple):
+                        type_names = ' or '.join(t.__name__ for t in expected_type)
+                    else:
+                        type_names = expected_type.__name__
                     raise ValueError(
                         f"{prefix}Field '{field}' has wrong type. "
-                        f"Expected {expected_type.__name__}, got {type(value).__name__}"
+                        f"Expected {type_names}, got {type(value).__name__}"
                     )
         
         # 3. 執行自定義驗證
@@ -122,7 +127,7 @@ class _Registry:
         # 便捷參數（內部轉為 ConfigSchema）
         required_fields: Optional[List[str]] = None,
         optional_fields: Optional[Dict[str, Any]] = None,
-        field_types: Optional[Dict[str, type]] = None,
+        field_types: Optional[Dict[str, Union[type, Tuple[type, ...]]]] = None,
         validators: Optional[Dict[str, Callable[[Any], bool]]] = None
     ):
         """
@@ -133,7 +138,7 @@ class _Registry:
             schema: 完整的 ConfigSchema 物件
             required_fields: 快捷參數 - 必要欄位列表
             optional_fields: 快捷參數 - 可選欄位及預設值
-            field_types: 快捷參數 - 欄位類型約束
+            field_types: 快捷參數 - 欄位類型約束（支援單一型別或 tuple）
             validators: 快捷參數 - 自定義驗證函數
         
         Examples:
@@ -142,8 +147,12 @@ class _Registry:
             @registry.register('my_type', schema=schema)
             def create_my_type(...): ...
             
-            # 方式 2: 使用快捷參數
-            @registry.register('my_type', required_fields=['in_dim', 'out_dim'])
+            # 方式 2: 使用快捷參數（單一型別）
+            @registry.register('my_type', field_types={'in_dim': int})
+            def create_my_type(...): ...
+            
+            # 方式 3: 使用快捷參數（union type）
+            @registry.register('my_type', field_types={'nu': (int, float)})
             def create_my_type(...): ...
         """
         def decorator(func: Callable) -> Callable:

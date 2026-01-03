@@ -7,6 +7,67 @@
 
 ---
 
+## [1.3.0] - 2026-01-03
+
+### ✨ Added - Registry Pattern & Schema Validation
+- **Registry Pattern 架構重構**: 統一的工廠函數管理系統
+  - `pinnx/train/factories.py`: Optimizer/Scheduler 工廠（Phase 1）
+  - `pinnx/train/model_physics_factory.py`: Model/Physics 工廠（Phase 2）
+  - **消除 18 個條件分支**（if-elif chains）
+  - 裝飾器註冊：`@registry.register('type_name')`
+  
+- **Schema Validation System** (Phase 3): 型別安全的配置驗證
+  - `ConfigSchema` 類別：宣告式配置驗證
+  - **Union Types 支援**: `field_types={'nu': (int, float)}`
+  - 自動驗證流程：必要欄位 → 型別檢查 → 自訂驗證 → 預設值填充
+  - 智慧錯誤訊息：`"Expected int or float, got str"`
+
+- **完整文檔系統**:
+  - `context/session_logs/SESSION_SUMMARY_2026-01-03_Phase3_Schema_Validation.md`: 完成報告
+  - `context/session_logs/SCHEMA_VALIDATION_TECHNICAL_GUIDE.md`: 詳細技術指南
+  - `context/session_logs/SCHEMA_VALIDATION_QUICK_REFERENCE.md`: 快速參考卡
+  - `REGISTRY_PATTERN_PHASE2_COMPLETE.md`: Phase 1+2 完成報告
+
+### 🔄 Changed - Architecture
+- **工廠函數統一**: 所有創建邏輯透過 Registry Pattern
+  - Optimizer: 5 類型（adam, adamw, soap, lbfgs, sgd）
+  - Scheduler: 6 類型（cosine, step, exponential, warmup_cosine, etc.）
+  - Model: 4 類型（fourier_vs_mlp, resnet, piratenet, axis_selective_fourier_mlp）
+  - Physics: 3 類型（vs_pinn_channel_flow, ns_2d, kolmogorov_flow_2d）
+
+- **型別提示增強**: `pinnx/train/model_physics_factory.py`
+  - `ConfigSchema.__init__`: `field_types` 支援 `Union[type, Tuple[type, ...]]`
+  - `ConfigSchema.validate()`: 智慧型別檢查（單一型別 vs Union types）
+  - `_Registry.register()`: 同步型別提示更新
+
+### 🧪 Testing
+- **測試覆蓋率**: 96.6% (28/29 tests passing)
+  - `tests/test_factories.py`: 17/18 passing (1 skipped - SOAP)
+  - `tests/test_model_physics_factories.py`: 11/11 passing
+- **驗證功能**: Schema validation 自動測試套件
+
+### 📊 Statistics
+- **條件分支消除**: 18 branches → 0 (100% reduction)
+  - Phase 1: 11 branches (Optimizer/Scheduler)
+  - Phase 2: 7 branches (Model/Physics)
+  - Phase 3: 0 branches added (Schema validation)
+- **文檔新增**: 3 個完整文檔（~2,500 行）
+- **程式碼修改**: 1 個核心檔案（型別提示增強）
+
+### 🎯 Philosophy Alignment
+- **Good Taste**: Zero conditional branches，純粹字典查找
+- **Simplicity**: 宣告式配置（declarative validation）
+- **Type Safety**: 完整型別檢查與 Union Types 支援
+- **Pragmatism**: 早期發現配置錯誤，避免訓練到一半才失敗
+
+### 🔗 Related Documents
+- **Phase 1+2**: `REGISTRY_PATTERN_PHASE2_COMPLETE.md`
+- **Phase 3**: `SESSION_SUMMARY_2026-01-03_Phase3_Schema_Validation.md`
+- **Technical Guide**: `SCHEMA_VALIDATION_TECHNICAL_GUIDE.md`
+- **Quick Reference**: `SCHEMA_VALIDATION_QUICK_REFERENCE.md`
+
+---
+
 ## [1.2.2] - 2026-01-03
 
 ### ✨ Added

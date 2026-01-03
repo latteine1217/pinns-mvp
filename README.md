@@ -66,6 +66,13 @@ python scripts/evaluate/evaluate_checkpoint.py \
 
 ## 重要更新
 
+### ✅ v1.3.0 (2026-01-03): Registry Pattern + Schema Validation
+- **架構重構**: 完整遷移至 Registry Pattern（消除 18 個條件分支）
+- **型別安全**: Schema Validation with Union Types 支援
+- **工廠函數**: Model/Physics/Optimizer/Scheduler 統一管理
+- **測試覆蓋**: 96.6% (28/29 tests passing)
+- **文檔**: 完整技術指南與快速參考卡
+
 ### ✅ v1.2.2 (2026-01-03): 配置驗證與文檔簡化
 - **新功能**: 配置檔案驗證系統（攔截常見錯誤如 `loss` vs `losses`）
 - **CLI 工具**: `scripts/tools/validate_config.py` 獨立驗證工具
