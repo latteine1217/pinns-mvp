@@ -7,8 +7,7 @@
 3. 缺少統計量返回 False
 4. std 過小（< 1e-12）返回 False
 5. 統計量包含 NaN/Inf 返回 False
-6. UnifiedNormalizer 正確委託給 OutputTransform
-7. Trainer 初始化時驗證統計量有效性
+6. Trainer 初始化時驗證統計量有效性
 """
 
 import pytest
@@ -25,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pinnx.utils.normalization import (
     OutputTransform,
     OutputNormConfig,
-    UnifiedNormalizer,
     InputTransform,
     InputNormConfig
 )
@@ -221,51 +219,6 @@ class TestOutputTransformValidation:
         transform = OutputTransform(config)
         
         assert transform.has_valid_stats() == False
-
-
-class TestUnifiedNormalizerValidation:
-    """UnifiedNormalizer.has_valid_stats() 測試套件"""
-    
-    def test_unified_normalizer_delegates_to_output(self):
-        """
-        測試案例 14: UnifiedNormalizer 正確委託給 OutputTransform
-        """
-        # 創建有效的 transforms
-        input_config = InputNormConfig(norm_type='none')
-        output_config = OutputNormConfig(
-            norm_type='training_data_norm',
-            variable_order=['u', 'v'],
-            means={'u': 0.5, 'v': -0.2},
-            stds={'u': 1.2, 'v': 0.8}
-        )
-        
-        input_transform = InputTransform(input_config)
-        output_transform = OutputTransform(output_config)
-        
-        normalizer = UnifiedNormalizer(input_transform, output_transform)
-        
-        # 應該返回 True（統計量有效）
-        assert normalizer.has_valid_stats() == True
-    
-    def test_unified_normalizer_invalid_stats(self):
-        """
-        測試案例 15: UnifiedNormalizer 檢測到無效統計量
-        """
-        input_config = InputNormConfig(norm_type='none')
-        output_config = OutputNormConfig(
-            norm_type='training_data_norm',
-            variable_order=['u', 'v'],
-            means={'u': 0.5, 'v': -0.2},
-            stds={'u': 1.2, 'v': 0.0}  # v 的 std 為 0
-        )
-        
-        input_transform = InputTransform(input_config)
-        output_transform = OutputTransform(output_config)
-        
-        normalizer = UnifiedNormalizer(input_transform, output_transform)
-        
-        # 應該返回 False（統計量無效）
-        assert normalizer.has_valid_stats() == False
 
 
 class TestTrainerIntegration:

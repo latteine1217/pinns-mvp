@@ -185,7 +185,7 @@ def create_scaler_from_data(input_data: torch.Tensor,
         已擬合的尺度器
         
     Note:
-        本專案僅支援 VSScaler。資料前處理請使用 pinnx.utils.normalization.UnifiedNormalizer。
+        本專案僅支援 VSScaler。資料前處理請使用 pinnx.utils.normalization 中的 InputTransform 和 OutputTransform。
     """
     if scaler_type == "vs":
         input_dim = input_data.shape[1]

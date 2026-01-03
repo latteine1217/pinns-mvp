@@ -1662,70 +1662,61 @@ class Trainer:
     
     def _parse_domain_from_config(self) -> Dict[str, float]:
         """
-        從多種配置格式中解析 domain 參數（Phase 4-1 Helper）
+        從配置中解析 domain 參數（Fail Fast，只支援 physics.domain）
         
-        優先順序:
-        1. physics.domain（x_range, y_range, z_range 格式）
-        2. data.jhtdb_config.domain（x, y, z 格式）
-        3. 頂層 domain（x_range/x_min 格式）
-        4. 預設值（通道流 Re_tau=1000 標準域）
+        要求格式:
+            physics:
+              domain:
+                x_range: [min, max]  # 必填
+                y_range: [min, max]  # 必填
+                z_range: [min, max]  # 選填（3D 必填）
         
         Returns:
             domain: {'x_min', 'x_max', 'y_min', 'y_max', 'z_min', 'z_max'}
+        
+        Raises:
+            KeyError: 配置中缺少 physics.domain
+            ValueError: domain 格式不正確
+        
+        Note:
+            P0-2 重構：移除所有 fallback 邏輯，強制使用 physics.domain
+            若配置文件為舊格式，請執行：
+                python scripts/tools/migrate_domain_config.py --config <file>
         """
-        domain = None
-        
-        # 優先順序 1: physics.domain
+        # Fail Fast: 只接受 physics.domain
         physics_config = self.config.get('physics', {})
-        if 'domain' in physics_config:
-            domain_data = physics_config['domain']
-            if 'x_range' in domain_data:
-                # 格式: x_range: [min, max]
-                domain = {
-                    'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
-                    'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
-                    'z_min': domain_data.get('z_range', [0, 1])[0],
-                    'z_max': domain_data.get('z_range', [0, 1])[1],
-                }
+        domain_data = physics_config.get('domain')
         
-        # 優先順序 2: data.jhtdb_config.domain
-        if domain is None:
-            data_config = self.config.get('data', {})
-            jhtdb_config = data_config.get('jhtdb_config', {})
-            if 'domain' in jhtdb_config:
-                domain_data = jhtdb_config['domain']
-                # 格式: x: [min, max]
-                domain = {
-                    'x_min': domain_data.get('x', [0, 1])[0],
-                    'x_max': domain_data.get('x', [0, 1])[1],
-                    'y_min': domain_data.get('y', [-1, 1])[0],
-                    'y_max': domain_data.get('y', [-1, 1])[1],
-                    'z_min': domain_data.get('z', [0, 1])[0] if 'z' in domain_data else 0.0,
-                    'z_max': domain_data.get('z', [0, 1])[1] if 'z' in domain_data else 1.0,
-                }
+        if domain_data is None:
+            raise KeyError(
+                "Config missing required key: physics.domain\n"
+                "Expected format:\n"
+                "  physics:\n"
+                "    domain:\n"
+                "      x_range: [min, max]\n"
+                "      y_range: [min, max]\n"
+                "\n"
+                "To migrate old configs, run:\n"
+                "  python scripts/tools/migrate_domain_config.py --config <file>"
+            )
         
-        # 優先順序 3: 頂層 domain
-        if domain is None:
-            domain_data = self.config.get('domain', None)
-            if domain_data is not None:
-                if 'x_range' in domain_data:
-                    domain = {
-                        'x_min': domain_data['x_range'][0], 'x_max': domain_data['x_range'][1],
-                        'y_min': domain_data['y_range'][0], 'y_max': domain_data['y_range'][1],
-                        'z_min': domain_data.get('z_range', [0, 1])[0],
-                        'z_max': domain_data.get('z_range', [0, 1])[1],
-                    }
-                elif 'x_min' in domain_data:
-                    domain = domain_data
+        # 驗證格式
+        if 'x_range' not in domain_data or 'y_range' not in domain_data:
+            raise ValueError(
+                f"Invalid physics.domain format: {domain_data}\n"
+                "Required keys: x_range, y_range\n"
+                "Optional keys: z_range"
+            )
         
-        # 預設值（通道流標準域）
-        if domain is None:
-            logging.warning("配置中未找到 domain 資訊，使用預設值（通道流 Re_tau=1000）")
-            domain = {
-                'x_min': 0.0, 'x_max': 25.13,
-                'y_min': -1.0, 'y_max': 1.0,
-                'z_min': 0.0, 'z_max': 9.42
-            }
+        # 解析 domain
+        domain = {
+            'x_min': domain_data['x_range'][0],
+            'x_max': domain_data['x_range'][1],
+            'y_min': domain_data['y_range'][0],
+            'y_max': domain_data['y_range'][1],
+            'z_min': domain_data.get('z_range', [0, 1])[0],
+            'z_max': domain_data.get('z_range', [0, 1])[1],
+        }
         
         return domain
     

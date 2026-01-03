@@ -22,13 +22,6 @@ data:
     enabled: true
     data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
     description: Kolmogorov flow (Re=50, k_f=4)
-    domain:
-      x:
-      - 0.0
-      - 6.283185307179586
-      y:
-      - 0.0
-      - 6.283185307179586
     resolution:
       x: 256
       y: 256
@@ -133,9 +126,9 @@ losses:
   periodicity_weight: 10.0
   normalize_losses: false
   adaptive_weighting: false
-  causal_weighting: true  # 啟用因果訓練（v2.0 優化版）
-  causal_eps: 1.5          # 因果強度（up from 0.5）
-  causal_n_bins: 20        # 時間分塊數（up from 10）
+  causal_weighting: true
+  causal_eps: 1.5
+  causal_n_bins: 20
 training:
   optimizer:
     type: soap

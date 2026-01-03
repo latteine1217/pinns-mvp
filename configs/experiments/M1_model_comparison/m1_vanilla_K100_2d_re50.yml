@@ -23,13 +23,6 @@ data:
     enabled: true
     data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
     description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
-    domain:
-      x:
-      - 0.0
-      - 6.283185307179586
-      y:
-      - 0.0
-      - 6.283185307179586
     resolution:
       x: 256
       y: 256

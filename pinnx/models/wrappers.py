@@ -556,14 +556,14 @@ def create_scaled_pinn(model_config: Dict,
     # 建立基礎模型
     base_model = create_pinn_model(model_config)
     
-    # 尺度器（舊接口）已移除：統一改用 pinnx.utils.normalization.UnifiedNormalizer + model.scaling
+    # 尺度器（舊接口）已移除：統一改用 pinnx.utils.normalization (InputTransform, OutputTransform) + model.scaling
     input_scaler = None
     output_scaler = None
 
     if scaler_config:
         raise ValueError(
             "scaler_config is no longer supported. "
-            "Use pinnx.utils.normalization.UnifiedNormalizer and model.scaling instead."
+            "Use pinnx.utils.normalization (InputTransform, OutputTransform) and model.scaling instead."
         )
     
     return ScaledPINNWrapper(
