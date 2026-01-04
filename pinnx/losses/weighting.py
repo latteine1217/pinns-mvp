@@ -26,16 +26,19 @@ import numpy as np
 import math
 from collections import defaultdict
 
+from pinnx.losses.weighting_base import LossWeighter, PointWeighter
+
 _EPS = 1e-12
 
 
-class GradNormWeighter:
+class GradNormWeighter(LossWeighter):
     """
     GradNorm 動態權重平衡器
-    
+
     基於梯度範數的自適應權重調整，確保不同損失項對模型參數的影響平衡。
     特別適用於 PINNs 中物理殘差、資料一致性、邊界條件等多項損失的平衡。
-    
+    遵循統一的 LossWeighter 接口。
+
     參考: GradNorm: Gradient Normalization for Adaptive Loss Balancing (ICML 2018)
     """
     
@@ -168,10 +171,23 @@ class GradNormWeighter:
             
         return gradients
     
-    def update_weights(self, 
-                      losses: Dict[str, torch.Tensor], 
-                      total_loss: Optional[torch.Tensor] = None) -> Dict[str, float]:
-        """更新動態權重"""
+    def update_weights(
+        self,
+        losses: Dict[str, torch.Tensor],
+        context: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        更新 GradNorm 動態權重
+
+        Args:
+            losses: 損失項字典
+            context: 上下文參數，可包含：
+                - total_loss (torch.Tensor): 總損失（可選）
+                - step (int): 當前步數（可選，用於同步）
+
+        Returns:
+            Dict[str, float]: 更新後的權重字典
+        """
         self.step_count += 1
         
         if self.initial_losses is None:
@@ -328,16 +344,17 @@ class GradNormWeighter:
                     break
 
 
-class CausalWeighter:
+class CausalWeighter(PointWeighter):
     """
     時間因果權重器 (Causal Training)
-    
+
     基於 Wang et al. (2022) "Respecting Causality is all you need for training Physics-Informed Neural Networks"
-    
+    遵循 PointWeighter 接口，計算每個時間點的因果權重。
+
     核心機制：
     w_k = exp(-epsilon * sum_{i<k} mean(L_i))
     其中 L_i 是第 i 個時間分塊的平均殘差平方。
-    
+
     優化版本（v2.0）：
     - 預計算因果矩陣（避免每次調用重新生成）
     - 支援多設備（CPU/CUDA/MPS）
@@ -389,19 +406,43 @@ class CausalWeighter:
         self.causal_matrix = self.causal_matrix.to(self.device)
         return self
     
-    def compute_weights(self, 
-                       pde_losses: torch.Tensor, 
-                       time_coords: torch.Tensor,
-                       return_pointwise: bool = True):
+    def compute_weights(
+        self,
+        residuals: torch.Tensor,
+        coords: torch.Tensor,
+        context: Dict[str, Any]
+    ) -> torch.Tensor:
         """
-        計算每個採樣點的因果權重（優化版本）
-        
+        計算每個採樣點的因果權重（符合 PointWeighter 接口）
+
         Args:
-            pde_losses: 每點的 PDE 損失值 [N, 1] 或 [N] (通常為殘差平方和)
+            residuals: 每點的殘差或損失值 [N, 1] 或 [N]
+            coords: 時間坐標 [N, 1] 或 [N]
+            context: 上下文參數，可包含：
+                - return_pointwise (bool): 是否返回點級權重（默認 True）
+
+        Returns:
+            torch.Tensor: 點權重 [N, 1]
+                若 context['return_pointwise']=False，返回 chunk 權重的重複版本
+        """
+        return_pointwise = context.get('return_pointwise', True)
+        return self._compute_weights_impl(residuals, coords, return_pointwise)
+
+    def _compute_weights_impl(
+        self,
+        pde_losses: torch.Tensor,
+        time_coords: torch.Tensor,
+        return_pointwise: bool = True
+    ):
+        """
+        計算每個採樣點的因果權重（內部實現）
+
+        Args:
+            pde_losses: 每點的 PDE 損失值 [N, 1] 或 [N]
             time_coords: 對應的時間坐標 [N, 1] 或 [N]
             return_pointwise: 若 True 返回 point-level 權重 [N, 1]；
                              若 False 返回 chunk-level (chunk_weights, chunk_means)
-            
+
         Returns:
             若 return_pointwise=True: torch.Tensor [N, 1] 權重張量
             若 return_pointwise=False: Tuple[torch.Tensor, torch.Tensor] (chunk_weights, chunk_means)
@@ -471,11 +512,14 @@ class CausalWeighter:
     # 舊接口（time_window / compute_causal_weights / temporal_decay）已移除
 
 
-class NTKWeighter:
+class NTKWeighter(LossWeighter):
     """
     神經正切核 (NTK) 權重器
+
+    基於神經正切核特徵值分析調整損失權重。
+    遵循統一的 LossWeighter 接口。
     """
-    
+
     def __init__(self,
                  model: nn.Module,
                  loss_names: List[str] = None,
@@ -514,25 +558,59 @@ class NTKWeighter:
         
         return eigenvals
     
-    def update_ntk_weights(self, data_inputs: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        self.step_count += 1
+    def update_weights(
+        self,
+        losses: Dict[str, torch.Tensor],
+        context: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        更新 NTK 權重
+
+        Args:
+            losses: 損失項字典
+            context: 上下文參數，需包含：
+                - x_train (torch.Tensor): 訓練數據
+                - step (int): 當前訓練步數（可選）
+
+        Returns:
+            Dict[str, float]: 更新後的權重字典
+        """
+        # 更新步數
+        step = context.get('step', self.step_count)
+        self.step_count = step + 1
+
+        # 低頻更新（避免計算開銷）
         if self.step_count % self.update_frequency != 0:
             return self.ntk_weights.copy()
-        # 這裡可以加入實際的 NTK 計算邏輯
+
+        # 提取訓練數據
+        x_train = context.get('x_train', None)
+        if x_train is None:
+            # 無訓練數據，返回當前權重
+            return self.ntk_weights.copy()
+
+        # TODO: 實際的 NTK 計算邏輯（預留擴展）
+        # 目前僅返回當前權重
         return self.ntk_weights.copy()
-    
-    def update_weights(self, losses: Dict[str, torch.Tensor], x_train: torch.Tensor, step: int = 0) -> Dict[str, float]:
-        data_inputs = {}
-        for name in losses.keys():
-            if name in self.loss_names:
-                data_inputs[name] = x_train
-        self.step_count = step
-        return self.update_ntk_weights(data_inputs)
+
+    def get_weights(self) -> Dict[str, float]:
+        """獲取當前緩存的 NTK 權重"""
+        return self.ntk_weights.copy()
+
+    def reset_weights(self) -> None:
+        """重置 NTK 權重到初始狀態"""
+        self.ntk_weights = {name: 1.0 for name in self.loss_names}
+        self.step_count = 0
 
 
-class AdaptiveWeightScheduler:
-    """自適應權重調度器"""
-    
+class AdaptiveWeightScheduler(LossWeighter):
+    """
+    自適應權重調度器
+
+    基於訓練階段（warmup / main / refinement）動態調整損失權重。
+    遵循統一的 LossWeighter 接口。
+    """
+
     def __init__(self,
                  loss_names: List[str],
                  phases: Dict[str, Dict] = None,
@@ -541,7 +619,7 @@ class AdaptiveWeightScheduler:
         self.loss_names = loss_names
         self.adaptation_method = adaptation_method
         self.adaptation_rate = adaptation_rate
-        
+
         if phases is None:
             phases = {
                 'warmup': {'duration_ratio': 0.1, 'weight_ratios': {name: 1.0 for name in loss_names}},
@@ -550,6 +628,7 @@ class AdaptiveWeightScheduler:
             }
         self.phases = phases
         self.current_phase = 'warmup'
+        self._cached_weights = {name: 1.0 for name in loss_names}
         
     def get_current_phase(self, current_step: int, total_steps: int) -> str:
         progress = current_step / total_steps
@@ -570,10 +649,38 @@ class AdaptiveWeightScheduler:
             weights[name] = weight_ratios.get(name, 1.0)
         return weights
 
-    def update_weights(self, losses: Dict[str, torch.Tensor], step: int = 0, total_steps: int = 100000) -> Dict[str, float]:
-        """回傳當前 phase 對應的權重配置（簡化版）"""
-        _ = losses  # losses 預留未來擴展，目前不影響 phase-based 權重
-        return self.get_phase_weights(step, total_steps)
+    def update_weights(
+        self,
+        losses: Dict[str, torch.Tensor],
+        context: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        根據訓練階段更新權重
+
+        Args:
+            losses: 損失項字典（當前實現未使用，預留擴展）
+            context: 上下文參數，需包含：
+                - step (int): 當前訓練步數
+                - total_steps (int): 總訓練步數
+
+        Returns:
+            Dict[str, float]: 當前階段的權重字典
+        """
+        step = context.get('step', 0)
+        total_steps = context.get('total_steps', 100000)
+
+        weights = self.get_phase_weights(step, total_steps)
+        self._cached_weights = weights  # 緩存最新權重
+        return weights
+
+    def get_weights(self) -> Dict[str, float]:
+        """獲取當前緩存的權重"""
+        return self._cached_weights.copy()
+
+    def reset_weights(self) -> None:
+        """重置到初始狀態"""
+        self.current_phase = 'warmup'
+        self._cached_weights = {name: 1.0 for name in self.loss_names}
 
 
 class MultiWeightManager:
@@ -636,10 +743,16 @@ class MultiWeightManager:
         
         final_weights = {name: 1.0 for name in self.loss_names}
         if 'gradnorm' in self.weighters:
-            grad_weights = self.weighters['gradnorm'].update_weights(losses)
+            # 使用統一的 LossWeighter 接口
+            context = {
+                'step': current_step,
+                'total_steps': total_steps,
+                **kwargs  # 傳遞額外的上下文參數
+            }
+            grad_weights = self.weighters['gradnorm'].update_weights(losses, context)
             for k, v in grad_weights.items():
                 final_weights[k] = v
-        
+
         return final_weights
     
     def get_weights(self):

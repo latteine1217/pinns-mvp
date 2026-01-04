@@ -304,9 +304,13 @@ class LossManager:
                 total_res_sq = torch.zeros_like(t_pde)
                 for r in residuals.values():
                     total_res_sq += r.detach()**2
-                
-                # 2. 計算權重 w(t)
-                causal_weights = causal_weighter.compute_weights(total_res_sq, t_pde)
+
+                # 2. 計算權重 w(t)（使用統一的 PointWeighter 接口）
+                causal_weights = causal_weighter.compute_weights(
+                    residuals=total_res_sq,
+                    coords=t_pde,
+                    context={'return_pointwise': True}
+                )
                 
                 # 3. 記錄權重統計（調試）
                 if epoch % 100 == 0 and epoch > 0:
@@ -726,7 +730,12 @@ class LossManager:
             logging.debug("GradNorm requires at least two loss terms; skipping update.")
             return None, {}
         
-        gradnorm_weights = gradnorm_weighter.update_weights(available_losses)
+        # 使用統一的 LossWeighter 接口
+        context = {
+            'step': gradnorm_weighter.step_count,
+            'total_loss': None  # GradNorm 當前實現未使用 total_loss
+        }
+        gradnorm_weights = gradnorm_weighter.update_weights(available_losses, context)
         initial_values = getattr(gradnorm_weighter, 'initial_weight_values', {})
         eps = float(getattr(gradnorm_weighter, 'eps', 1e-12))
         

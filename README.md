@@ -66,6 +66,13 @@ python scripts/evaluate/evaluate_checkpoint.py \
 
 ## 重要更新
 
+### ✅ v1.3.1 (2026-01-04): P1-3a Weighter 接口統一
+- **接口重構**: 統一所有 Loss Weighter 接口，消除方法名和參數簽名不一致
+- **抽象基類**: 新建 `LossWeighter` 和 `PointWeighter` 基類
+- **純多態**: GradNorm/NTK/Adaptive/Causal 全部遵循統一接口
+- **Context 模式**: 通過字典傳遞可選參數，避免簽名膨脹
+- **測試驗證**: 6/6 單元測試通過，P0 驗證完成
+
 ### ✅ v1.3.0 (2026-01-03): Registry Pattern + Schema Validation
 - **架構重構**: 完整遷移至 Registry Pattern（消除 18 個條件分支）
 - **型別安全**: Schema Validation with Union Types 支援
