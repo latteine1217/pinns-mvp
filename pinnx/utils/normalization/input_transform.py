@@ -7,12 +7,13 @@ import logging
 
 import torch
 
+from .base_normalizer import BaseNormalizer
 from .config import InputNormConfig
 
 logger = logging.getLogger(__name__)
 
 
-class InputTransform:
+class InputTransform(BaseNormalizer):
     """
     Coordinate normalization transform.
 
@@ -24,7 +25,8 @@ class InputTransform:
     """
 
     def __init__(self, config: InputNormConfig):
-        self.norm_type = (config.norm_type or "none").lower()
+        norm_type = (config.norm_type or "none").lower()
+        super().__init__(norm_type=norm_type)
         self.feature_range = config.feature_range
         self.bounds = config.bounds
 

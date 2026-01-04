@@ -1,12 +1,16 @@
 """Normalization package exports."""
 
-from .config import InputNormConfig, OutputNormConfig
+from .base_normalizer import BaseNormalizer
+from .config import BaseNormConfig, InputNormConfig, OutputNormConfig
 from .input_transform import InputTransform
-from .output_transform import OutputTransform
+from .output_transform import OutputTransform, compute_friction_velocity_scales
 
 __all__ = [
+    "BaseNormalizer",
+    "BaseNormConfig",
     "InputNormConfig",
     "OutputNormConfig",
     "InputTransform",
     "OutputTransform",
+    "compute_friction_velocity_scales",
 ]

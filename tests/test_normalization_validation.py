@@ -192,19 +192,29 @@ class TestOutputTransformValidation:
         # 應該失敗，因為退回到 DEFAULT_VAR_ORDER 但沒有提供統計量
         assert transform.has_valid_stats() == False
     
-    def test_friction_velocity_mode(self):
+    def test_friction_velocity_helper(self):
         """
-        測試案例 12: friction_velocity 模式也需要驗證統計量
+        測試案例 12: compute_friction_velocity_scales() 輔助函數
         """
+        from pinnx.utils.normalization import compute_friction_velocity_scales
+
+        # 計算摩擦速度尺度
+        means, stds = compute_friction_velocity_scales(u_tau=0.045, rho=1.0)
+
+        # 使用 manual 模式
         config = OutputNormConfig(
-            norm_type='friction_velocity',
+            norm_type='manual',
             variable_order=['u', 'v', 'w', 'p'],
-            means={'u': 0.0, 'v': 0.0, 'w': 0.0, 'p': 0.0},
-            stds={'u': 0.045, 'v': 0.045, 'w': 0.045, 'p': 2.025}
+            means=means,
+            stds=stds
         )
         transform = OutputTransform(config)
-        
+
         assert transform.has_valid_stats() == True
+        assert stds['u'] == 0.045
+        assert stds['v'] == 0.045
+        assert stds['w'] == 0.045
+        assert stds['p'] == 1.0 * 0.045**2  # ρ * u_τ²
     
     def test_manual_mode_with_invalid_stats(self):
         """

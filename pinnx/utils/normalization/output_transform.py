@@ -8,27 +8,83 @@ import logging
 import numpy as np
 import torch
 
+from .base_normalizer import BaseNormalizer
 from .config import OutputNormConfig
 
 logger = logging.getLogger(__name__)
 
 
-class OutputTransform:
+def compute_friction_velocity_scales(
+    u_tau: float, rho: float = 1.0, variable_order: Optional[List[str]] = None
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """計算基於摩擦速度的標準化係數
+
+    用於替代 friction_velocity 模式。計算公式：
+    - 速度尺度: u_τ
+    - 壓力尺度: ρ · u_τ²
+
+    Args:
+        u_tau: 摩擦速度 (friction velocity)
+        rho: 流體密度（默認 1.0）
+        variable_order: 變量順序（默認 ['u', 'v', 'w', 'p']）
+
+    Returns:
+        (means, stds) 元組，可直接用於 manual 模式
+
+    Example:
+        >>> means, stds = compute_friction_velocity_scales(u_tau=0.05, rho=1.0)
+        >>> config = OutputNormConfig(
+        ...     norm_type='manual',
+        ...     variable_order=['u', 'v', 'w', 'p'],
+        ...     means=means,
+        ...     stds=stds
+        ... )
+        >>> transform = OutputTransform(config)
+    """
+    if variable_order is None:
+        variable_order = ["u", "v", "w", "p"]
+
+    velocity_scale = u_tau
+    pressure_scale = rho * u_tau**2
+
+    means = {}
+    stds = {}
+
+    for var in variable_order:
+        means[var] = 0.0
+        if var in ("u", "v", "w"):
+            stds[var] = velocity_scale
+        elif var == "p":
+            stds[var] = pressure_scale
+        else:
+            # 未知變量，設為 1.0 避免除零
+            stds[var] = 1.0
+            logger.warning(f"⚠️ 變量 '{var}' 無摩擦速度尺度定義，使用 std=1.0")
+
+    logger.info(f"📐 計算摩擦速度尺度: u_τ={u_tau}, ρ={rho}")
+    logger.info(f"   速度尺度={velocity_scale}, 壓力尺度={pressure_scale}")
+
+    return means, stds
+
+
+class OutputTransform(BaseNormalizer):
     """
     Variable normalization transform.
 
     Supported:
     - none
     - training_data_norm
-    - friction_velocity
     - manual
     - dns_ground_truth_norm
+
+    Note:
+        friction_velocity 模式已移除，請使用 compute_friction_velocity_scales() 輔助函數
+        配合 manual 模式替代。
     """
 
     SUPPORTED_TYPES = [
         "none",
         "training_data_norm",
-        "friction_velocity",
         "manual",
         "dns_ground_truth_norm",
     ]
@@ -40,7 +96,7 @@ class OutputTransform:
                 f"不支援的標準化類型: {config.norm_type}。支援: {self.SUPPORTED_TYPES}"
             )
 
-        self.norm_type = config.norm_type
+        super().__init__(norm_type=config.norm_type)
         self.variable_order = config.variable_order or self.DEFAULT_VAR_ORDER.copy()
         self.means = config.means or {}
         self.stds = config.stds or {}
@@ -149,8 +205,6 @@ class OutputTransform:
         elif norm_type == "dns_ground_truth_norm":
             means, stds = cls._extract_dns_ground_truth_scales(params, config)
             variable_order = list(means.keys())
-        elif norm_type == "friction_velocity":
-            means, stds = cls._extract_friction_velocity_scales(params, config)
         elif norm_type == "manual":
             means = {k.replace("_mean", ""): v for k, v in params.items() if k.endswith("_mean")}
             stds = {k.replace("_std", ""): v for k, v in params.items() if k.endswith("_std")}
@@ -236,43 +290,6 @@ class OutputTransform:
             "請在配置中提供 normalization.params (u_mean, u_std, ...)\n"
             "或傳入 training_data 以自動計算。"
         )
-
-    @staticmethod
-    def _extract_friction_velocity_scales(
-        params: Dict,
-        config: Dict,
-    ) -> Tuple[Dict[str, float], Dict[str, float]]:
-        """Extract friction-velocity scales."""
-        u_tau = params.get("u_tau")
-        if u_tau is None and "physics" in config:
-            physics = config["physics"]
-            if "channel_flow" in physics:
-                u_tau = physics["channel_flow"].get("u_tau", 1.0)
-            else:
-                u_tau = 1.0
-
-        if u_tau is None:
-            raise ValueError("friction_velocity 模式需要提供 u_tau 參數")
-
-        rho = params.get("rho")
-        if rho is None and "physics" in config:
-            rho = config["physics"].get("rho", 1.0)
-        if rho is None:
-            rho = 1.0
-
-        velocity_scale = u_tau
-        pressure_scale = rho * u_tau**2
-
-        means = {"u": 0.0, "v": 0.0, "w": 0.0, "p": 0.0}
-        stds = {
-            "u": velocity_scale,
-            "v": velocity_scale,
-            "w": velocity_scale,
-            "p": pressure_scale,
-        }
-
-        logger.info(f"📐 Friction velocity scales: u_τ={u_tau}, ρ={rho}")
-        return means, stds
 
     @staticmethod
     def _extract_dns_ground_truth_scales(
@@ -554,3 +571,43 @@ class OutputTransform:
             "stds": self.stds.copy(),
             "params": self.params.copy(),
         }
+
+    def transform(self, predictions: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+        """標準化數據（BaseNormalizer 接口實現）
+
+        Args:
+            predictions: 原始預測值
+
+        Returns:
+            標準化後的預測值
+        """
+        return self.normalize_batch(predictions, var_order=None)
+
+    def inverse_transform(
+        self, predictions: Union[np.ndarray, torch.Tensor]
+    ) -> Union[np.ndarray, torch.Tensor]:
+        """反標準化數據（BaseNormalizer 接口實現）
+
+        Args:
+            predictions: 標準化後的預測值
+
+        Returns:
+            物理空間的預測值
+        """
+        return self.denormalize_batch(predictions, var_order=None)
+
+    def to(self, device: torch.device) -> "OutputTransform":
+        """移動到指定設備（BaseNormalizer 接口實現）
+
+        Note:
+            OutputTransform 目前不持有 tensor 參數，因此此方法為空操作
+            保留此方法以符合 BaseNormalizer 接口
+
+        Args:
+            device: 目標設備
+
+        Returns:
+            self
+        """
+        # OutputTransform 使用 dict[str, float] 存儲統計量，無需移動設備
+        return self
