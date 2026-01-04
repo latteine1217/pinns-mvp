@@ -66,6 +66,22 @@ python scripts/evaluate/evaluate_checkpoint.py \
 
 ## 重要更新
 
+### ✅ v1.3.3 (2026-01-04): P2-2 ValidationManager 解耦
+- **Strategy Pattern**: 將 Trainer 中 150+ 行驗證邏輯提取到獨立 ValidationManager
+- **責任分離**: DataBasedValidation 處理數據驗證，PhysicsBasedValidation 處理物理驗證
+- **依賴注入**: Trainer 通過建構子接收 ValidationManager 實例，支援自定義驗證策略
+- **可組合性**: 支援多種驗證策略組合使用（數據 + 物理）
+- **測試覆蓋**: 15/15 ValidationManager 單元測試 + 2/2 Trainer 集成測試通過
+- **代碼減少**: Trainer.py -154 行（移除冗餘驗證方法），新增 validation_manager.py +463 行
+
+### ✅ v1.3.2 (2026-01-04): P2-1 CheckpointManager 解耦
+- **Manager Pattern**: 將 Trainer 中 300+ 行 checkpoint 邏輯提取到獨立 CheckpointManager
+- **責任分離**: StandardCheckpointManager 處理 I/O，PeriodicCheckpointStrategy 管理保存策略
+- **依賴注入**: Trainer 通過建構子接收 CheckpointManager 實例，支援自定義實現
+- **向後兼容**: 保留 `best_model.pth` 文件格式，所有現有測試通過
+- **測試覆蓋**: 13/13 CheckpointManager 單元測試 + 2/2 Trainer 集成測試通過
+- **代碼減少**: Trainer.py -54 行（移除 `_build_checkpoint_data`），新增 checkpoint_manager.py +491 行
+
 ### ✅ v1.3.1 (2026-01-04): P1-3a Weighter 接口統一
 - **接口重構**: 統一所有 Loss Weighter 接口，消除方法名和參數簽名不一致
 - **抽象基類**: 新建 `LossWeighter` 和 `PointWeighter` 基類

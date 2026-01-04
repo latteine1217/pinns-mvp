@@ -69,6 +69,9 @@ class Trainer:
         input_normalizer: Optional[InputTransform] = None,
         channel_data_cache: Optional[Dict[str, Any]] = None,
         training_data: Optional[Dict[str, torch.Tensor]] = None,
+        checkpoint_manager: Optional['CheckpointManager'] = None,
+        checkpoint_strategy: Optional['PeriodicCheckpointStrategy'] = None,
+        validation_manager: Optional['ValidationManager'] = None,
     ):
         """
         初始化訓練器（重構版：拆分為多個職責清晰的子方法）
@@ -83,13 +86,17 @@ class Trainer:
             input_normalizer: 輸入標準化器（可選）
             channel_data_cache: 通道流資料快取（可選）
             training_data: 訓練資料（用於自動計算標準化統計量，可選）
+            checkpoint_manager: Checkpoint 管理器（可選，未提供時使用默認 StandardCheckpointManager）
+            checkpoint_strategy: Checkpoint 保存策略（可選，未提供時使用默認 PeriodicCheckpointStrategy）
+            validation_manager: Validation 管理器（可選，未提供時使用默認 ValidationManager）
         """
         # ========== 配置驗證（Fail Fast）==========
         self._validate_config_early(config)
         
         # 基本組件初始化
         self._init_basic_components(model, physics, losses, config, device,
-                                    weighters, input_normalizer, channel_data_cache)
+                                    weighters, input_normalizer, channel_data_cache,
+                                    checkpoint_manager, checkpoint_strategy, validation_manager)
 
         # 標準化器初始化與驗證
         self._init_normalizers(config, training_data)
@@ -108,6 +115,9 @@ class Trainer:
 
         # 指標追蹤工具初始化
         self._init_metrics_tracking(config)
+
+        # 驗證組件初始化
+        self._init_validation_components()
 
         logging.info(f"✅ Trainer 初始化完成（設備: {device}）")
 
@@ -147,7 +157,10 @@ class Trainer:
         device: torch.device,
         weighters: Optional[Dict[str, Any]],
         input_normalizer: Optional[InputTransform],
-        channel_data_cache: Optional[Dict[str, Any]]
+        channel_data_cache: Optional[Dict[str, Any]],
+        checkpoint_manager: Optional['CheckpointManager'],
+        checkpoint_strategy: Optional['PeriodicCheckpointStrategy'],
+        validation_manager: Optional['ValidationManager']
     ):
         """初始化基本組件"""
         self.model = model
@@ -158,6 +171,13 @@ class Trainer:
         self.weighters = weighters or {}
         self.input_normalizer = input_normalizer
         self.channel_data_cache = channel_data_cache or {}
+
+        # Checkpoint 組件（待後續初始化）
+        self._checkpoint_manager_arg = checkpoint_manager
+        self._checkpoint_strategy_arg = checkpoint_strategy
+
+        # Validation 組件（待後續初始化）
+        self._validation_manager_arg = validation_manager
 
         # 提取常用配置
         self.train_cfg = config['training']
@@ -210,9 +230,8 @@ class Trainer:
         self.patience_counter = 0
         self.best_model_state: Optional[Dict[str, torch.Tensor]] = None
 
-        # 檢查點配置
-        self.checkpoint_dir = Path(config.get('output', {}).get('checkpoint_dir', 'checkpoints'))
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        # Checkpoint 組件初始化
+        self._init_checkpoint_components(config)
 
     def _init_wandb(self, config: Dict[str, Any]):
         """初始化 WandB（提取並簡化深層嵌套邏輯）"""
@@ -278,6 +297,86 @@ class Trainer:
         metadata = config['experiment']['_config_metadata']
         for key, value in metadata.items():
             wandb.config.update({f'_meta_{key}': value}, allow_val_change=True)
+
+    def _init_checkpoint_components(self, config: Dict[str, Any]):
+        """初始化 Checkpoint 管理組件"""
+        from pinnx.train.checkpoint_manager import (
+            StandardCheckpointManager,
+            PeriodicCheckpointStrategy
+        )
+
+        # 檢查點目錄（保留供其他用途）
+        self.checkpoint_dir = Path(config.get('output', {}).get('checkpoint_dir', 'checkpoints'))
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # 初始化 CheckpointManager（使用傳入的實例或創建默認實例）
+        self.checkpoint_manager = self._checkpoint_manager_arg or StandardCheckpointManager(
+            checkpoint_dir=str(self.checkpoint_dir),
+            save_optimizer=True,
+            save_physics_validation=True,
+            compress=False
+        )
+
+        # 初始化 CheckpointStrategy（使用傳入的實例或創建默認實例）
+        self.checkpoint_strategy = self._checkpoint_strategy_arg or PeriodicCheckpointStrategy(
+            save_interval=config.get('training', {}).get('checkpoint_interval', 100),
+            keep_best_k=3,
+            metric_name='total_loss',
+            mode='min'
+        )
+
+        logging.info(f"✅ CheckpointManager 初始化完成（目錄: {self.checkpoint_dir}）")
+
+    def _init_validation_components(self):
+        """初始化 Validation 管理組件"""
+        from pinnx.train.validation_manager import (
+            ValidationManager,
+            DataBasedValidation,
+            PhysicsBasedValidation
+        )
+
+        # 使用傳入的實例或創建默認實例
+        if self._validation_manager_arg is not None:
+            self.validation_manager = self._validation_manager_arg
+            logging.info("✅ ValidationManager 初始化完成（使用自定義實例）")
+            return
+
+        # 創建默認 ValidationManager
+        self.validation_manager = ValidationManager()
+
+        # 添加數據驗證策略（如果有驗證數據）
+        if hasattr(self, 'validation_data') and self.validation_data is not None:
+            # 創建輔助函數用於模型輸入預處理
+            def preprocess_coords(coords):
+                _, _, coords_for_model = self._prepare_model_coords(
+                    coords, require_grad=False, is_vs_pinn=None
+                )
+                return coords_for_model
+
+            # 創建變量順序推斷函數
+            def infer_var_order(n_outputs):
+                return self._infer_variable_order(n_outputs, context='validation')
+
+            data_strategy = DataBasedValidation(
+                validation_data=self.validation_data,
+                metrics=['mse', 'relative_l2'],
+                data_normalizer=self.data_normalizer,
+                model_input_preprocessor=preprocess_coords,
+                variable_order_inference=infer_var_order
+            )
+            self.validation_manager.add_strategy(data_strategy)
+
+        # 添加物理驗證策略（如果配置了）
+        if hasattr(self, 'physics_validator') and self.physics_validator is not None:
+            physics_strategy = PhysicsBasedValidation(
+                physics_validator=self.physics_validator
+            )
+            self.validation_manager.add_strategy(physics_strategy)
+
+        if self.validation_manager.has_strategies():
+            logging.info(f"✅ ValidationManager 初始化完成（配置了 {len(self.validation_manager.strategies)} 個策略）")
+        else:
+            logging.info("ℹ️  ValidationManager 初始化完成（無驗證策略）")
 
     def _init_loss_components(self):
         """初始化損失組件（Prior Loss Manager 與 LossManager）"""
@@ -1169,179 +1268,25 @@ class Trainer:
 
     def validate(self) -> Optional[Dict[str, float]]:
         """
-        計算驗證指標（MSE 與 relative L2）（Phase 3 重構版）
-        
-        Returns:
-            驗證指標字典，若無驗證資料則返回 None
-            - 'mse': 均方誤差
-            - 'relative_l2': 相對 L2 誤差
-        """
-        # 1. 檢查驗證資料
-        result = self._validate_data_available()
-        if result is None:
-            return None
-        coords, targets = result
-        
-        # 2. 執行模型推理
-        preds_phys = self._run_validation_inference(coords)
-        
-        # 3. 計算驗證指標
-        return self._compute_validation_metrics(preds_phys, targets)
-    
-    # ========================================================================
-    # 驗證輔助方法（Phase 3 重構）
-    # ========================================================================
-    
-    def _validate_data_available(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        檢查驗證資料是否可用
-        
-        Returns:
-            (coords, targets) 或 None（若驗證資料不可用）
-        """
-        if self.validation_data is None:
-            return None
-        if self.validation_data.get('size', 0) == 0:
-            return None
-        
-        coords = self.validation_data.get('coords')
-        targets = self.validation_data.get('targets')
-        
-        if coords is None or targets is None or coords.numel() == 0 or targets.numel() == 0:
-            return None
-        
-        # 移動至設備
-        coords = coords.to(self.device)
-        targets = targets.to(self.device)
-        
-        return coords, targets
-    
-    def _run_validation_inference(self, coords: torch.Tensor) -> torch.Tensor:
-        """
-        執行驗證推理（模型評估模式）
-        
-        Args:
-            coords: 驗證坐標 [N, d]
-        
-        Returns:
-            預測值（物理空間）[N, n_vars]
-        """
-        # 保存訓練狀態
-        training_mode = self.model.training
-        self.model.eval()
-        
-        try:
-            with torch.no_grad():
-                # 坐標預處理
-                _, _, coords_for_model = self._prepare_model_coords(
-                    coords, require_grad=False, is_vs_pinn=None
-                )
-                
-                # 模型預測（標準化空間）
-                preds_norm = self.model(coords_for_model)
-                
-                # 反標準化為物理量
-                var_order_val = self._infer_variable_order(preds_norm.shape[1], context='validation')
-                preds_phys_raw = self.data_normalizer.denormalize_batch(preds_norm, var_order=var_order_val)
-                preds_phys: torch.Tensor = preds_phys_raw if isinstance(preds_phys_raw, torch.Tensor) else torch.tensor(preds_phys_raw, device=self.device)  # type: ignore
-                
-                return preds_phys
-        finally:
-            # 恢復訓練狀態
-            if training_mode:
-                self.model.train()
-    
-    def _run_physics_validation(self) -> Optional[Dict[str, Any]]:
-        """
-        執行物理約束驗證
+        計算驗證指標（委託給 ValidationManager）
 
         Returns:
-            物理驗證結果字典，若驗證失敗則返回 None
+            驗證指標字典，若無驗證策略則返回 None
         """
-        if self.validation_data is None:
+        # 檢查是否有驗證策略
+        if not self.validation_manager.has_strategies():
             return None
 
-        try:
-            # 準備驗證資料
-            coords = self.validation_data.get('coords')
-            if coords is None or coords.numel() == 0:
-                return None
+        # 委託給 ValidationManager 執行所有驗證策略
+        results = self.validation_manager.validate(
+            model=self.model,
+            device=self.device,
+            validation_data=self.validation_data,
+            is_3d=(self.model_input_dim == 3),
+            log_to_wandb=self.use_wandb
+        )
 
-            coords = coords.to(self.device)
-
-            # 提取座標分量
-            if self.is_vs_cfg or coords.shape[-1] == 3:
-                # 3D: x, y, z
-                x = coords[:, 0:1].requires_grad_(True)
-                y = coords[:, 1:2].requires_grad_(True)
-                z = coords[:, 2:3].requires_grad_(True)
-            else:
-                # 2D: x, y
-                x = coords[:, 0:1].requires_grad_(True)
-                y = coords[:, 1:2].requires_grad_(True)
-                z = None
-
-            # 準備模型輸入
-            _, _, coords_for_model = self._prepare_model_coords(
-                coords, require_grad=False, is_vs_pinn=None
-            )
-
-            # 使用 PhysicsValidator 驗證
-            test_data = {'x': x, 'y': y}
-            if z is not None:
-                test_data['z'] = z
-
-            # 執行驗證
-            physics_results = self.physics_validator.validate(
-                model=self.model,
-                test_data=test_data,
-                log_to_wandb=self.use_wandb
-            )
-
-            return physics_results
-
-        except Exception as e:
-            logging.warning(f"⚠️  物理驗證執行失敗: {e}")
-            return None
-
-    def _compute_validation_metrics(
-        self,
-        preds: torch.Tensor,
-        targets: torch.Tensor
-    ) -> Dict[str, float]:
-        """
-        計算驗證指標
-
-        Args:
-            preds: 預測值 [N, n_pred]
-            targets: 目標值 [N, n_target]
-
-        Returns:
-            驗證指標字典 {'mse': ..., 'relative_l2': ...}
-        """
-        # 處理維度不匹配
-        n_pred = preds.shape[1]
-        n_targets = targets.shape[1]
-        n_common = min(n_pred, n_targets)
-        
-        if n_pred != n_targets:
-            logging.debug(
-                f"[Validation] 輸出維度不匹配 (pred={n_pred}, target={n_targets})；"
-                f"比較前 {n_common} 個分量。"
-            )
-        
-        preds_final = preds[:, :n_common]
-        targets_final = targets[:, :n_common]
-        
-        # 計算誤差指標
-        diff = preds_final - targets_final
-        mse = torch.mean(diff**2).item()
-        rel_l2 = relative_L2(preds_final, targets_final).mean().item()
-        
-        return {
-            'mse': mse,
-            'relative_l2': rel_l2
-        }
+        return results if results else None
     
     # ========================================================================
     # 訓練循環
@@ -1796,148 +1741,126 @@ class Trainer:
                 # 繼續保存，讓使用者根據診斷資訊判斷
         
         return physics_metrics
-    
-    def _build_checkpoint_data(
-        self, 
-        epoch: int, 
-        metrics: Optional[Dict[str, float]], 
-        physics_metrics: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        打包所有需要保存的狀態到檢查點字典（Phase 4-1 Helper）
-        
-        Args:
-            epoch: 當前 epoch
-            metrics: 評估指標（可選）
-            physics_metrics: 物理驗證指標
-        
-        Returns:
-            checkpoint_data: 包含所有狀態的字典
-        """
-        checkpoint_data = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'history': self.history,
-            'config': self.config,
-        }
-        
-        # 保存 physics 的 state_dict（VS-PINN 縮放參數等）
-        if self.physics is not None and hasattr(self.physics, 'state_dict'):
-            checkpoint_data['physics_state_dict'] = self.physics.state_dict()
-            logging.debug(f"💾 Physics state saved: {list(self.physics.state_dict().keys())}")
-        
-        # 保存標準化 metadata
-        checkpoint_data['normalization'] = self.data_normalizer.get_metadata()
-        logging.debug(f"💾 Normalization metadata saved: type={self.data_normalizer.norm_type}")
-        
-        # 保存 GradScaler 狀態（AMP）
-        if self.use_amp and hasattr(self, 'scaler'):
-            checkpoint_data['scaler_state_dict'] = self.scaler.state_dict()
-            logging.debug(f"💾 GradScaler state saved: scale={self.scaler.get_scale():.0f}")
-        
-        # 保存物理驗證指標
-        if physics_metrics:
-            checkpoint_data['physics_metrics'] = physics_metrics
-            logging.debug(f"💾 Physics metrics saved: validation_passed={physics_metrics.get('validation_passed', False)}")
-        
-        # 保存評估指標
-        if metrics:
-            checkpoint_data['metrics'] = metrics
-        
-        # 保存 learning rate scheduler
-        if self.lr_scheduler:
-            checkpoint_data['lr_scheduler_state_dict'] = self.lr_scheduler.state_dict()
-        
-        return checkpoint_data
-    
+
     def save_checkpoint(
         self,
         epoch: int,
         metrics: Optional[Dict[str, float]] = None,
         is_best: bool = False
-    ) -> None:
+    ) -> Optional[str]:
         """
-        保存檢查點（Phase 4 重構版）
-        
+        保存檢查點（委託給 CheckpointManager）
+
         Args:
             epoch: 當前 epoch
             metrics: 評估指標（可選）
             is_best: 是否為最佳模型
+
+        Returns:
+            保存的文件路徑，如果未保存則返回 None
         """
         try:
-            # 1. 解析 domain 配置
-            domain = self._parse_domain_from_config()
-            
-            # 2. 生成驗證座標
-            validation_coords = self._generate_validation_coords(domain)
-            
-            # 3. 執行物理驗證（可能 early return via exception）
-            physics_metrics = self._run_physics_validation_before_save(validation_coords)
-            
-            # 4. 打包檢查點數據
-            checkpoint_data = self._build_checkpoint_data(epoch, metrics, physics_metrics)
-            
-            # 5. 保存到磁碟
-            checkpoint_path = self.checkpoint_dir / f"epoch_{epoch}.pth"
-            torch.save(checkpoint_data, checkpoint_path)
-            logging.info(f"💾 檢查點已保存: {checkpoint_path}")
-            
-            # 6. 如果是最佳模型，額外保存
+            # 1. 執行物理驗證（如果配置了 physics）
+            physics_metrics = {}
+            if self.physics is not None and 'physics' in self.config and 'domain' in self.config['physics']:
+                domain = self._parse_domain_from_config()
+                validation_coords = self._generate_validation_coords(domain)
+                physics_metrics = self._run_physics_validation_before_save(validation_coords)
+
+            # 2. 準備額外數據
+            extra_data = {
+                'physics_validation': physics_metrics,
+                'normalizers': self.data_normalizer.get_metadata(),
+            }
+
+            # 保存 physics state_dict（VS-PINN 縮放參數等）
+            if self.physics is not None and hasattr(self.physics, 'state_dict'):
+                extra_data['physics_state_dict'] = self.physics.state_dict()
+
+            # 保存 GradScaler 狀態（AMP）
+            if self.use_amp and hasattr(self, 'scaler'):
+                extra_data['scaler_state'] = self.scaler.state_dict()
+
+            # 保存 learning rate scheduler
+            if self.lr_scheduler:
+                extra_data['scheduler_state'] = self.lr_scheduler.state_dict()
+
+            # 保存訓練歷史
+            extra_data['history'] = self.history
+
+            # 3. 委託給 CheckpointManager 保存
+            filepath = self.checkpoint_manager.save(
+                model=self.model,
+                optimizer=self.optimizer,
+                epoch=epoch,
+                metrics=metrics or {},
+                config=self.config,
+                **extra_data
+            )
+
+            # 4. 更新最佳 checkpoint 記錄
+            if is_best and metrics:
+                metric_value = metrics.get(self.checkpoint_strategy.metric_name, float('inf'))
+                self.checkpoint_strategy.update_best_checkpoints(metric_value, filepath)
+
+            # 5. 向後兼容：如果是最佳模型，額外保存為 best_model.pth
             if is_best:
-                best_path = self.checkpoint_dir / "best_model.pth"
-                torch.save(checkpoint_data, best_path)
-                logging.info(f"⭐ 最佳模型已保存: {best_path}")
-                
+                best_model_path = self.checkpoint_dir / "best_model.pth"
+                import shutil
+                shutil.copy2(filepath, best_model_path)
+                logging.info(f"⭐ 最佳模型已保存: {best_model_path}")
+
+            return filepath
+
         except RuntimeError as e:
             # 處理 strict mode 拒絕保存的情況（來自 _run_physics_validation_before_save）
             if "Physics validation failed" in str(e):
                 logging.warning("檢查點保存被中止（physics validation failed）")
-                return
+                return None
             else:
                 raise  # 其他 RuntimeError 繼續拋出
     
     def load_checkpoint(self, checkpoint_path: str):
         """
-        載入檢查點
-        
+        載入檢查點（委託給 CheckpointManager）
+
         Args:
             checkpoint_path: 檢查點路徑
         """
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.epoch = checkpoint['epoch']
-        self.history = checkpoint.get('history', self.history)
-        
-        # 恢復 physics 的 state_dict（VS-PINN 縮放參數等）
-        if self.physics is not None:
-            if 'physics_state_dict' not in checkpoint:
-                raise KeyError("checkpoint 缺少必要欄位: physics_state_dict")
+        # 1. 委託給 CheckpointManager 加載基本數據
+        checkpoint_data = self.checkpoint_manager.load(
+            checkpoint_path=checkpoint_path,
+            model=self.model,
+            optimizer=self.optimizer
+        )
+
+        # 2. 恢復訓練狀態
+        self.epoch = checkpoint_data['epoch']
+        self.history = checkpoint_data.get('history', self.history)
+
+        # 3. 恢復 physics state（VS-PINN 縮放參數等）
+        if self.physics is not None and 'physics_state_dict' in checkpoint_data:
             if not hasattr(self.physics, 'load_state_dict'):
                 raise AttributeError("Physics module does not support load_state_dict()")
-            self.physics.load_state_dict(checkpoint['physics_state_dict'])
-            logging.info(f"✅ Physics state restored: {list(checkpoint['physics_state_dict'].keys())}")
-        
-        # 恢復標準化器
-        if 'normalization' not in checkpoint:
-            raise KeyError("checkpoint 缺少必要欄位: normalization")
-        self.data_normalizer = OutputTransform.from_metadata(checkpoint['normalization'])
-        logging.info(f"✅ OutputTransform restored: {self.data_normalizer}")
-        
-        # 恢復 GradScaler 狀態（AMP）
-        if self.use_amp:
+            self.physics.load_state_dict(checkpoint_data['physics_state_dict'])
+            logging.info(f"✅ Physics state restored: {list(checkpoint_data['physics_state_dict'].keys())}")
+
+        # 4. 恢復標準化器
+        if 'normalizers' in checkpoint_data:
+            self.data_normalizer = OutputTransform.from_metadata(checkpoint_data['normalizers'])
+            logging.info(f"✅ OutputTransform restored: {self.data_normalizer}")
+
+        # 5. 恢復 GradScaler 狀態（AMP）
+        if self.use_amp and 'scaler_state' in checkpoint_data:
             if not hasattr(self, 'scaler'):
                 raise AttributeError("AMP enabled but trainer lacks GradScaler instance")
-            if 'scaler_state_dict' not in checkpoint:
-                raise KeyError("checkpoint is missing required 'scaler_state_dict' for AMP recovery")
-            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            self.scaler.load_state_dict(checkpoint_data['scaler_state'])
             logging.info(f"✅ GradScaler state restored: scale={self.scaler.get_scale():.0f}")
-        
-        if self.lr_scheduler and 'lr_scheduler_state_dict' in checkpoint:
-            self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
-        
+
+        # 6. 恢復 learning rate scheduler
+        if self.lr_scheduler and 'scheduler_state' in checkpoint_data:
+            self.lr_scheduler.load_state_dict(checkpoint_data['scheduler_state'])
+
         logging.info(f"✅ 檢查點已載入: {checkpoint_path}（epoch={self.epoch}）")
     
     def check_early_stopping(self, val_loss: float) -> bool:
