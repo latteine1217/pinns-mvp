@@ -5,9 +5,12 @@
 """
 
 import logging
+from typing import Optional, Dict, Any
+
+from .base import WeightScheduler
 
 
-class StagedWeightScheduler:
+class StagedWeightScheduler(WeightScheduler):
     """階段式權重調度器 - 根據 epoch 切換不同訓練階段的權重"""
     
     def __init__(self, phases: list):
@@ -29,9 +32,9 @@ class StagedWeightScheduler:
         for p in self.phases:
             logging.info(f"   {p['name']}: Epoch {p['epoch_range'][0]}-{p['epoch_range'][1]}")
     
-    def get_phase_weights(self, epoch: int) -> tuple:
+    def _find_phase_and_check_transition(self, epoch: int) -> tuple[Dict[str, float], str, bool]:
         """
-        獲取當前 epoch 對應的權重
+        內部方法：找到當前階段並檢測是否為切換點
         
         Returns:
             (weights_dict, phase_name, is_transition)
@@ -50,3 +53,44 @@ class StagedWeightScheduler:
         # 如果超出所有階段，返回最後階段
         last_phase = self.phases[-1]
         return last_phase['weights'], last_phase['name'], False
+    
+    # ========================================================================
+    # 統一接口實作（WeightScheduler ABC）
+    # ========================================================================
+    
+    def get_weights(self, epoch: int) -> Dict[str, float]:
+        """
+        獲取當前 epoch 的損失權重（統一接口）
+        
+        Args:
+            epoch: 當前訓練輪次
+            
+        Returns:
+            權重字典，例如：
+            {
+                'data': 100.0,
+                'momentum_x': 1.0,
+                'continuity': 1.0,
+                'boundary': 10.0
+            }
+        """
+        weights, _, _ = self._find_phase_and_check_transition(epoch)
+        return weights
+    
+    def get_metadata(self, epoch: int) -> Optional[Dict[str, Any]]:
+        """
+        獲取當前 epoch 的階段元數據（統一接口）
+        
+        Args:
+            epoch: 當前訓練輪次
+            
+        Returns:
+            元數據字典，包含：
+            - phase_name: 階段名稱
+            - is_transition: 是否為階段切換點
+        """
+        _, phase_name, is_transition = self._find_phase_and_check_transition(epoch)
+        return {
+            'phase_name': phase_name,
+            'is_transition': is_transition
+        }

@@ -57,7 +57,7 @@ def mock_physics_vs():
     """模擬 VS-PINN 物理模組（3D）"""
     physics = Mock()
     
-    def mock_momentum(coords, predictions, scaled_coords=None):
+    def mock_momentum(coords, predictions, scaled_coords=None, gradients=None):
         """記錄輸入範圍以驗證物理空間"""
         batch_size = coords.shape[0]
         
@@ -71,7 +71,7 @@ def mock_physics_vs():
             'momentum_z': torch.randn(batch_size, 1),
         }
     
-    def mock_continuity(coords, predictions, scaled_coords=None):
+    def mock_continuity(coords, predictions, scaled_coords=None, gradients=None):
         batch_size = coords.shape[0]
         return torch.randn(batch_size, 1)
     
@@ -101,6 +101,9 @@ def basic_config():
             'checkpoint_interval': 50,
             'early_stopping': {'enabled': False}
         },
+        'model': {
+            'output_variables': ['u', 'v', 'w', 'p']  # P0-3: 明確定義輸出變數
+        },
         'losses': {
             'data_weight': 100.0,
             'pde_weight': 1.0,
@@ -108,11 +111,11 @@ def basic_config():
         },
         'physics': {
             'type': 'vs_pinn_channel_flow',
-        },
-        'domain': {
-            'x_min': 0.0, 'x_max': 25.13,
-            'y_min': -1.0, 'y_max': 1.0,
-            'z_min': 0.0, 'z_max': 9.42,
+            'domain': {
+                'x_range': [0.0, 25.13],
+                'y_range': [-1.0, 1.0],
+                'z_range': [0.0, 9.42],
+            },
         },
         'output': {
             'checkpoint_dir': 'checkpoints_test',

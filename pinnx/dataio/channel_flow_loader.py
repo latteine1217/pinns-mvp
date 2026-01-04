@@ -609,11 +609,35 @@ class ChannelFlowLoader:
         return dropped_data, valid_mask
     
     def _extract_domain_config(self) -> Dict[str, Any]:
-        """從配置檔案提取域參數"""
+        """從配置檔案提取域參數
+        
+        支持兩種格式（P0-2 統一後優先使用 physics.domain）：
+        1. 新格式：physics.domain.x_range = [min, max]
+        2. 舊格式：data.jhtdb_config.domain.x = [min, max]
+        """
         domain_config = {}
         
-        # 從 data.jhtdb_config 提取 Channel Flow 參數
-        if 'data' in self.config and 'jhtdb_config' in self.config['data']:
+        # P0-2: 優先從 physics.domain 提取（新格式）
+        if 'physics' in self.config and 'domain' in self.config['physics']:
+            phys_domain = self.config['physics']['domain']
+            
+            # 新格式：x_range, y_range, z_range
+            if 'x_range' in phys_domain:
+                domain_config.update({
+                    'x_range': phys_domain['x_range'],
+                    'y_range': phys_domain['y_range'],
+                    'z_range': phys_domain.get('z_range', [0.0, 0.0])
+                })
+            # 舊格式兼容：x, y, z
+            elif 'x' in phys_domain:
+                domain_config.update({
+                    'x_range': phys_domain['x'],
+                    'y_range': phys_domain['y'],
+                    'z_range': phys_domain.get('z', [0.0, 0.0])
+                })
+        
+        # Fallback: 從 data.jhtdb_config 提取 Channel Flow 參數（舊格式）
+        elif 'data' in self.config and 'jhtdb_config' in self.config['data']:
             jhtdb_config = self.config['data']['jhtdb_config']
             
             # 域範圍

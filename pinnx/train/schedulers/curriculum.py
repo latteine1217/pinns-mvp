@@ -6,11 +6,13 @@
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import torch
 
+from .base import WeightScheduler
 
-class CurriculumScheduler:
+
+class CurriculumScheduler(WeightScheduler):
     """
     課程訓練調度器 - 逐步提升雷諾數，從層流到湍流
     
@@ -85,21 +87,12 @@ class CurriculumScheduler:
                     logging.info(f"  Key weights: {weights_str}")
         logging.info("="*80)
     
-    def get_stage_config(self, epoch: int) -> Dict[str, Any]:
+    def _find_stage_and_check_transition(self, epoch: int) -> tuple[Dict[str, Any], bool]:
         """
-        獲取當前 epoch 對應的階段配置
+        內部方法：找到當前階段並檢測是否為切換點
         
         Returns:
-            {
-                'stage_name': str,
-                'is_transition': bool,
-                'weights': dict,
-                'Re_tau': float,
-                'nu': float,
-                'pressure_gradient': float,
-                'sampling': dict,
-                'lr': float
-            }
+            (stage_config, is_transition)
         """
         # 找到當前階段
         for idx, stage in enumerate(self.stages):
@@ -148,54 +141,10 @@ class CurriculumScheduler:
                         logging.info(f"📉 Learning rate: controlled by global scheduler")
                     logging.info("="*80)
                 
-                # 構建返回配置（只包含實際存在的參數）
-                config_dict = {
-                    'stage_name': stage['name'],
-                    'is_transition': is_transition,
-                    'weights': stage.get('weights', {}),
-                    'sampling': stage.get('sampling', {}),
-                }
-
-                # 可選物理參數
-                if 'nu' in stage:
-                    config_dict['nu'] = stage['nu']
-                if 'Re_tau' in stage:
-                    config_dict['Re_tau'] = stage['Re_tau']
-                if 'Re' in stage:
-                    config_dict['Re'] = stage['Re']
-                if 'pressure_gradient' in stage:
-                    config_dict['pressure_gradient'] = stage['pressure_gradient']
-
-                # lr 是可選參數（如果未指定，則繼續使用全域 scheduler）
-                if 'lr' in stage:
-                    config_dict['lr'] = stage['lr']
-
-                return config_dict
+                return stage, is_transition
         
         # 超出範圍，返回最後階段
-        last_stage = self.stages[-1]
-        config_dict = {
-            'stage_name': last_stage['name'],
-            'is_transition': False,
-            'weights': last_stage.get('weights', {}),
-            'sampling': last_stage.get('sampling', {}),
-        }
-
-        # 可選物理參數
-        if 'nu' in last_stage:
-            config_dict['nu'] = last_stage['nu']
-        if 'Re_tau' in last_stage:
-            config_dict['Re_tau'] = last_stage['Re_tau']
-        if 'Re' in last_stage:
-            config_dict['Re'] = last_stage['Re']
-        if 'pressure_gradient' in last_stage:
-            config_dict['pressure_gradient'] = last_stage['pressure_gradient']
-
-        # lr 是可選參數
-        if 'lr' in last_stage:
-            config_dict['lr'] = last_stage['lr']
-
-        return config_dict
+        return self.stages[-1], False
     
     def _update_physics_parameters(self, stage: Dict[str, Any]):
         """更新物理方程模組的參數（避免梯度計算問題）"""
@@ -238,3 +187,59 @@ class CurriculumScheduler:
             logging.debug(f"✅ Physics parameters updated: {', '.join(updated_params)}")
         else:
             logging.debug("ℹ️  No physics parameters to update (controlled by main config)")
+    
+    # ========================================================================
+    # 統一接口實作（WeightScheduler ABC）
+    # ========================================================================
+    
+    def get_weights(self, epoch: int) -> Dict[str, float]:
+        """
+        獲取當前 epoch 的損失權重（統一接口）
+        
+        Args:
+            epoch: 當前訓練輪次
+            
+        Returns:
+            權重字典，例如：
+            {
+                'data': 100.0,
+                'momentum_x': 1.0,
+                'continuity': 1.0,
+                'boundary': 10.0,
+                'prior': 1.0
+            }
+        """
+        stage, _ = self._find_stage_and_check_transition(epoch)
+        return stage.get('weights', {})
+    
+    def get_metadata(self, epoch: int) -> Optional[Dict[str, Any]]:
+        """
+        獲取當前 epoch 的課程元數據（統一接口）
+        
+        Args:
+            epoch: 當前訓練輪次
+            
+        Returns:
+            元數據字典，包含：
+            - stage_name: 階段名稱
+            - is_transition: 是否為階段切換點
+            - lr: 學習率（如果課程控制 LR）
+            - sampling: 採樣配置（如果課程控制採樣）
+            - Re_tau, nu, pressure_gradient: 物理參數（如果課程控制）
+        """
+        stage, is_transition = self._find_stage_and_check_transition(epoch)
+        
+        # 構建元數據（排除 weights，因為已在 get_weights() 中返回）
+        metadata = {
+            'stage_name': stage['name'],
+            'is_transition': is_transition,
+            'sampling': stage.get('sampling', {})
+        }
+        
+        # 可選物理參數
+        optional_keys = ['lr', 'Re_tau', 'Re', 'nu', 'pressure_gradient']
+        for key in optional_keys:
+            if key in stage:
+                metadata[key] = stage[key]
+        
+        return metadata

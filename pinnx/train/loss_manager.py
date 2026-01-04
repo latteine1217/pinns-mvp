@@ -647,12 +647,18 @@ class LossManager:
         if curriculum_weighter is None:
             return None, self.loss_cfg
         
-        # 獲取當前階段配置
-        curriculum_config = curriculum_weighter.get_stage_config(epoch)
+        # 🚀 P1-2: 使用統一接口獲取權重和元數據
+        curriculum_weights = curriculum_weighter.get_weights(epoch)
+        curriculum_metadata = curriculum_weighter.get_metadata(epoch)
+        
+        # 構建完整的配置（向後兼容）
+        curriculum_config = {
+            'weights': curriculum_weights,
+            **curriculum_metadata  # 包含 stage_name, is_transition, lr, sampling, 物理參數等
+        }
         is_curriculum_transition = curriculum_config.get('is_transition', False)
         
-        # 應用課程學習權重（覆蓋配置文件的基礎權重）
-        curriculum_weights = curriculum_config.get('weights', {})
+        # 如果沒有權重，直接返回
         if not curriculum_weights:
             return curriculum_config, self.loss_cfg
         
@@ -681,7 +687,8 @@ class LossManager:
         
         # 階段切換日誌
         if is_curriculum_transition:
-            logging.info(f"🎯 課程階段切換：{curriculum_config['stage_name']}")
+            stage_name = curriculum_config.get('stage_name', 'unknown')
+            logging.info(f"🎯 課程階段切換：{stage_name}")
             logging.info(f"   損失權重更新: {curriculum_weights}")
             if 'lowfi_prior' in curriculum_config:
                 prior_weight = curriculum_config['lowfi_prior'].get('consistency_weight', 'N/A')
