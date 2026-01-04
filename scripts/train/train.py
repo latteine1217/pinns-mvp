@@ -23,6 +23,7 @@ from pinnx.losses.priors import PriorLossManager
 from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
 from pinnx.losses import MeanConstraintLoss  # ⭐ Phase 6C: 均值約束損失
 from pinnx.train.trainer import Trainer  # 新的訓練器類
+from pinnx.train.trainer_builder import TrainerBuilder  # ✨ P2-3: TrainerBuilder
 from pinnx.utils.normalization import InputTransform, InputNormConfig, OutputTransform
 
 # 從重構模組導入配置、檢查點與工廠函數
@@ -2036,76 +2037,19 @@ def main():
             # 建立新模型（使用相同的統計資訊）
             member_model = create_model(config, device, statistics=statistics)
             
-            # 創建動態權重器（GradNorm/Causal/Curriculum）
-            member_weighters = create_weighters(config, member_model, device, physics=physics)
-            
-            # 使用 Trainer 訓練（傳遞 training_data 以支援自動計算標準化統計量）
-            trainer = Trainer(member_model, physics, losses, config, device,
-                               weighters=member_weighters,
-                               input_normalizer=input_normalizer,
-                               training_data=training_data_sample)
-            trainer.training_data = training_data_sample
-            
-            # ✅ 從訓練資料計算標準化統計量（若配置要求但 params 為空）
-            # 🚨 修復：從實際 sensor data 計算標準化（避免使用損壞的 RANS prior）
-            if config.get('data', {}).get('normalize', False):
-                norm_cfg = config.get('normalization', {})
-                if norm_cfg.get('type') == 'training_data_norm' and not norm_cfg.get('params'):
-                    # 🔧 FIX: 從配置讀取正確的 variable_order（支援 2D/3D）
-                    variable_order = norm_cfg.get('variable_order', ['u', 'v', 'w', 'p'])
-                    logger.info(f"📐 Variable order from config: {variable_order}")
-                    
-                    # 檢查 sensor data 是否包含實際值
-                    has_sensor_values = all(
-                        f'{var}_sensors' in training_data_sample and 
-                        training_data_sample[f'{var}_sensors'].numel() > 0
-                        for var in variable_order  # 🔧 FIX: 使用配置的 variable_order
-                    )
-                    
-                    if has_sensor_values:
-                        # ✅ 使用 K=100 sensor data（工程場景 - 稀疏測量）
-                        logger.info(f"🔧 Computing normalization from K=100 sensor data")
-                        # 🔧 FIX: 動態構建 dict，只包含 variable_order 中的變量
-                        normalization_data = {
-                            var: training_data_sample[f'{var}_sensors'].cpu().numpy()
-                            for var in variable_order
-                        }
-                    else:
-                        # ❌ 失敗：training_data 中缺少必要的 sensor 數據
-                        missing_vars = [var for var in variable_order 
-                                       if f'{var}_sensors' not in training_data_sample 
-                                       or training_data_sample[f'{var}_sensors'].numel() == 0]
-                        raise ValueError(
-                            f"\n❌ CRITICAL: Cannot compute normalization!\n"
-                            f"\n"
-                            f"Required variables: {variable_order}\n"
-                            f"Missing in training_data: {missing_vars}\n"
-                            f"\n"
-                            f"Please ensure your data preparation function creates all required '{var}_sensors' fields.\n"
-                            f"For 2D problems, set normalization.variable_order: ['u', 'v', 'p']\n"
-                            f"For 3D problems, set normalization.variable_order: ['u', 'v', 'w', 'p']\n"
-                        )
-                    
-                    # 驗證數據質量
-                    validate_sensor_data_quality(normalization_data, logger)
-                    
-                    # 記錄統計量供驗證
-                    logger.info("📊 Sensor Normalization Statistics (K=100):")
-                    for var, data in normalization_data.items():
-                        if isinstance(data, np.ndarray):
-                            logger.info(f"   {var}: mean={data.mean():.6f}, std={data.std():.6f}, N={len(data)}")
-                    
-                    from pinnx.utils.normalization import OutputTransform
-                    # 🔧 FIX: 傳遞 variable_order 參數以確保正確的變量順序
-                    trainer.data_normalizer = OutputTransform.from_data(
-                        normalization_data,
-                        norm_type='training_data_norm',
-                        variable_order=variable_order  # 🔧 FIX: 明確指定 variable_order
-                    )
-                    logger.info(f"✅ Normalization computed from K=100 sensor data (Ensemble member {i+1})")
-                    logger.info(f"   Variable order: {variable_order}")
-                    logger.info(f"   Normalizer: {trainer.data_normalizer}")
-            
+            # ✨ P2-3: 使用 TrainerBuilder 創建 Trainer（新路徑）
+            logger.info(f"🏗️  使用 TrainerBuilder 創建 Trainer (Ensemble member {i+1})")
+
+            builder = TrainerBuilder(config, device)
+            builder.with_model(member_model)
+            builder.with_physics(physics)
+            builder.with_losses(losses)
+            builder.with_training_data(training_data_sample)
+
+            trainer = builder.build()
+            logger.info(f"✅ Trainer 創建成功 (Ensemble member {i+1})")
+            # ℹ️  所有組件（normalizers, weighters等）已由 TrainerBuilder 自動創建
+
             # 載入 checkpoint（若指定）
             if args.resume:
                 logger.info(f"⏮️  載入 checkpoint: {args.resume} (Ensemble member {i+1})")
@@ -2151,17 +2095,19 @@ def main():
             train_result = window_trainer.train_sequential()
         else:
             logger.info("🔄 Standard single-domain training")
-            trainer = Trainer(model, physics, losses, config, device,
-                              weighters=weighters,
-                              input_normalizer=input_normalizer,
-                              training_data=training_data_sample)
-            trainer.training_data = training_data_sample
-            
-            # ✅ 設置輸出標準化（若配置要求）
-            normalizer = setup_output_normalization(config, training_data_sample, logger)
-            if normalizer:
-                trainer.data_normalizer = normalizer
-            
+            # ✨ P2-3: 使用 TrainerBuilder 創建 Trainer（新路徑）
+            logger.info("🏗️  使用 TrainerBuilder 創建 Trainer")
+
+            builder = TrainerBuilder(config, device)
+            builder.with_model(model)
+            builder.with_physics(physics)
+            builder.with_losses(losses)
+            builder.with_training_data(training_data_sample)
+
+            trainer = builder.build()
+            logger.info("✅ Trainer 創建成功")
+            # ℹ️  所有組件（normalizers, weighters等）已由 TrainerBuilder 自動創建
+
             # 載入 checkpoint（若指定）
             if args.resume:
                 logger.info(f"⏮️  載入 checkpoint: {args.resume}")

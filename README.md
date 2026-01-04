@@ -52,6 +52,7 @@ python scripts/evaluate/evaluate_checkpoint.py \
 | 文檔 | 用途 | 讀者 |
 |------|------|------|
 | [QUICK_START.md](docs/QUICK_START.md) | 完整工作流程 | 新用戶 |
+| [TRAINERBUILDER_GUIDE.md](docs/TRAINERBUILDER_GUIDE.md) | TrainerBuilder 使用指南 ✨ | 開發者 |
 | [CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md) | 配置參數說明與管理 | 配置調整 |
 | [API_REFERENCE.md](docs/API_REFERENCE.md) | API 文檔 | 開發者 |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | 問題診斷 | 調試 |
@@ -65,6 +66,15 @@ python scripts/evaluate/evaluate_checkpoint.py \
 - 收斂速度提升 ≥ 30%
 
 ## 重要更新
+
+### ✅ v1.3.4 (2026-01-05): P2-3 Init Simplification
+- **架構重構**: TrainerBuilder + TrainerComponents 完整實施
+- **TrainerComponents**: 新增數據類封裝所有可選組件（24+ 組件，5 大類別）
+- **TrainerBuilder 擴展**: +500 行組件創建邏輯（從 Trainer._setup_* 遷移）
+- **Trainer 雙路徑**: 支持新路徑（TrainerComponents）+ 舊路徑（向後兼容）
+- **代碼簡化**: Trainer 初始化邏輯從 17 個方法簡化為依賴注入
+- **測試覆蓋**: 28/28 現有測試通過，完全向後兼容 ✅
+- **設計模式**: Builder Pattern（複雜對象創建）+ Dependency Injection（組件外部注入）+ Dual-Path Architecture（新舊並存）
 
 ### ✅ v1.3.3 (2026-01-04): P2-2 ValidationManager 解耦
 - **Strategy Pattern**: 將 Trainer 中 150+ 行驗證邏輯提取到獨立 ValidationManager
