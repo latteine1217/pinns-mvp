@@ -27,7 +27,9 @@ def create_trainer():
                 losses=my_losses,
                 config=my_config,
                 device=device,
-                training_data=my_data  # 可選
+                training_data=my_data,  # 可選
+                validation_data=my_val_data,  # 可選
+                input_normalizer=my_normalizer  # 可選
             )
 
     Returns:
@@ -40,6 +42,9 @@ def create_trainer():
         config,
         device,
         training_data: Optional[Dict[str, torch.Tensor]] = None,
+        validation_data: Optional[Dict[str, torch.Tensor]] = None,
+        input_normalizer: Optional[Any] = None,
+        weighters: Optional[Dict[str, Any]] = None,
         **kwargs  # 忽略其他舊參數（向後兼容）
     ):
         """
@@ -52,6 +57,9 @@ def create_trainer():
             config: 配置字典
             device: 訓練設備
             training_data: 訓練數據（可選）
+            validation_data: 驗證數據（可選）
+            input_normalizer: 輸入標準化器（可選，會覆蓋自動創建的）
+            weighters: 損失權重器（可選，會覆蓋自動創建的）
             **kwargs: 忽略的舊參數（向後兼容）
 
         Returns:
@@ -65,6 +73,21 @@ def create_trainer():
         if training_data is not None:
             builder.with_training_data(training_data)
 
-        return builder.build()
+        trainer = builder.build()
+
+        # 覆蓋可選組件（如果測試明確提供）
+        if input_normalizer is not None:
+            trainer.input_normalizer = input_normalizer
+
+        if weighters is not None:
+            trainer.weighters = weighters
+
+        # 設置驗證數據並重新初始化驗證策略
+        if validation_data is not None:
+            trainer.validation_data = validation_data
+            # 重新初始化驗證策略以包含數據驗證
+            trainer._init_validation_strategies_if_needed()
+
+        return trainer
 
     return _create

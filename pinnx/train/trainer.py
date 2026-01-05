@@ -196,6 +196,7 @@ class Trainer:
 
         # Early stopping config
         es_cfg = components.early_stopping_config
+        self.early_stopping_cfg = es_cfg  # 保存完整配置字典
         self.early_stopping_enabled = es_cfg.get('enabled', False)
         self.patience = es_cfg.get('patience', 50)
         self.min_delta = es_cfg.get('min_delta', 1e-6)
@@ -267,38 +268,39 @@ class Trainer:
         logging.info("✅ LossManager 初始化完成（從 components）")
 
     def _init_validation_strategies_if_needed(self):
-        """如果 ValidationManager 沒有策略，配置默認策略"""
-        if not self.validation_manager.has_strategies():
-            # 添加數據驗證策略（如果有驗證數據）
-            if hasattr(self, 'validation_data') and self.validation_data is not None:
-                from pinnx.train.validation_manager import DataBasedValidation
+        """配置缺失的驗證策略（獨立檢查每種策略類型）"""
+        from pinnx.train.validation_manager import DataBasedValidation, PhysicsBasedValidation
 
-                def preprocess_coords(coords):
-                    _, _, coords_for_model = self._prepare_model_coords(
-                        coords, require_grad=False, is_vs_pinn=None
-                    )
-                    return coords_for_model
+        # 檢查現有策略類型
+        has_data_strategy = any(isinstance(s, DataBasedValidation) for s in self.validation_manager.strategies)
+        has_physics_strategy = any(isinstance(s, PhysicsBasedValidation) for s in self.validation_manager.strategies)
 
-                def infer_var_order(n_outputs):
-                    return self._infer_variable_order(n_outputs, context='validation')
-
-                data_strategy = DataBasedValidation(
-                    validation_data=self.validation_data,
-                    metrics=['mse', 'relative_l2'],
-                    data_normalizer=self.data_normalizer,
-                    model_input_preprocessor=preprocess_coords,
-                    variable_order_inference=infer_var_order
+        # 添加數據驗證策略（如果有驗證數據且尚未添加）
+        if not has_data_strategy and hasattr(self, 'validation_data') and self.validation_data is not None:
+            def preprocess_coords(coords):
+                _, _, coords_for_model = self._prepare_model_coords(
+                    coords, require_grad=False, is_vs_pinn=None
                 )
-                self.validation_manager.add_strategy(data_strategy)
+                return coords_for_model
 
-            # 添加物理驗證策略（如果配置了）
-            if hasattr(self, 'physics_validator') and self.physics_validator is not None:
-                from pinnx.train.validation_manager import PhysicsBasedValidation
+            def infer_var_order(n_outputs):
+                return self._infer_variable_order(n_outputs, context='validation')
 
-                physics_strategy = PhysicsBasedValidation(
-                    physics_validator=self.physics_validator
-                )
-                self.validation_manager.add_strategy(physics_strategy)
+            data_strategy = DataBasedValidation(
+                validation_data=self.validation_data,
+                metrics=['mse', 'relative_l2'],
+                data_normalizer=self.data_normalizer,
+                model_input_preprocessor=preprocess_coords,
+                variable_order_inference=infer_var_order
+            )
+            self.validation_manager.add_strategy(data_strategy)
+
+        # 添加物理驗證策略（如果配置了且尚未添加）
+        if not has_physics_strategy and hasattr(self, 'physics_validator') and self.physics_validator is not None:
+            physics_strategy = PhysicsBasedValidation(
+                physics_validator=self.physics_validator
+            )
+            self.validation_manager.add_strategy(physics_strategy)
 
     # ========================================================================
     # 舊路徑：傳統初始化邏輯（向後兼容）
@@ -996,16 +998,27 @@ class Trainer:
         if not self.validation_manager.has_strategies():
             return None
 
-        # 委託給 ValidationManager 執行所有驗證策略
-        results = self.validation_manager.validate(
-            model=self.model,
-            device=self.device,
-            validation_data=self.validation_data,
-            is_3d=(self.model_input_dim == 3),
-            log_to_wandb=self.use_wandb
-        )
+        # 保存訓練狀態
+        training_mode = self.model.training
 
-        return results if results else None
+        try:
+            # 委託給 ValidationManager 執行所有驗證策略
+            results = self.validation_manager.validate(
+                model=self.model,
+                device=self.device,
+                validation_data=self.validation_data,
+                is_3d=(self.model_input_dim == 3),
+                log_to_wandb=self.use_wandb
+            )
+
+            return results if results else None
+
+        finally:
+            # 恢復訓練狀態
+            if training_mode:
+                self.model.train()
+            else:
+                self.model.eval()
     
     # ========================================================================
     # 訓練循環

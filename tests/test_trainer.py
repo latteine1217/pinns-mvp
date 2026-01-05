@@ -343,6 +343,7 @@ class TestTrainerStep:
         basic_config['physics']['type'] = 'vs_pinn_channel_flow'
         basic_config['domain']['z_min'] = 0.0
         basic_config['domain']['z_max'] = 6.0
+        basic_config['model']['output_variables'] = ['u', 'v', 'w', 'p']  # 3D flow fields
         
         trainer = create_trainer(simple_model_3d, mock_physics_vs, mock_losses, basic_config, device)
         trainer.training_data = training_data_3d
@@ -452,8 +453,8 @@ class TestTrainerValidation:
     
     def test_validate_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, validation_data, create_trainer):
         """測試基本驗證功能"""
-        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
-        trainer.validation_data = validation_data
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device,
+                                  validation_data=validation_data)
         
         metrics = trainer.validate()
         
@@ -489,24 +490,27 @@ class TestTrainerValidation:
     def test_validate_dimension_mismatch(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試維度不匹配時的處理（模型輸出 3，目標 4）"""
         trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
-        
+
         # 驗證資料目標維度為 4（模型輸出為 3）
         trainer.validation_data = {
             'coords': torch.randn(20, 2, device=device),
             'targets': torch.randn(20, 4, device=device),  # 4 維目標
             'size': 20,
         }
-        
+
+        # 重新初始化驗證策略以添加 DataBasedValidation
+        trainer._init_validation_strategies_if_needed()
+
         # 應該只比較前 3 個分量
         metrics = trainer.validate()
-        
+
         assert metrics is not None
         assert not np.isnan(metrics['mse'])
     
     def test_validate_preserves_training_mode(self, simple_model, mock_physics, mock_losses, basic_config, device, validation_data, create_trainer):
         """測試驗證後恢復訓練模式"""
-        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
-        trainer.validation_data = validation_data
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device,
+                                  validation_data=validation_data)
         
         # 設置為訓練模式
         simple_model.train()
@@ -685,9 +689,9 @@ class TestTrainerCheckpointing:
         """測試檢查點載入"""
         with tempfile.TemporaryDirectory() as tmpdir:
             basic_config['output']['checkpoint_dir'] = tmpdir
-            
+
             # 創建並保存檢查點
-            trainer1 = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+            trainer1 = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
             trainer1.epoch = 15
             checkpoint_path = Path(tmpdir) / 'test_checkpoint.pth'
             torch.save({
@@ -698,11 +702,11 @@ class TestTrainerCheckpointing:
                 'normalization': trainer1.data_normalizer.get_metadata(),
                 'history': {'loss': [1.0, 0.8, 0.6]},
             }, checkpoint_path)
-            
+
             # 創建新訓練器並載入
-            trainer2 = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+            trainer2 = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
             trainer2.load_checkpoint(str(checkpoint_path))
-            
+
             # 檢查狀態恢復
             assert trainer2.epoch == 15
     
