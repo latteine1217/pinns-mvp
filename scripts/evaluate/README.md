@@ -4,17 +4,17 @@
 
 ## 📊 評估工具對比
 
-| 特性 | `evaluate_unified.py` | `comprehensive_evaluation.py` |
-|------|----------------------|-------------------------------|
-| **定位** | 🚀 快速評估工具 | 🔬 進階科學分析工具 |
-| **用途** | 日常訓練驗證 | 論文級深度分析 |
-| **物理場景** | ✅ Kolmogorov 2D<br>✅ Channel 3D | ✅ Channel 3D（專精） |
-| **基礎指標** | ✅ L2, RMSE, 守恆 | ✅ L2, RMSE, 守恆 |
-| **進階分析** | ❌ 無 | ✅ 能量譜<br>✅ 壁剪應力<br>✅ 速度剖面<br>✅ 統計分布 |
-| **視覺化** | 場對比、誤差分布 | 多層級科學圖表 |
-| **輸出格式** | JSON + Markdown + PNG | JSON + 高品質科學圖 |
-| **執行時間** | 快（1-2 分鐘） | 慢（5-10 分鐾） |
-| **適用階段** | 訓練中 checkpoint 快速檢查 | 最終模型完整評估 |
+| 特性 | `evaluate_unified.py` | `evaluate_kolmogorov_physics.py` | `comprehensive_evaluation.py` |
+|------|----------------------|----------------------------------|-------------------------------|
+| **定位** | 🚀 快速評估工具 | 🌀 Kolmogorov 物理量分析 | 🔬 進階科學分析工具 |
+| **用途** | 日常訓練驗證 | Kolmogorov Flow 專用評估 | 論文級深度分析 |
+| **物理場景** | ✅ Kolmogorov 2D<br>✅ Channel 3D | ✅ Kolmogorov 2D（專精） | ✅ Channel 3D（專精） |
+| **基礎指標** | ✅ L2, RMSE, 守恆 | ✅ L2, RMSE | ✅ L2, RMSE, 守恆 |
+| **進階分析** | ❌ 無 | ✅ 動能演化<br>✅ 擾動度<br>✅ 能量譜 | ✅ 能量譜<br>✅ 壁剪應力<br>✅ 速度剖面<br>✅ 統計分布 |
+| **視覺化** | 場對比、誤差分布 | 4-panel 物理量對比 | 多層級科學圖表 |
+| **輸出格式** | JSON + Markdown + PNG | JSON + PNG | JSON + 高品質科學圖 |
+| **執行時間** | 快（1-2 分鐘） | 中（2-3 分鐘） | 慢（5-10 分鐘） |
+| **適用階段** | 訓練中 checkpoint 快速檢查 | Kolmogorov 專案物理驗證 | 最終模型完整評估 |
 
 ---
 
@@ -42,6 +42,68 @@ python scripts/evaluate_unified.py \
 - 守恆誤差（散度）
 - 場對比視覺化
 - 誤差分布直方圖
+
+---
+
+## 🌀 Kolmogorov Flow 物理量分析: `evaluate_kolmogorov_physics.py`
+
+### 使用場景
+- ✅ Kolmogorov Flow 專案的物理一致性驗證
+- ✅ 動能、擾動度時間演化分析
+- ✅ 能量譜 k-space 分析
+- ✅ 與參考論文結果對比（4-panel 圖）
+
+### 使用方式
+```bash
+# 單一 snapshot 評估
+python scripts/evaluate/evaluate_kolmogorov_physics.py \
+    --checkpoint checkpoints/kolmogorov_model.pth \
+    --reference data/kolmogorov_dns/snapshot_re50_for_eval.npz \
+    --output results/physics_eval
+
+# 時間序列評估（多個 checkpoint）
+python scripts/evaluate/evaluate_kolmogorov_physics.py \
+    --checkpoint checkpoints/time_windows/ \
+    --reference data/kolmogorov_dns/snapshot_re50_for_eval.npz \
+    --output results/time_series_physics \
+    --time-series
+```
+
+### 獨特功能
+
+#### 1. **動能演化** (`compute_kinetic_energy`)
+- 計算公式: KE = 0.5 * ∫∫ (u² + v²) dx dy
+- 時間演化對比（預測 vs 參考）
+- 誤差百分比分析
+
+#### 2. **擾動度分析** (`compute_enstrophy`)
+- 計算公式: Ω = 0.5 * ∫∫ ω² dx dy
+- 渦度場計算: ω = ∂v/∂x - ∂u/∂y
+- 湍流強度指標
+
+#### 3. **能量譜分析** (`compute_energy_spectrum`)
+- 2D FFT 徑向平均
+- 理論標度線對比:
+  - k^(-5/3): 慣性子範圍（Kolmogorov scaling）
+  - k^(-3): 耗散範圍
+- 預測 vs 參考能譜對比
+
+#### 4. **4-panel 物理量對比圖**
+- (a) 相對 L2 誤差（u, v 分量）
+- (b) 動能對比（Reference vs Prediction）
+- (c) 擾動度對比
+- (d) 能量譜（log-log plot with scaling lines）
+
+### 輸出內容
+- 基礎誤差指標（L2, RMSE）
+- 物理量時間序列 JSON
+- 4-panel 對比圖（PNG, 高解析度）
+- 守恆檢查報告
+
+### 物理量計算驗證
+- ✅ 渦度計算與 DNS 參考一致（0% 誤差）
+- ✅ 動能典型值: KE ≈ 0.65 (Re=50, kf=4)
+- ✅ 能量譜波數範圍: k ∈ [1, 181] for 256×256 網格
 
 ---
 
@@ -98,9 +160,10 @@ python scripts/evaluate/comprehensive_evaluation.py \
 
 ```
 scripts/evaluate/
-├── README.md                         # 本文檔
-├── comprehensive_evaluation.py       # 進階科學評估工具
-└── archived/                         # 已歸檔的舊腳本
+├── README.md                              # 本文檔
+├── evaluate_kolmogorov_physics.py         # Kolmogorov Flow 物理量分析（NEW）
+├── comprehensive_evaluation.py            # 進階科學評估工具
+└── archived/                              # 已歸檔的舊腳本
     ├── evaluate.py
     ├── evaluate_checkpoint.py
     ├── evaluate_curriculum.py
@@ -111,7 +174,17 @@ scripts/evaluate/
 
 ## 🎯 使用建議
 
-### 訓練階段
+### 訓練階段（Kolmogorov Flow）
+使用 `evaluate_kolmogorov_physics.py` 驗證物理一致性：
+```bash
+# 檢查物理量演化
+python scripts/evaluate/evaluate_kolmogorov_physics.py \
+    --checkpoint checkpoints/kolmogorov_step_10k.pth \
+    --reference data/kolmogorov_dns/snapshot_re50_for_eval.npz \
+    --output results/physics_check_10k
+```
+
+### 訓練階段（通用）
 使用 `evaluate_unified.py` 快速驗證每個 checkpoint：
 ```bash
 # 每 5000 steps 快速評估
@@ -136,7 +209,8 @@ python scripts/evaluate/comprehensive_evaluation.py \
 ## 🔄 未來規劃
 
 ### 短期（1-2 週）
-- [ ] 將能譜分析整合到 `evaluate_unified.py`（可選模式）
+- [x] **已完成**: Kolmogorov Flow 物理量分析工具
+- [ ] 時間窗口訓練的時間序列評估
 - [ ] 統一兩個工具的視覺化風格
 - [ ] 添加 `--quick` 和 `--comprehensive` 模式切換
 
@@ -154,7 +228,13 @@ python scripts/evaluate/comprehensive_evaluation.py \
 ## 📞 常見問題
 
 **Q: 應該使用哪個工具？**
-A: 訓練中用 `evaluate_unified.py`，論文前用 `comprehensive_evaluation.py`。
+A: 
+- 訓練中快速檢查 → `evaluate_unified.py`
+- Kolmogorov Flow 物理驗證 → `evaluate_kolmogorov_physics.py`
+- 論文投稿前完整分析 → `comprehensive_evaluation.py`
+
+**Q: Kolmogorov 物理量分析與 unified 有何不同？**
+A: `evaluate_kolmogorov_physics.py` 專注於 Kolmogorov Flow 特有的物理量（動能、擾動度、能量譜），而 `evaluate_unified.py` 提供通用的場誤差指標。
 
 **Q: 能否刪除 comprehensive_evaluation.py？**
 A: 不建議。它提供的科學分析功能（能譜、壁剪應力）是論文必需的。
@@ -163,7 +243,16 @@ A: 不建議。它提供的科學分析功能（能譜、壁剪應力）是論�
 A: 基礎指標（L2, RMSE）完全一致，comprehensive 額外提供進階分析。
 
 **Q: 執行時間差多少？**
-A: unified ~1-2 分鐘，comprehensive ~5-10 分鐘（取決於網格解析度）。
+A: 
+- `evaluate_unified.py`: ~1-2 分鐘
+- `evaluate_kolmogorov_physics.py`: ~2-3 分鐘
+- `comprehensive_evaluation.py`: ~5-10 分鐘（取決於網格解析度）
+
+**Q: 能量譜的理論標度線是什麼？**
+A: 
+- k^(-5/3): Kolmogorov 慣性子範圍標度（各向同性湍流）
+- k^(-3): 耗散範圍標度
+- 用於驗證預測能量譜是否符合物理理論
 
 ---
 
