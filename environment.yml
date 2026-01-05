@@ -1,5 +1,5 @@
-# PINNs 逆重建專案 Conda 環境配置
-name: pinnx-inverse
+# PINNs-SparseFlow 專案 Conda 環境配置
+name: pinns-sparse-flow
 channels:
   - conda-forge
   - pytorch

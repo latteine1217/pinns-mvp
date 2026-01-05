@@ -1,4 +1,4 @@
-# 🌊 PINNs-MVP: 稀疏測量湍流重建
+# 🌊 PINNs-SparseFlow: 稀疏測量湍流重建
 
 基於物理資訊神經網路 (PINNs) 的湍流逆問題求解器，從極少量感測器觀測 (K ≤ 100) 重建高保真流場。
 
@@ -18,7 +18,7 @@
 
 ```bash
 # 1. 環境設置
-conda env create -f environment.yml && conda activate pinns-mvp
+conda env create -f environment.yml && conda activate pinns-sparse-flow
 
 # 2. 配置 WandB（必須，僅需一次）
 echo "WANDB_API_KEY=your_key_here" > .wandb_config
@@ -134,12 +134,12 @@ python scripts/evaluate/evaluate_checkpoint.py \
 
 研究引用請註明本專案：
 ```bibtex
-@software{pinns_mvp_2026,
-  title={PINNs-MVP: Sparse Sensor Turbulence Reconstruction},
-  author={PINNs-MVP Team},
+@software{pinns_sparse_flow_2026,
+  title={PINNs-SparseFlow: Sparse Sensor Turbulence Reconstruction},
+  author={Li, JunYi},
   year={2026},
-  version={1.2.2},
-  url={https://github.com/your-org/pinns-mvp}
+  version={1.3.4},
+  url={https://github.com/latteine1217/pinns-sparse-flow}
 }
 ```
 

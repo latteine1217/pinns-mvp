@@ -110,8 +110,8 @@ from google.colab import drive
 drive.mount('/content/drive')
 
 # 3. 克隆專案
-!git clone https://github.com/your-repo/pinns-mvp.git
-%cd pinns-mvp
+!git clone https://github.com/latteine1217/pinns-sparse-flow.git
+%cd pinns-sparse-flow
 
 # 4. 執行訓練
 !python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla.yml
@@ -150,6 +150,6 @@ drive.mount('/content/drive')
 
 ---
 
-**文檔維護**: PINNs-MVP 團隊  
+**文檔維護**: PINNs-SparseFlow 專案  
 **版本**: 2.0.0  
-**最後更新**: 2026-01-03
+**最後更新**: 2026-01-05
