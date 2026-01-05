@@ -55,196 +55,20 @@ from pinnx.evals.metrics import (
     pressure_gradient_from_finite_diff  # 新增壓力梯度計算
 )
 from pinnx.utils.denormalization import denormalize_output  # TASK-008: 反標準化工具
+from pinnx.utils.evaluation_utils import load_model_for_evaluation, predict_with_denormalization  # 統一評估工具
 
 
 # ============================================================
-# 模型載入與推理
+# 模型載入與推理（使用統一工具）
 # ============================================================
 
 def load_trained_model(checkpoint_path: Path, config: Dict, device: torch.device):
-    """載入訓練完成的模型（含 physics 狀態恢復）"""
-    logger.info(f"📥 Loading model from {checkpoint_path}")
+    """載入訓練完成的模型（含 physics 狀態恢復）
     
-    # 🔍 STEP 1: 預先檢查檢查點架構，動態調整配置
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    model_state = checkpoint.get('model_state_dict', checkpoint)
-    
-    # 🆕 優先使用 checkpoint 中保存的配置（如果存在）
-    if 'config' in checkpoint:
-        ckpt_config = checkpoint['config']
-        logger.info("✅ Using config from checkpoint (overriding file config)")
-        
-        # 合併配置：checkpoint 優先，但保留評估相關的設置
-        eval_settings = config.get('evaluation', {})
-        config = ckpt_config
-        config['evaluation'] = eval_settings  # 保留評估設置
-    else:
-        logger.warning("⚠️ No config in checkpoint, using file config (may cause architecture mismatch!)")
-    
-    # 檢測 Fourier 特徵是否存在（支持 ManualScalingWrapper）
-    has_fourier = 'fourier.B' in model_state or 'base_model.fourier.B' in model_state
-    
-    # 檢測是否使用 wrapper（通過 base_model. 前綴或 input_min/max）
-    is_wrapped = ('base_model.hidden_layers.0.linear.weight' in model_state or
-                  'input_min' in model_state)
-    
-    # 檢測輸入維度（從 Fourier B 矩陣或第一層權重推斷）
-    input_proj_shape = None
-    if 'base_model.fourier.B' in model_state:
-        input_proj_shape = model_state['base_model.fourier.B']
-    elif 'fourier.B' in model_state:
-        input_proj_shape = model_state['fourier.B']
-    elif 'base_model.hidden_layers.0.linear.weight' in model_state:
-        input_proj_shape = model_state['base_model.hidden_layers.0.linear.weight']
-    elif 'hidden_layers.0.linear.weight' in model_state:
-        input_proj_shape = model_state['hidden_layers.0.linear.weight']
-    
-    if input_proj_shape is not None:
-        if has_fourier:
-            # Fourier B matrix 形狀: (input_dim, m)
-            # 實際輸入維度是 B.shape[0]，輸出是 2*m
-            input_dim = input_proj_shape.shape[0]
-            fourier_dim = input_proj_shape.shape[1] * 2  # sin + cos
-        else:
-            # Hidden layer 形狀: (hidden_size, input_dim)
-            input_dim = input_proj_shape.shape[1]
-            fourier_dim = None
-        
-        logger.info(f"🔍 Checkpoint architecture detected:")
-        logger.info(f"   Input dim: {input_dim}, Has Fourier: {has_fourier}, Wrapped: {is_wrapped}")
-        if fourier_dim:
-            logger.info(f"   Fourier output dim: {fourier_dim}")
-        
-        # 動態調整配置以匹配檢查點
-        if 'model' not in config:
-            config['model'] = {}
-        if 'fourier_features' not in config['model']:
-            config['model']['fourier_features'] = {}
-        
-        if has_fourier and fourier_dim:  # Fourier enabled
-            config['model']['fourier_features']['type'] = 'standard'
-            # 從 B 矩陣推斷 m
-            fourier_m = input_proj_shape.shape[1]
-            config['model']['fourier_features']['fourier_m'] = int(fourier_m)
-            if config['model']['fourier_features'].get('fourier_sigma', 0) == 0:
-                config['model']['fourier_features']['fourier_sigma'] = 5.0
-            logger.info(f"✅ Config adjusted to Fourier ENABLED (m={fourier_m})")
-        else:  # Fourier disabled
-            config['model']['fourier_features']['type'] = 'disabled'
-            config['model']['fourier_features']['fourier_m'] = 0
-            config['model']['fourier_features']['fourier_sigma'] = 0.0
-            logger.info("✅ Config adjusted to Fourier DISABLED")
-    
-    # 🔧 從配置文件構建 statistics 以支持 3D 模型
-    # 這確保 ManualScalingWrapper 能正確設置 input_min/max 的形狀
-    statistics = None
-    if 'physics' in config and 'domain' in config['physics']:
-        domain = config['physics']['domain']
-        statistics = {
-            'x': {'range': domain.get('x_range', [0.0, 25.13])},
-            'y': {'range': domain.get('y_range', [-1.0, 1.0])}
-        }
-        # 如果是 3D，添加 z 範圍
-        if 'z_range' in domain:
-            statistics['z'] = {'range': domain['z_range']}
-        logger.info(f"📐 Constructed statistics from config: {list(statistics.keys())}")
-    
-    # 🔧 CRITICAL FIX: 若 checkpoint 使用 ManualScalingWrapper，
-    # 則必須創建 plain model（非 VS-PINN），因為 checkpoint 的 base_model 不含 input_scale_factors
-    has_wrapper = (is_wrapped and 
-                   'input_min' in model_state and 
-                   'input_max' in model_state)
-    
-    original_physics_type = config.get('physics', {}).get('type', '')
-    if has_wrapper and original_physics_type == 'vs_pinn_channel_flow':
-        # 臨時禁用 VS-PINN，避免 create_model() 創建帶 input_scale_factors 的模型
-        logger.info("⚠️  Checkpoint uses ManualScalingWrapper → Disabling VS-PINN mode for model creation")
-        config['physics']['type'] = 'channel_flow_3d'  # 使用普通物理類型
-    
-    # 創建模型架構
-    from pinnx.train.model_physics_factory import create_model, create_physics
-    base_model = create_model(config, device, statistics=statistics)
-    
-    # 恢復原始 physics type（用於後續 physics 創建）
-    if has_wrapper and original_physics_type == 'vs_pinn_channel_flow':
-        config['physics']['type'] = original_physics_type
-        logger.info("✅ Restored physics type to vs_pinn_channel_flow for physics module creation")
-    
-    # 🔧 檢查 create_model() 是否已經創建了 wrapper（避免雙重包裝）
-    model_already_wrapped = hasattr(base_model, 'input_min') and hasattr(base_model, 'input_max')
-    
-    if has_wrapper and not model_already_wrapped:
-        # Checkpoint 使用 wrapper，但 create_model() 沒有創建 → 需要手動包裝
-        logger.info("🔧 Checkpoint uses ManualScalingWrapper, manually applying wrapper")
-        from pinnx.models.wrappers import ManualScalingWrapper
-        
-        # 從 checkpoint 提取縮放範圍
-        input_min = model_state['input_min'].cpu().numpy()
-        input_max = model_state['input_max'].cpu().numpy()
-        output_min = model_state.get('output_min', torch.zeros(4)).cpu().numpy()
-        output_max = model_state.get('output_max', torch.ones(4)).cpu().numpy()
-        
-        # 從配置推斷輸入變數名稱（x, y, z）
-        domain = config.get('physics', {}).get('domain', {})
-        input_keys = ['x', 'y']
-        if 'z_range' in domain or len(input_min) >= 3:
-            input_keys.append('z')
-        
-        # 構建 input/output ranges 字典
-        input_ranges = {key: (float(input_min[i]), float(input_max[i])) 
-                       for i, key in enumerate(input_keys[:len(input_min)])}
-        
-        output_keys = ['u', 'v', 'w', 'p'] if len(output_min) >= 4 else ['u', 'v', 'p']
-        output_ranges = {key: (float(output_min[i]), float(output_max[i])) 
-                        for i, key in enumerate(output_keys[:len(output_min)])}
-        
-        model = ManualScalingWrapper(
-            base_model,
-            input_ranges=input_ranges,
-            output_ranges=output_ranges
-        ).to(device)
-        logger.info(f"   Input ranges: {input_ranges}")
-        logger.info(f"   Output ranges: {list(output_ranges.keys())}")
-    elif model_already_wrapped:
-        # create_model() 已經創建了 wrapper → 直接使用
-        model = base_model
-        logger.info("✅ Model already wrapped by create_model(), using directly")
-    else:
-        # Checkpoint 不使用 wrapper → 直接使用 base model
-        model = base_model
-        logger.info("ℹ️  Checkpoint uses bare model (no wrapper)")
-    
-    # 🆕 創建 physics 對象（用於恢復 VS-PINN 縮放參數）
-    physics = None
-    physics_type = config.get('physics', {}).get('type', '')
-    if physics_type == 'vs_pinn_channel_flow':
-        physics = create_physics(config, device)
-        logger.info("✅ Created VS-PINN physics module")
-     
-    # 載入權重（使用已載入的 checkpoint）
-    if 'model_state_dict' not in checkpoint:
-        raise KeyError("checkpoint must include 'model_state_dict'")
-    model.load_state_dict(checkpoint['model_state_dict'])
-    epoch = checkpoint.get('epoch', 'unknown')
-    logger.info(f"✅ Loaded model checkpoint from epoch {epoch}")
-    
-    # 轉移到目標設備
-    model = model.to(device)
-    
-    # 🆕 恢復 physics 的 state_dict（VS-PINN 縮放參數等）
-    if 'physics_state_dict' in checkpoint and physics is not None:
-        physics.load_state_dict(checkpoint['physics_state_dict'])
-        logger.info(f"✅ Restored physics state: {list(checkpoint['physics_state_dict'].keys())}")
-        
-        # 🔍 打印恢復的縮放參數（用於驗證）
-        if hasattr(physics, 'N_x'):
-            logger.info(f"   VS-PINN 縮放參數: N_x={physics.N_x.item():.2f}, "
-                       f"N_y={physics.N_y.item():.2f}, N_z={physics.N_z.item():.2f}")
-    elif physics is not None and physics_type == 'vs_pinn_channel_flow':
-        raise KeyError("checkpoint missing VS-PINN 'physics_state_dict'")
-    
-    model.eval()
-    return model, physics
+    ⚠️  此函數已遷移至 pinnx.utils.evaluation_utils.load_model_for_evaluation()
+    這裡保留作為向後相容的包裝器
+    """
+    return load_model_for_evaluation(str(checkpoint_path), config, device)
 
 
 def load_jhtdb_reference(data_path: Path) -> Dict[str, np.ndarray]:

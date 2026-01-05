@@ -38,6 +38,7 @@ from pinnx.evals.metrics import (
     energy_spectrum_1d, wall_shear_stress, k_error_curve,
     uncertainty_correlation, comprehensive_evaluation
 )
+from pinnx.utils.denormalization import denormalize_output
 
 # 設定警告與日誌
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -595,10 +596,24 @@ def main():
     coords_eval = coords_full.clone().detach().requires_grad_(True)
     predictions_with_grad = model(coords_eval)
     
-    # 不要 detach，保持梯度連接
-    pred_u = predictions_with_grad[:, 0]
-    pred_v = predictions_with_grad[:, 1]
-    pred_p = predictions_with_grad[:, 2] if predictions_with_grad.shape[1] > 2 else predictions_with_grad[:, 1]
+    # === 反標準化 ===
+    logger.info("執行反標準化...")
+    predictions_np = predictions_with_grad.detach().cpu().numpy()
+    predictions_physical = denormalize_output(
+        predictions_np,
+        config,
+        output_norm_type='training_data_norm',
+        verbose=True,
+        checkpoint_path=args.checkpoint
+    )
+    
+    # 轉回 tensor 並保持在正確的 device 上
+    predictions_physical_tensor = torch.from_numpy(predictions_physical).float().to(device)
+    
+    # 不要 detach，保持梯度連接（注意：反標準化後需要重新計算梯度）
+    pred_u = predictions_physical_tensor[:, 0]
+    pred_v = predictions_physical_tensor[:, 1]
+    pred_p = predictions_physical_tensor[:, 2] if predictions_physical_tensor.shape[1] > 2 else predictions_physical_tensor[:, 1]
     
     pred_data = {
         'u': pred_u,

@@ -10,6 +10,9 @@ import matplotlib.gridspec as gridspec
 from matplotlib.colors import TwoSlopeNorm
 import h5py
 
+# 添加反標準化工具
+from pinnx.utils.denormalization import denormalize_output
+
 # 添加項目路徑
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -101,12 +104,21 @@ def load_model_and_predict(checkpoint_path, x, y):
 
         pred = np.concatenate(predictions, axis=0)
 
-    # 重塑為網格形狀
-    u_pred = pred[:, 0].reshape(X.shape)
-    v_pred = pred[:, 1].reshape(X.shape)
-    p_pred = pred[:, 2].reshape(X.shape)
+    # === 反標準化 ===
+    pred_physical = denormalize_output(
+        pred,
+        cfg,
+        output_norm_type='training_data_norm',
+        verbose=True,
+        checkpoint_path=checkpoint_path
+    )
 
-    print("✅ 預測完成")
+    # 重塑為網格形狀（使用物理尺度數據）
+    u_pred = pred_physical[:, 0].reshape(X.shape)
+    v_pred = pred_physical[:, 1].reshape(X.shape)
+    p_pred = pred_physical[:, 2].reshape(X.shape)
+
+    print("✅ 預測完成（已反標準化）")
     return u_pred, v_pred, p_pred
 
 def plot_comparison(x, y, u_dns, v_dns, p_dns, u_pred, v_pred, p_pred,

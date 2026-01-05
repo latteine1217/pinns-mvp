@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pinnx.evals.metrics import relative_L2, rmse_metrics, conservation_error
 from pinnx.evals.visualizer import Visualizer
 from pinnx.models.wrappers import ManualScalingWrapper
+from pinnx.utils.evaluation_utils import load_model_for_evaluation, predict_with_denormalization
 
 logger = logging.getLogger(__name__)
 

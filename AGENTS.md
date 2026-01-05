@@ -120,3 +120,123 @@
 5. **好工程是「可辯護的」**
    - 參數為何這樣選？為何這個 prior 合理？為何這個結果失敗？
    - 答得出來，比跑得快重要。
+
+---
+
+## 📂 關鍵專案結構
+
+### 核心模組
+
+```
+pinnx/
+├── constants.py              # 物理常數管理（JHTDB 統計量、參考值）
+├── models/                   # 神經網路架構
+│   ├── mlp.py               # 基礎 MLP (Fourier Features + SIREN)
+│   └── wrappers.py          # ManualScalingWrapper, OutputTransform
+├── physics/                  # 物理方程式
+│   ├── kolmogorov_flow.py   # Kolmogorov Flow 2D
+│   └── vs_pinn.py           # Variable-Scaling PINN
+├── training/                 # 訓練系統
+│   ├── trainer.py           # 核心 Trainer
+│   └── builder.py           # TrainerBuilder
+├── utils/                    # 工具函數
+│   ├── denormalization.py   # 反標準化工具
+│   └── evaluation_utils.py  # 模型載入與評估工具
+└── evals/                    # 評估指標
+    └── metrics.py           # L2, RMSE, 守恆誤差等
+```
+
+### 評估工具（兩層級體系）
+
+```
+scripts/
+├── evaluate_unified.py                   # 🚀 快速評估工具（訓練中驗證）
+│   - 用途: 日常 checkpoint 快速檢查
+│   - 時間: 1-2 分鐘
+│   - 指標: L2, RMSE, 守恆誤差
+│   - 輸出: JSON + Markdown + 場對比圖
+│
+└── evaluate/
+    ├── README.md                          # 評估工具使用指南
+    ├── comprehensive_evaluation.py        # 🔬 進階科學分析工具（論文級評估）
+    │   - 用途: 論文投稿前完整評估
+    │   - 時間: 5-10 分鐘
+    │   - 進階指標: 能量譜、壁剪應力、速度剖面、高階統計矩
+    │   - 輸出: 高品質科學圖表 + 完整報告
+    │
+    └── archived/                          # 已歸檔的舊評估腳本
+        ├── evaluate.py
+        ├── evaluate_checkpoint.py
+        ├── evaluate_curriculum.py
+        └── evaluate_kolmogorov_2d.py
+```
+
+**評估工具選擇指南**:
+- **訓練階段**: 使用 `evaluate_unified.py` 快速驗證
+- **最終評估**: 使用 `comprehensive_evaluation.py` 深度分析
+- 詳細說明請見: `scripts/evaluate/README.md`
+
+### 配置與文檔
+
+```
+configs/                      # 配置文件
+docs/                         # 完整文檔
+├── EVALUATION_GUIDE.md      # 評估策略與反標準化指南
+├── CONFIG_GUIDE.md          # 配置參數說明
+├── TRAINERBUILDER_GUIDE.md # TrainerBuilder 使用指南
+└── QUICK_START.md           # 快速開始指南
+
+context/
+└── session_logs/            # 會話記錄（所有重要決策與報告）
+```
+
+### 工具腳本
+
+```
+scripts/
+├── train/
+│   └── train.py             # 訓練主程式
+├── tools/
+│   ├── validate_config_keys.py    # 配置鍵驗證（必跑！）
+│   └── validate_config.py         # 配置完整性驗證
+└── evaluate_unified.py      # 統一評估入口
+```
+
+---
+
+## 🔧 常用命令快查
+
+### 評估
+```bash
+# 快速評估（訓練中）
+python scripts/evaluate_unified.py --checkpoint checkpoints/model.pth
+
+# 多模型比較
+python scripts/evaluate_unified.py \
+  --checkpoints ckpt1.pth ckpt2.pth ckpt3.pth \
+  --labels "RANS" "Vanilla" "Proposed"
+
+# 進階科學分析（論文前）
+python scripts/evaluate/comprehensive_evaluation.py \
+  --checkpoint checkpoints/best_model.pth \
+  --reference_dir data/jhtdb \
+  --output results/final_eval
+```
+
+### 配置驗證
+```bash
+# 鍵驗證（Fail Fast）
+python scripts/tools/validate_config_keys.py configs/your_config.yml
+
+# 完整驗證
+python scripts/tools/validate_config.py --config configs/your_config.yml
+```
+
+### 訓練
+```bash
+# 標準訓練
+python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
+
+# Time Window 訓練
+python scripts/train/train.py --cfg configs/quick_test_full.yml
+```

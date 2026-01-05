@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pinnx.models import PINNNet, create_pinn_model
 from pinnx.models.wrappers import ManualScalingWrapper
-
+from pinnx.utils.denormalization import denormalize_output
 
 def setup_logging(level: str = "info") -> logging.Logger:
     """設置日誌系統"""
@@ -172,7 +172,8 @@ def load_sensor_data(sensor_file: str, device: torch.device) -> Dict[str, torch.
     return sensor_data
 
 
-def evaluate_model(model: nn.Module, sensor_data: Dict[str, torch.Tensor]) -> Dict[str, float]:
+def evaluate_model(model: nn.Module, sensor_data: Dict[str, torch.Tensor], 
+                  config: Dict[str, Any], checkpoint_path: str) -> Dict[str, float]:
     """評估模型在感測點上的誤差"""
     model.eval()
     
@@ -181,9 +182,21 @@ def evaluate_model(model: nn.Module, sensor_data: Dict[str, torch.Tensor]) -> Di
         coords = sensor_data['coords']  # (K, 2)
         pred = model(coords)  # (K, 3)
         
-        u_pred = pred[:, 0:1]
-        v_pred = pred[:, 1:2]
-        p_pred = pred[:, 2:3]
+        # 反標準化回物理空間（TASK-008 修復）
+        pred_physical = denormalize_output(
+            pred.cpu().numpy(),
+            config,
+            output_norm_type='training_data_norm',
+            verbose=True,
+            checkpoint_path=checkpoint_path
+        )
+        
+        # 轉回 torch tensor（保持原有邏輯）
+        pred_physical = torch.from_numpy(pred_physical).to(coords.device)
+        
+        u_pred = pred_physical[:, 0:1]
+        v_pred = pred_physical[:, 1:2]
+        p_pred = pred_physical[:, 2:3]
     
     # 提取真實值
     u_true = sensor_data['u_true']
@@ -227,6 +240,8 @@ def evaluate_model(model: nn.Module, sensor_data: Dict[str, torch.Tensor]) -> Di
 
 def visualize_predictions(model: nn.Module, 
                          sensor_data: Dict[str, torch.Tensor],
+                         config: Dict[str, Any],
+                         checkpoint_path: str,
                          output_dir: str = "./evaluation_results"):
     """可視化預測結果"""
     import os
@@ -238,9 +253,18 @@ def visualize_predictions(model: nn.Module,
         coords = sensor_data['coords']
         pred = model(coords)
         
-        u_pred = pred[:, 0].cpu().numpy()
-        v_pred = pred[:, 1].cpu().numpy()
-        p_pred = pred[:, 2].cpu().numpy()
+        # 反標準化回物理空間（TASK-008 修復）
+        pred_physical = denormalize_output(
+            pred.cpu().numpy(),
+            config,
+            output_norm_type='training_data_norm',
+            verbose=False,  # 避免重複日誌
+            checkpoint_path=checkpoint_path
+        )
+        
+        u_pred = pred_physical[:, 0]
+        v_pred = pred_physical[:, 1]
+        p_pred = pred_physical[:, 2]
     
     # 提取真實值
     u_true = sensor_data['u_true'].cpu().numpy().flatten()
@@ -332,7 +356,7 @@ def main():
     logger.info("🔍 開始評估...")
     logger.info("=" * 80)
     
-    results = evaluate_model(model, sensor_data)
+    results = evaluate_model(model, sensor_data, config, args.checkpoint)
     
     # 輸出結果
     logger.info("\n" + "=" * 80)
@@ -373,7 +397,7 @@ def main():
     # 可視化
     if args.visualize:
         logger.info("\n生成可視化圖表...")
-        visualize_predictions(model, sensor_data, args.output_dir)
+        visualize_predictions(model, sensor_data, config, args.checkpoint, args.output_dir)
     
     # 保存結果到 JSON
     import json

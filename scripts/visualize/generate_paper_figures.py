@@ -27,8 +27,11 @@ from pathlib import Path
 import sys
 import pandas as pd
 
-# Add project root
+# Add project root (必須在 pinnx import 之前)
 sys.path.append(str(Path(__file__).parent.parent.parent))
+
+# Add denormalization utility
+from pinnx.utils.denormalization import denormalize_output
 
 from pinnx.evals.metrics import relative_L2
 
@@ -287,9 +290,18 @@ def main():
                 with torch.no_grad():
                     inp = torch.tensor(coords_flat, dtype=torch.float32).to(device)
                     out = model(inp).cpu().numpy()
+                
+                # === 反標準化 ===
+                out_physical = denormalize_output(
+                    out,
+                    config,
+                    output_norm_type='training_data_norm',
+                    verbose=True,
+                    checkpoint_path=args.checkpoint
+                )
                     
-                u_pred = out[:, 0].reshape(nx, ny)
-                v_pred = out[:, 1].reshape(nx, ny)
+                u_pred = out_physical[:, 0].reshape(nx, ny)
+                v_pred = out_physical[:, 1].reshape(nx, ny)
                 
                 prefix = f"{args.output_prefix}_" if args.output_prefix else ""
                 

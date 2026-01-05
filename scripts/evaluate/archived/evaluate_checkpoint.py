@@ -13,6 +13,7 @@ sys.path.insert(0, str(project_root))
 
 from pinnx.models.fourier_mlp import PINNNet
 from pinnx.models.wrappers import ManualScalingWrapper
+from pinnx.utils.denormalization import denormalize_output
 
 def load_checkpoint(ckpt_path):
     """載入檢查點"""
@@ -204,16 +205,26 @@ def evaluate_model(checkpoint_path, config_path, data_path=None):
         
         coords_tensor = torch.FloatTensor(coords_input).to(device)
         pred = model(coords_tensor)
-        u_pred = pred[:, 0:1].cpu().numpy()
-        v_pred = pred[:, 1:2].cpu().numpy()
+        
+        # 反標準化回物理空間（TASK-008 修復）
+        pred_physical = denormalize_output(
+            pred.cpu().numpy(),
+            full_cfg,
+            output_norm_type='training_data_norm',
+            verbose=True,
+            checkpoint_path=checkpoint_path
+        )
+        
+        u_pred = pred_physical[:, 0:1]
+        v_pred = pred_physical[:, 1:2]
         
         # 根據輸出維度決定 w 和 p 的位置
-        if pred.shape[1] == 4:  # 3D: (u, v, w, p)
-            w_pred = pred[:, 2:3].cpu().numpy()
-            p_pred = pred[:, 3:4].cpu().numpy()
-        elif pred.shape[1] == 3:  # 2D: (u, v, p)
+        if pred_physical.shape[1] == 4:  # 3D: (u, v, w, p)
+            w_pred = pred_physical[:, 2:3]
+            p_pred = pred_physical[:, 3:4]
+        elif pred_physical.shape[1] == 3:  # 2D: (u, v, p)
             w_pred = None
-            p_pred = pred[:, 2:3].cpu().numpy()
+            p_pred = pred_physical[:, 2:3]
         else:
             w_pred = None
             p_pred = np.zeros_like(u_pred)

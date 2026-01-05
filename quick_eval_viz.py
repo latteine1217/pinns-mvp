@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pinnx.models.fourier_mlp import PINNNet
+from pinnx.utils.denormalization import denormalize_output  # 統一反標準化
 
 
 def load_checkpoint(ckpt_path):
@@ -119,8 +120,17 @@ def load_dns_data(h5_path, time_range=[15.0, 35.0]):
     }
 
 
-def evaluate_model(model, dns_data, device='cpu', num_samples=5):
-    """評估模型"""
+def evaluate_model(model, dns_data, config, checkpoint_path, device='cpu', num_samples=5):
+    """評估模型
+    
+    Args:
+        model: 訓練好的模型
+        dns_data: DNS 參考數據
+        config: 配置字典（用於反標準化）
+        checkpoint_path: checkpoint 路徑（用於載入標準化統計量）
+        device: 計算設備
+        num_samples: 評估的時間點數量
+    """
     model.eval()
     model.to(device)
 
@@ -161,11 +171,20 @@ def evaluate_model(model, dns_data, device='cpu', num_samples=5):
         # 預測
         with torch.no_grad():
             pred = model(inputs_tensor).cpu().numpy()
+        
+        # 反標準化回物理空間
+        pred_physical = denormalize_output(
+            pred,
+            config,
+            output_norm_type='training_data_norm',
+            verbose=(i == 0),  # 只在第一個時間點輸出日誌
+            checkpoint_path=checkpoint_path
+        )
 
         # Reshape
-        u_pred = pred[:, 0].reshape(H, W)
-        v_pred = pred[:, 1].reshape(H, W)
-        p_pred = pred[:, 2].reshape(H, W)
+        u_pred = pred_physical[:, 0].reshape(H, W)
+        v_pred = pred_physical[:, 1].reshape(H, W)
+        p_pred = pred_physical[:, 2].reshape(H, W)
 
         # Ground truth
         u_true = dns_data['u'][t_idx]
@@ -386,7 +405,7 @@ def main():
     dns_data = load_dns_data(dns_data_path)
 
     # 評估模型
-    results = evaluate_model(model, dns_data, device='cpu', num_samples=5)
+    results = evaluate_model(model, dns_data, config, checkpoint_path, device='cpu', num_samples=5)
 
     # 繪製結果
     plot_results(results, dns_data, output_dir)
