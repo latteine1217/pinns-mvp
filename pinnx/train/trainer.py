@@ -65,17 +65,12 @@ class Trainer:
         losses: Dict[str, nn.Module],
         config: Dict[str, Any],
         device: torch.device,
-        weighters: Optional[Dict[str, Any]] = None,
-        input_normalizer: Optional[InputTransform] = None,
-        channel_data_cache: Optional[Dict[str, Any]] = None,
-        training_data: Optional[Dict[str, torch.Tensor]] = None,
-        checkpoint_manager: Optional['CheckpointManager'] = None,
-        checkpoint_strategy: Optional['PeriodicCheckpointStrategy'] = None,
-        validation_manager: Optional['ValidationManager'] = None,
-        components: Optional['TrainerComponents'] = None,
+        components: 'TrainerComponents',
     ):
         """
-        初始化訓練器（P2-3 重構：支持 TrainerComponents 依賴注入）
+        初始化訓練器（P2-3 重構：純 TrainerComponents 依賴注入）
+
+        ⚠️  直接實例化 Trainer 已移除，請使用 TrainerBuilder。
 
         Args:
             model: PINN 模型
@@ -83,39 +78,60 @@ class Trainer:
             losses: 損失函數字典
             config: 完整訓練配置
             device: 計算設備
-            weighters: 損失權重器字典（可選，舊路徑）
-            input_normalizer: 輸入標準化器（可選，舊路徑）
-            channel_data_cache: 通道流資料快取（可選，舊路徑）
-            training_data: 訓練資料（用於自動計算標準化統計量，可選，舊路徑）
-            checkpoint_manager: Checkpoint 管理器（可選，舊路徑）
-            checkpoint_strategy: Checkpoint 保存策略（可選，舊路徑）
-            validation_manager: Validation 管理器（可選，舊路徑）
-            components: TrainerComponents 實例（新路徑，推薦使用）
+            components: TrainerComponents 實例（必需）
 
-        路徑選擇：
-            - 新路徑（推薦）：提供 components 參數，直接注入所有組件
-            - 舊路徑（向後兼容）：不提供 components，使用原有初始化邏輯
+        推薦用法：
+            ```python
+            from pinnx.train.trainer_builder import TrainerBuilder
+
+            builder = TrainerBuilder(config, device)
+            builder.with_model(model)
+            builder.with_physics(physics)
+            builder.with_losses(losses)
+            builder.with_training_data(training_data)
+
+            trainer = builder.build()
+            ```
+
+        Raises:
+            TypeError: 如果 components 為 None
         """
         # ========== 配置驗證（Fail Fast）==========
         self._validate_config_early(config)
 
-        # ========== 路徑選擇：新路徑 vs 舊路徑 ==========
-        if components is not None:
-            # 🎯 新路徑：使用 TrainerComponents（從 TrainerBuilder 創建）
-            logging.info("🏗️  Trainer: 使用 TrainerComponents 初始化（新路徑）")
-            self._init_from_components(
-                model, physics, losses, config, device, components
-            )
-        else:
-            # 🔄 舊路徑：使用原有初始化邏輯（向後兼容）
-            logging.info("🔄 Trainer: 使用傳統初始化邏輯（舊路徑）")
-            self._init_legacy(
-                model, physics, losses, config, device,
-                weighters, input_normalizer, channel_data_cache, training_data,
-                checkpoint_manager, checkpoint_strategy, validation_manager
+        # ========== 強制使用 TrainerBuilder ==========
+        if components is None:
+            raise TypeError(
+                "\n"
+                "❌ Trainer 不再支持直接實例化。\n"
+                "\n"
+                "請使用 TrainerBuilder：\n"
+                "\n"
+                "    from pinnx.train.trainer_builder import TrainerBuilder\n"
+                "\n"
+                "    builder = TrainerBuilder(config, device)\n"
+                "    builder.with_model(model)\n"
+                "    builder.with_physics(physics)\n"
+                "    builder.with_losses(losses)\n"
+                "    builder.with_training_data(training_data)\n"
+                "\n"
+                "    trainer = builder.build()\n"
+                "\n"
+                "優勢：\n"
+                "  - 自動創建所有組件（optimizer, schedulers, normalizers, etc.）\n"
+                "  - 依賴注入架構，易於測試和擴展\n"
+                "  - 減少手動配置錯誤\n"
+                "\n"
+                "詳見文檔: docs/TRAINERBUILDER_GUIDE.md\n"
             )
 
-        logging.info(f"✅ Trainer 初始化完成（設備: {device}）")
+        # ========== 使用 TrainerComponents 初始化 ==========
+        logging.info("🏗️  Trainer: 使用 TrainerComponents 初始化")
+        self._init_from_components(
+            model, physics, losses, config, device, components
+        )
+
+        logging.info(f"✅ Trainer 初始化完成（設備: {device})")
 
     # ========================================================================
     # 新路徑：從 TrainerComponents 初始化（P2-3）
@@ -288,97 +304,6 @@ class Trainer:
     # 舊路徑：傳統初始化邏輯（向後兼容）
     # ========================================================================
 
-    def _init_legacy(
-        self,
-        model: nn.Module,
-        physics: Any,
-        losses: Dict[str, nn.Module],
-        config: Dict[str, Any],
-        device: torch.device,
-        weighters: Optional[Dict[str, Any]],
-        input_normalizer: Optional[InputTransform],
-        channel_data_cache: Optional[Dict[str, Any]],
-        training_data: Optional[Dict[str, torch.Tensor]],
-        checkpoint_manager: Optional['CheckpointManager'],
-        checkpoint_strategy: Optional['PeriodicCheckpointStrategy'],
-        validation_manager: Optional['ValidationManager']
-    ):
-        """
-        傳統初始化邏輯（向後兼容）
-
-        保持與原 __init__() 完全相同的行為。
-
-        ⚠️ DEPRECATED: 此初始化路徑已棄用，建議使用 TrainerBuilder。
-
-        推薦用法：
-        ```python
-        from pinnx.train.trainer_builder import TrainerBuilder
-
-        builder = TrainerBuilder(config, device)
-        builder.with_model(model)
-        builder.with_physics(physics)
-        builder.with_losses(losses)
-        builder.with_training_data(training_data)
-
-        trainer = builder.build()
-        ```
-
-        此舊路徑將在 v2.0 中移除。
-        """
-        import warnings
-        warnings.warn(
-            "\n"
-            "⚠️  直接實例化 Trainer 已棄用，建議使用 TrainerBuilder。\n"
-            "\n"
-            "推薦用法：\n"
-            "  from pinnx.train.trainer_builder import TrainerBuilder\n"
-            "  \n"
-            "  builder = TrainerBuilder(config, device)\n"
-            "  builder.with_model(model)\n"
-            "  builder.with_physics(physics)\n"
-            "  builder.with_losses(losses)\n"
-            "  builder.with_training_data(training_data)\n"
-            "  \n"
-            "  trainer = builder.build()\n"
-            "\n"
-            "優勢：\n"
-            "  - 自動創建所有組件（optimizer, schedulers, normalizers, etc.）\n"
-            "  - 依賴注入架構，易於測試和擴展\n"
-            "  - 減少手動配置錯誤\n"
-            "\n"
-            "此警告將在未來版本變為錯誤。\n",
-            DeprecationWarning,
-            stacklevel=3
-        )
-        # 基本組件初始化
-        self._init_basic_components(model, physics, losses, config, device,
-                                    weighters, input_normalizer, channel_data_cache,
-                                    checkpoint_manager, checkpoint_strategy, validation_manager)
-
-        # 標準化器初始化與驗證
-        self._init_normalizers(config, training_data)
-
-        # 訓練狀態初始化
-        self._init_training_state(config)
-
-        # WandB 初始化
-        self._init_wandb(config)
-
-        # 損失組件初始化
-        self._init_loss_components()
-
-        # 訓練組件初始化（包含所有 _setup_* 方法）
-        self._init_training_components()
-
-        # 指標追蹤工具初始化
-        self._init_metrics_tracking(config)
-
-        # 驗證組件初始化
-        self._init_validation_components()
-
-    # ========================================================================
-    # 初始化輔助方法（拆分自 __init__，遵循單一職責原則）
-    # ========================================================================
 
     def _validate_config_early(self, config: Dict[str, Any]) -> None:
         """
@@ -403,47 +328,6 @@ class Trainer:
                 f"{'=' * 80}\n"
             )
 
-    def _init_basic_components(
-        self,
-        model: nn.Module,
-        physics: Any,
-        losses: Dict[str, nn.Module],
-        config: Dict[str, Any],
-        device: torch.device,
-        weighters: Optional[Dict[str, Any]],
-        input_normalizer: Optional[InputTransform],
-        channel_data_cache: Optional[Dict[str, Any]],
-        checkpoint_manager: Optional['CheckpointManager'],
-        checkpoint_strategy: Optional['PeriodicCheckpointStrategy'],
-        validation_manager: Optional['ValidationManager']
-    ):
-        """初始化基本組件"""
-        self.model = model
-        self.physics = physics
-        self.losses = losses
-        self.config = config
-        self.device = device
-        self.weighters = weighters or {}
-        self.input_normalizer = input_normalizer
-        self.channel_data_cache = channel_data_cache or {}
-
-        # Checkpoint 組件（待後續初始化）
-        self._checkpoint_manager_arg = checkpoint_manager
-        self._checkpoint_strategy_arg = checkpoint_strategy
-
-        # Validation 組件（待後續初始化）
-        self._validation_manager_arg = validation_manager
-
-        # 提取常用配置
-        self.train_cfg = config['training']
-        self.loss_cfg = config.get('losses', {})
-        self.log_cfg = config.get('logging', {})
-        self.physics_type = config.get('physics', {}).get('type', '')
-        self.is_vs_cfg = self.physics_type == 'vs_pinn_channel_flow'
-
-        # 檢測模型輸入維度
-        self.model_input_dim = self._detect_model_input_dim(model, config)
-        logging.info(f"🔍 檢測到模型輸入維度: {self.model_input_dim}D")
 
     def _init_normalizers(self, config: Dict[str, Any], training_data: Optional[Dict[str, torch.Tensor]]):
         """初始化標準化器並驗證統計量有效性"""
@@ -465,63 +349,7 @@ class Trainer:
                 "   4. 若某變量確實為常數，考慮使用 normalization.type='none'"
             )
 
-    def _init_training_state(self, config: Dict[str, Any]):
-        """初始化訓練狀態與檢查點配置"""
-        # 訓練狀態
-        self.epoch = 0
-        self.global_step = 0
-        self.history = {
-            'train_loss': [],
-            'pde_loss': [],
-            'data_loss': [],
-            'val_loss': [],
-            'lr': [],
-        }
 
-        # 驗證相關
-        self.validation_data = None
-        self.best_val_loss = float('inf')
-        self.best_epoch = -1
-        self.patience_counter = 0
-        self.best_model_state: Optional[Dict[str, torch.Tensor]] = None
-
-        # Checkpoint 組件初始化
-        self._init_checkpoint_components(config)
-
-    def _init_wandb(self, config: Dict[str, Any]):
-        """初始化 WandB（提取並簡化深層嵌套邏輯）"""
-        self.use_wandb = self.log_cfg.get('wandb', False)
-        self.wandb_run = None
-
-        if not self.use_wandb:
-            return
-
-        # 讀取實驗配置
-        exp_config = config.get('experiment', {})
-        wandb_config = self._load_wandb_config()
-
-        # 初始化 WandB
-        self.wandb_run = wandb.init(
-            project=wandb_config['project'],
-            name=exp_config.get('name', 'default_experiment'),
-            group=exp_config.get('group', None),
-            tags=exp_config.get('tags', []),
-            config=config,
-            reinit=True
-        )
-
-        # 上傳 config metadata
-        self._upload_wandb_metadata(config)
-
-        # 日誌訊息
-        group = exp_config.get('group')
-        tags = exp_config.get('tags', [])
-        group_info = f", 分組: {group}" if group else ""
-        tags_info = f", 標籤: {tags}" if tags else ""
-        logging.info(
-            f"✅ WandB 已啟用，專案: {wandb_config['project']}, "
-            f"運行: {exp_config.get('name')}{group_info}{tags_info}"
-        )
 
     def _load_wandb_config(self) -> Dict[str, str]:
         """載入 WandB 配置（API key 與 project）"""
@@ -553,143 +381,10 @@ class Trainer:
         for key, value in metadata.items():
             wandb.config.update({f'_meta_{key}': value}, allow_val_change=True)
 
-    def _init_checkpoint_components(self, config: Dict[str, Any]):
-        """初始化 Checkpoint 管理組件"""
-        from pinnx.train.checkpoint_manager import (
-            StandardCheckpointManager,
-            PeriodicCheckpointStrategy
-        )
 
-        # 檢查點目錄（保留供其他用途）
-        self.checkpoint_dir = Path(config.get('output', {}).get('checkpoint_dir', 'checkpoints'))
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # 初始化 CheckpointManager（使用傳入的實例或創建默認實例）
-        self.checkpoint_manager = self._checkpoint_manager_arg or StandardCheckpointManager(
-            checkpoint_dir=str(self.checkpoint_dir),
-            save_optimizer=True,
-            save_physics_validation=True,
-            compress=False
-        )
 
-        # 初始化 CheckpointStrategy（使用傳入的實例或創建默認實例）
-        self.checkpoint_strategy = self._checkpoint_strategy_arg or PeriodicCheckpointStrategy(
-            save_interval=config.get('training', {}).get('checkpoint_interval', 100),
-            keep_best_k=3,
-            metric_name='total_loss',
-            mode='min'
-        )
 
-        logging.info(f"✅ CheckpointManager 初始化完成（目錄: {self.checkpoint_dir}）")
-
-    def _init_validation_components(self):
-        """初始化 Validation 管理組件"""
-        from pinnx.train.validation_manager import (
-            ValidationManager,
-            DataBasedValidation,
-            PhysicsBasedValidation
-        )
-
-        # 使用傳入的實例或創建默認實例
-        if self._validation_manager_arg is not None:
-            self.validation_manager = self._validation_manager_arg
-            logging.info("✅ ValidationManager 初始化完成（使用自定義實例）")
-            return
-
-        # 創建默認 ValidationManager
-        self.validation_manager = ValidationManager()
-
-        # 添加數據驗證策略（如果有驗證數據）
-        if hasattr(self, 'validation_data') and self.validation_data is not None:
-            # 創建輔助函數用於模型輸入預處理
-            def preprocess_coords(coords):
-                _, _, coords_for_model = self._prepare_model_coords(
-                    coords, require_grad=False, is_vs_pinn=None
-                )
-                return coords_for_model
-
-            # 創建變量順序推斷函數
-            def infer_var_order(n_outputs):
-                return self._infer_variable_order(n_outputs, context='validation')
-
-            data_strategy = DataBasedValidation(
-                validation_data=self.validation_data,
-                metrics=['mse', 'relative_l2'],
-                data_normalizer=self.data_normalizer,
-                model_input_preprocessor=preprocess_coords,
-                variable_order_inference=infer_var_order
-            )
-            self.validation_manager.add_strategy(data_strategy)
-
-        # 添加物理驗證策略（如果配置了）
-        if hasattr(self, 'physics_validator') and self.physics_validator is not None:
-            physics_strategy = PhysicsBasedValidation(
-                physics_validator=self.physics_validator
-            )
-            self.validation_manager.add_strategy(physics_strategy)
-
-        if self.validation_manager.has_strategies():
-            logging.info(f"✅ ValidationManager 初始化完成（配置了 {len(self.validation_manager.strategies)} 個策略）")
-        else:
-            logging.info("ℹ️  ValidationManager 初始化完成（無驗證策略）")
-
-    def _init_loss_components(self):
-        """初始化損失組件（Prior Loss Manager 與 LossManager）"""
-        # 訓練資料（待外部設置）
-        self.training_data: Dict[str, torch.Tensor] = {}
-
-        # 初始化 Prior Loss Manager
-        self.prior_loss_manager: Optional[PriorLossManager] = None
-        self._setup_prior_loss_manager()
-
-        # 初始化 LossManager（統一損失計算）
-        self.loss_manager = LossManager(
-            config=self.config,
-            physics=self.physics,
-            model=self.model,
-            device=self.device,
-            data_normalizer=self.data_normalizer,
-            prior_loss_manager=self.prior_loss_manager,
-            weighters=self.weighters,
-            losses=self.losses
-        )
-        logging.info("✅ LossManager 初始化完成")
-
-    def _init_training_components(self):
-        """初始化訓練組件（優化器、調度器、早停等）"""
-        self._setup_optimizer()
-        self._setup_amp()
-        self._setup_schedulers()
-        self._setup_early_stopping()
-        self._setup_adaptive_sampling()
-        self._setup_fourier_annealing()
-        self._configure_input_transform()
-
-    def _init_metrics_tracking(self, config: Dict[str, Any]):
-        """初始化指標追蹤工具"""
-        from pinnx.utils import Timer, MemoryTracker, PhysicsValidator
-
-        self.timer = Timer(use_wandb=self.use_wandb)
-        self.memory_tracker = MemoryTracker(model=self.model, use_wandb=self.use_wandb)
-
-        # PhysicsValidator 配置
-        physics_validator_config = {
-            'physics': config.get('physics', {}),
-            'dimension': 3 if self.is_vs_cfg else 2,
-        }
-        if 'boundary_type' in config.get('physics', {}):
-            physics_validator_config['boundary_type'] = config['physics']['boundary_type']
-
-        self.physics_validator = PhysicsValidator(
-            config=physics_validator_config,
-            use_wandb=self.use_wandb
-        )
-
-        logging.info("✅ 指標追蹤工具初始化完成（Timer, MemoryTracker, PhysicsValidator）")
-
-    # ========================================================================
-    # 模型與配置檢測
-    # ========================================================================
 
     def _detect_model_input_dim(self, model: nn.Module, config: Dict[str, Any]) -> int:
         """
@@ -847,243 +542,12 @@ class Trainer:
         
         return coords_physical, coords_norm, model_coords
     
-    def _setup_optimizer(self):
-        """配置優化器（使用 Registry Pattern）"""
-        from pinnx.train.factories import create_optimizer
-
-        # 處理配置格式（字串或字典）
-        optimizer_config = self.train_cfg.get('optimizer', 'adam')
-
-        # 注入 lr 和 weight_decay（如果是字典格式）
-        if isinstance(optimizer_config, dict):
-            optimizer_config.setdefault('lr', self.train_cfg.get('lr', 1e-3))
-            optimizer_config.setdefault('weight_decay', self.train_cfg.get('weight_decay', 0.0))
-        else:
-            # 字串格式轉換為字典
-            optimizer_config = {
-                'type': optimizer_config,
-                'lr': self.train_cfg.get('lr', 1e-3),
-                'weight_decay': self.train_cfg.get('weight_decay', 0.0)
-            }
-
-        # 使用工廠創建（無條件分支！）
-        self.optimizer = create_optimizer(self.model, optimizer_config)
     
-    def _setup_amp(self):
-        """
-        配置自動混合精度訓練（AMP）
-        
-        策略：
-        - Forward Pass: FP32（物理殘差計算數值穩定）
-        - Backward Pass: FP16（節省記憶體）
-        - 僅在 Adam + CUDA 時啟用（L-BFGS 不兼容）
-        """
-        amp_cfg = self.train_cfg.get('amp', {})
-        self.use_amp = amp_cfg.get('enabled', False)
-        
-        # AMP 支援檢查：Adam + (CUDA 或 MPS)
-        is_adam = isinstance(self.optimizer, torch.optim.Adam)
-        is_cuda = self.device.type == 'cuda'
-        is_mps = self.device.type == 'mps'
-        
-        if self.use_amp and not is_adam:
-            logging.warning(
-                "⚠️ AMP 僅支援 Adam 優化器，當前使用 "
-                f"{type(self.optimizer).__name__}，已禁用 AMP"
-            )
-            self.use_amp = False
-        
-        # MPS 限制：GradScaler 不支援（float64 問題）
-        if self.use_amp and is_mps:
-            logging.warning(
-                "⚠️ MPS 後端的 GradScaler 存在已知問題（不支援 float64）\n"
-                "   建議：(1) 使用 CUDA 設備，或 (2) 關閉 AMP\n"
-                "   已自動禁用 AMP"
-            )
-            self.use_amp = False
-        
-        if self.use_amp and not is_cuda:
-            logging.warning(
-                "⚠️ AMP 僅在 CUDA 環境完全支援，當前設備為 "
-                f"{self.device}，已禁用 AMP"
-            )
-            self.use_amp = False
-        
-        # 初始化 GradScaler（僅 CUDA）
-        if self.use_amp:
-            self.scaler = GradScaler(
-                'cuda',
-                init_scale=2.0**16,  # 初始縮放因子
-                growth_factor=2.0,   # 成長因子
-                backoff_factor=0.5,  # 回退因子
-                growth_interval=2000,  # 增長間隔
-                enabled=True
-            )
-            logging.info(
-                "✅ AMP 已啟用（Forward: FP32, Backward: FP16）\n"
-                f"   - 優化器: {type(self.optimizer).__name__}\n"
-                f"   - 設備: {self.device} (CUDA)\n"
-                f"   - GradScaler 初始 scale: {self.scaler.get_scale():.0f}"
-            )
-        else:
-            # 創建禁用的 scaler（統一接口）
-            device_type = 'cuda' if is_cuda else 'cpu'
-            self.scaler = GradScaler(device_type, enabled=False)
-            if amp_cfg.get('enabled', False):
-                logging.info("ℹ️ AMP 配置已禁用（不符合啟用條件）")
     
-    def _setup_schedulers(self):
-        """配置學習率與權重調度器（使用 Registry Pattern）"""
-        from pinnx.train.factories import create_scheduler
-
-        # 學習率調度器
-        scheduler_cfg = self.train_cfg.get('lr_scheduler', {})
-
-        if isinstance(scheduler_cfg, dict):
-            scheduler_cfg.setdefault('max_epochs', self.train_cfg.get('epochs', 1000))
-
-        self.lr_scheduler = create_scheduler(self.optimizer, scheduler_cfg)
-
-        # 權重調度器（暫時未實現）
-        self.weight_scheduler = None
     
-    def _setup_early_stopping(self):
-        """配置早停機制"""
-        self.early_stopping_cfg = self.train_cfg.get('early_stopping', {})
-        self.early_stopping_enabled = self.early_stopping_cfg.get('enabled', False)
-        self.patience = self.early_stopping_cfg.get('patience', 50)
-        self.min_delta = self.early_stopping_cfg.get('min_delta', 1e-6)
-        
-        # ⭐ 快速收斂閾值（可配置，預設禁用）
-        self.convergence_threshold = self.early_stopping_cfg.get('convergence_threshold', None)
-        
-        if self.early_stopping_enabled:
-            logging.info(f"✅ 早停機制啟用（patience={self.patience}, min_delta={self.min_delta}）")
-        if self.convergence_threshold is not None:
-            logging.info(f"✅ 快速收斂檢查啟用（threshold={self.convergence_threshold:.2e}）")
     
-    def _setup_adaptive_sampling(self):
-        """配置自適應採樣"""
-        # 1. 檢查簡單開關（training.sampling.adaptive_sampling）
-        sampling_cfg = self.train_cfg.get('sampling', {})
-        simple_flag = sampling_cfg.get('adaptive_sampling', False)
-        
-        # 2. 檢查詳細配置（adaptive_collocation.enabled）
-        adaptive_cfg = self.config.get('adaptive_collocation', {})
-        detailed_flag = adaptive_cfg.get('enabled', False)
-        
-        # 3. 統一決策（任一為 true 則啟用）
-        self.adaptive_sampling_enabled = simple_flag or detailed_flag
-        
-        if self.adaptive_sampling_enabled:
-            from pinnx.train.adaptive_collocation import AdaptiveCollocationSampler
-            self.adaptive_sampler = AdaptiveCollocationSampler(adaptive_cfg)
-            trigger_method = adaptive_cfg.get('trigger', {}).get('method', 'epoch_interval')
-            epoch_interval = adaptive_cfg.get('trigger', {}).get('epoch_interval', 1000)
-            logging.info("✅ 自適應採樣啟用")
-            logging.info(f"   觸發方法: {trigger_method}")
-            if trigger_method in ['epoch_interval', 'hybrid']:
-                logging.info(f"   觸發間隔: {epoch_interval} epochs")
-        else:
-            self.adaptive_sampler = None
     
-    def _setup_fourier_annealing(self):
-        """配置 Fourier 特徵退火調度器"""
-        from pinnx.train.fourier_annealing import (
-            FourierAnnealingScheduler, 
-            create_default_annealing,
-            create_channel_flow_annealing
-        )
-        
-        # 檢查配置中是否啟用退火
-        annealing_cfg = self.config.get('fourier_annealing', {})
-        if not annealing_cfg.get('enabled', False):
-            self.fourier_annealing = None
-            return
-        
-        # 提取退火策略
-        strategy = annealing_cfg.get('strategy', 'conservative')
-        
-        # 根據策略創建調度器
-        if strategy in ['conservative', 'aggressive', 'fine']:
-            # 使用預設策略
-            stages = create_default_annealing(strategy)
-            axes_names = annealing_cfg.get('axes_names', ['x', 'y', 'z'])
-            self.fourier_annealing = FourierAnnealingScheduler(stages, axes_names=axes_names)
-            logging.info(f"✅ Fourier 退火啟用（策略: {strategy}）")
-        
-        elif strategy == 'channel_flow':
-            # 使用通道流專用配置
-            per_axis_config = create_channel_flow_annealing()
-            # 將每軸配置轉換為調度器格式
-            # 使用 x 軸作為全局階段，y/z 作為每軸覆蓋
-            global_stages = per_axis_config['x']
-            per_axis_stages = {'y': per_axis_config['y'], 'z': per_axis_config['z']}
-            self.fourier_annealing = FourierAnnealingScheduler(
-                global_stages, 
-                per_axis_stages=per_axis_stages,
-                axes_names=['x', 'y', 'z']
-            )
-            logging.info("✅ Fourier 退火啟用（通道流專用配置）")
-        
-        elif strategy == 'custom':
-            # 自定義配置（從配置文件讀取）
-            stages_cfg = annealing_cfg.get('stages', [])
-            if not stages_cfg:
-                logging.warning("⚠️ 自定義退火策略未提供階段配置，禁用退火")
-                self.fourier_annealing = None
-                return
-            
-            from pinnx.train.fourier_annealing import AnnealingStage
-            stages = [
-                AnnealingStage(s['end_ratio'], s['frequencies'], s.get('description', ''))
-                for s in stages_cfg
-            ]
-            axes_names = annealing_cfg.get('axes_names', ['x', 'y', 'z'])
-            self.fourier_annealing = FourierAnnealingScheduler(stages, axes_names=axes_names)
-            logging.info(f"✅ Fourier 退火啟用（自定義配置，{len(stages)} 階段）")
-        
-        else:
-            logging.warning(f"⚠️ 未知退火策略 '{strategy}'，禁用退火")
-            self.fourier_annealing = None
     
-    # RANS 方法已移除（2025-10-14）：
-    # - _setup_rans_warmup()
-    # - _update_rans_weights()
-    
-    def _setup_prior_loss_manager(self):
-        """初始化 Prior Loss Manager（若配置啟用 RANS/低保真先驗）"""
-        lowfi_cfg = self.config.get('lowfi_prior', {})
-        
-        if not lowfi_cfg.get('enabled', False):
-            self.prior_loss_manager = None
-            logging.info("ℹ️  低保真先驗未啟用")
-            return
-        
-        # 提取低保真先驗配置
-        consistency_weight = lowfi_cfg.get('consistency_weight', 0.3)
-        variable_weights = lowfi_cfg.get('variable_weights', {'u': 1.0, 'v': 1.0, 'p': 0.5})
-        distance_metric = lowfi_cfg.get('distance_metric', 'mse')
-        
-        # 創建 PriorLossManager（Simplified 版本只需 consistency_weight）
-        loss_config = {
-            'low_fidelity': {
-                'consistency_weight': consistency_weight,  # ← 修復：傳入 consistency_weight
-                'variable_weights': variable_weights,
-                'distance_metric': distance_metric
-            }
-        }
-        
-        self.prior_loss_manager = PriorLossManager(
-            consistency_weight=consistency_weight,
-            loss_config=loss_config
-        )
-        self.prior_loss_manager.low_fidelity_loss.distance_metric = distance_metric
-        
-        logging.info(f"✅ Prior Loss Manager 初始化完成")
-        logging.info(f"   - Consistency Weight: {consistency_weight}")
-        logging.info(f"   - Variable Weights: {variable_weights}")
-        logging.info(f"   - Distance Metric: {distance_metric}")
     
     def step(
         self,
@@ -1563,7 +1027,11 @@ class Trainer:
         from pinnx.train.training_loop_manager import TrainingLoopManager
         
         # === 初始化訓練配置 ===
-        max_epochs, log_freq, checkpoint_freq, validation_freq = self._setup_training_config()
+        # 提取訓練配置
+        max_epochs = self.train_cfg.get('epochs', 1000)
+        log_freq = self.log_cfg.get('log_freq', 10)
+        checkpoint_freq = self.train_cfg.get('checkpoint', {}).get('save_every', 100)
+        validation_freq = self.train_cfg.get('validation', {}).get('val_freq', 50)
         loop_helper = TrainingLoopManager(self.config, self.wandb_run)
         start_time = time.time()
         start_epoch = self.epoch
@@ -1669,21 +1137,6 @@ class Trainer:
     # 訓練循環輔助方法（Phase 2 重構）
     # ========================================================================
     
-    def _setup_training_config(self) -> tuple[int, int, int, int]:
-        """
-        提取訓練配置參數
-        
-        Returns:
-            (max_epochs, log_freq, checkpoint_freq, validation_freq)
-        """
-        epochs = self.train_cfg.get('epochs')
-        if epochs is None:
-            raise KeyError("Config missing required key: training.epochs")
-        max_epochs = int(epochs)
-        log_freq = self.train_cfg.get('log_interval', self.log_cfg.get('log_freq', 50))
-        checkpoint_freq = self.train_cfg.get('checkpoint_freq', 500)
-        validation_freq = self.train_cfg.get('validation_freq', 100)
-        return max_epochs, log_freq, checkpoint_freq, validation_freq
     
     def _handle_curriculum_lr(self, loss_dict: Dict):
         """

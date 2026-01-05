@@ -37,6 +37,7 @@ def base_model_config() -> Dict[str, Any]:
             "depth": 2,
             "activation": "tanh",
             "use_fourier": False,
+            "output_variables": ["u", "v", "w", "p"],  # 3D flow fields
         },
     }
 
@@ -54,6 +55,7 @@ def fourier_model_config() -> Dict[str, Any]:
             "use_fourier": True,
             "fourier_m": 32,
             "fourier_sigma": 10.0,
+            "output_variables": ["u", "v", "w", "p"],  # 3D flow fields
         },
     }
 
@@ -71,6 +73,7 @@ def vs_pinn_config() -> Dict[str, Any]:
             "use_fourier": True,
             "fourier_m": 80,
             "fourier_sigma": 5.0,
+            "output_variables": ["u", "v", "w", "p"],  # 3D flow fields
         },
         "physics": {
             "type": "vs_pinn_channel_flow",

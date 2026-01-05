@@ -117,17 +117,14 @@ def sample_batch(device: torch.device) -> Dict[str, torch.Tensor]:
 
 # ============================= CPU 測試 =====================================
 
-def test_amp_config_parsing(minimal_config):
+def test_amp_config_parsing(minimal_config, create_trainer):
     """測試 AMP 配置正確解析"""
     # 測試 1: AMP 禁用
     config_disabled = minimal_config.copy()
     config_disabled['training']['amp']['enabled'] = False
     
-    trainer = Trainer(
-        model=nn.Linear(3, 4),
-        physics=None,
-        losses={},
-        config=config_disabled,
+    trainer = create_trainer(
+        model=nn.Linear(3, 4), physics=None, losses={}, config=config_disabled,
         device=torch.device('cpu')
     )
     
@@ -151,17 +148,13 @@ def test_amp_config_parsing(minimal_config):
     assert trainer_cpu.use_amp is False, "CPU 環境應自動禁用 AMP"
 
 
-def test_amp_scaler_initialization(minimal_config, simple_model):
+def test_amp_scaler_initialization(minimal_config, simple_model, create_trainer):
     """測試 GradScaler 正確初始化"""
     config = minimal_config.copy()
     config['training']['amp']['enabled'] = True
     
-    trainer = Trainer(
-        model=simple_model,
-        physics=None,
-        losses={},
-        config=config,
-        device=torch.device('cpu')
+    trainer = create_trainer(
+        model=simple_model, physics=None, losses={}, config=config, device=torch.device('cpu')
     )
     
     # CPU 環境：scaler 應存在但禁用
@@ -170,7 +163,7 @@ def test_amp_scaler_initialization(minimal_config, simple_model):
     assert trainer.scaler.is_enabled() is False
 
 
-def test_amp_numerical_stability(minimal_config, simple_model, mock_physics):
+def test_amp_numerical_stability(minimal_config, simple_model, mock_physics, create_trainer):
     """測試 AMP 數值穩定性（CPU 環境下應與 FP32 一致）"""
     device = torch.device('cpu')
     
@@ -244,18 +237,14 @@ def test_amp_numerical_stability(minimal_config, simple_model, mock_physics):
             f"CPU 環境下 AMP 應無影響，但輸出差異: {(output_fp32 - output_amp).abs().max().item()}"
 
 
-def test_amp_gradient_correctness(minimal_config, simple_model):
+def test_amp_gradient_correctness(minimal_config, simple_model, create_trainer):
     """測試 AMP 梯度方向正確性"""
     device = torch.device('cpu')
     config = minimal_config.copy()
     config['training']['amp']['enabled'] = True
     
-    trainer = Trainer(
-        model=simple_model,
-        physics=None,
-        losses={},
-        config=config,
-        device=device
+    trainer = create_trainer(
+        model=simple_model, physics=None, losses={}, config=config, device=device
     )
     
     # 簡單的前向傳播測試
@@ -276,7 +265,7 @@ def test_amp_gradient_correctness(minimal_config, simple_model):
 # ============================= GPU 測試 =====================================
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="需要 CUDA 環境")
-def test_amp_memory_saving_gpu(minimal_config, simple_model, mock_physics):
+def test_amp_memory_saving_gpu(minimal_config, simple_model, mock_physics, create_trainer):
     """測試 AMP 記憶體節省（GPU 環境）"""
     device = torch.device('cuda')
     
@@ -348,7 +337,7 @@ def test_amp_memory_saving_gpu(minimal_config, simple_model, mock_physics):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="需要 CUDA 環境")
-def test_amp_speed_impact_gpu(minimal_config, simple_model, mock_physics):
+def test_amp_speed_impact_gpu(minimal_config, simple_model, mock_physics, create_trainer):
     """測試 AMP 速度影響（GPU 環境）"""
     import time
     
@@ -434,7 +423,7 @@ def test_amp_speed_impact_gpu(minimal_config, simple_model, mock_physics):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="需要 CUDA 環境")
-def test_amp_checkpoint_compatibility_gpu(minimal_config, simple_model, tmp_path):
+def test_amp_checkpoint_compatibility_gpu(minimal_config, simple_model, tmp_path, create_trainer):
     """測試 AMP 檢查點保存/載入（GPU 環境）"""
     device = torch.device('cuda')
     
@@ -444,12 +433,8 @@ def test_amp_checkpoint_compatibility_gpu(minimal_config, simple_model, tmp_path
     config['output']['checkpoint_dir'] = str(tmp_path)
     
     # 創建訓練器並訓練一步
-    trainer = Trainer(
-        model=simple_model.to(device),
-        physics=None,
-        losses={},
-        config=config,
-        device=device
+    trainer = create_trainer(
+        model=simple_model.to(device), physics=None, losses={}, config=config, device=device
     )
     
     # 保存檢查點
@@ -479,19 +464,16 @@ def test_amp_checkpoint_compatibility_gpu(minimal_config, simple_model, tmp_path
 
 # ============================= 回歸測試 =====================================
 
-def test_amp_does_not_break_existing_training(minimal_config, simple_model, mock_physics):
+def test_amp_does_not_break_existing_training(minimal_config, simple_model, mock_physics, create_trainer):
     """回歸測試：確保 AMP 不破壞現有訓練流程"""
     device = torch.device('cpu')
     
     # 使用預設配置（AMP 禁用）
     config = minimal_config.copy()
     
-    trainer = Trainer(
-        model=simple_model,
-        physics=mock_physics,  # ✅ 修正：使用 mock_physics 而非 None
-        losses={},
-        config=config,
-        device=device
+    trainer = create_trainer(
+        model=simple_model, physics=mock_physics, # ✅ 修正：使用 mock_physics 而非 None
+        losses={}, config=config, device=device
     )
     
     # 訓練應能正常執行

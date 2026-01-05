@@ -57,7 +57,7 @@ def create_config(scheduler_type: str, **scheduler_params):
     ('none', None),
     (None, None),
 ])
-def test_trainer_scheduler_initialization(scheduler_type, expected_class):
+def test_trainer_scheduler_initialization(scheduler_type, expected_class, create_trainer):
     """測試 Trainer 可正確初始化所有調度器類型"""
     config = create_config(
         scheduler_type,
@@ -70,7 +70,7 @@ def test_trainer_scheduler_initialization(scheduler_type, expected_class):
     
     model = DummyModel()
     physics = DummyPhysics()
-    trainer = Trainer(model, physics, {}, config, torch.device('cpu'))
+    trainer = create_trainer(model, physics, {}, config, torch.device('cpu'))
     
     if expected_class is None:
         assert trainer.lr_scheduler is None, f"調度器應為 None，但得到 {type(trainer.lr_scheduler)}"
@@ -81,13 +81,13 @@ def test_trainer_scheduler_initialization(scheduler_type, expected_class):
             f"預期調度器類型 {expected_class}，但得到 {actual_class}"
 
 
-def test_trainer_unknown_scheduler_type():
+def test_trainer_unknown_scheduler_type(create_trainer):
     """測試未知調度器類型應回退到固定學習率"""
     config = create_config('unknown_scheduler_type')
     
     model = DummyModel()
     physics = DummyPhysics()
-    trainer = Trainer(model, physics, {}, config, torch.device('cpu'))
+    trainer = create_trainer(model, physics, {}, config, torch.device('cpu'))
     
     # 應該回退到 None（固定學習率）
     assert trainer.lr_scheduler is None
@@ -369,13 +369,13 @@ def test_scheduler_checkpoint_integration():
 # PyTorch 標準調度器基本功能測試
 # ============================================================================
 
-def test_cosine_annealing_warm_restarts():
+def test_cosine_annealing_warm_restarts(create_trainer):
     """測試 CosineAnnealingWarmRestarts 調度器"""
     config = create_config('cosine_warm_restarts', T_0=20, T_mult=1, eta_min=1e-6)
     
     model = DummyModel()
     physics = DummyPhysics()
-    trainer = Trainer(model, physics, {}, config, torch.device('cpu'))
+    trainer = create_trainer(model, physics, {}, config, torch.device('cpu'))
     
     # 應正確初始化
     assert trainer.lr_scheduler is not None
@@ -389,13 +389,13 @@ def test_cosine_annealing_warm_restarts():
     assert lr_after_10 < initial_lr, "學習率應在衰減"
 
 
-def test_exponential_lr():
+def test_exponential_lr(create_trainer):
     """測試 ExponentialLR 調度器"""
     config = create_config('exponential', gamma=0.95)
     
     model = DummyModel()
     physics = DummyPhysics()
-    trainer = Trainer(model, physics, {}, config, torch.device('cpu'))
+    trainer = create_trainer(model, physics, {}, config, torch.device('cpu'))
     
     # 應正確初始化
     assert trainer.lr_scheduler is not None
@@ -413,13 +413,13 @@ def test_exponential_lr():
         f"指數衰減計算錯誤：預期 {expected_lr}，得到 {lr_after_5}"
 
 
-def test_step_lr():
+def test_step_lr(create_trainer):
     """測試 StepLR 調度器"""
     config = create_config('step', step_size=10, gamma=0.5)
     
     model = DummyModel()
     physics = DummyPhysics()
-    trainer = Trainer(model, physics, {}, config, torch.device('cpu'))
+    trainer = create_trainer(model, physics, {}, config, torch.device('cpu'))
     
     # 應正確初始化
     assert trainer.lr_scheduler is not None
@@ -446,14 +446,14 @@ def test_step_lr():
 # 整合測試：學習率調度器更新
 # ============================================================================
 
-def test_scheduler_step_updates_lr():
+def test_scheduler_step_updates_lr(create_trainer):
     """測試調度器 step() 方法正確更新學習率"""
     config = create_config('cosine', min_lr=1e-6)
     config['training']['epochs'] = 50
     
     model = DummyModel()
     physics = DummyPhysics()
-    trainer = Trainer(model, physics, {}, config, torch.device('cpu'))
+    trainer = create_trainer(model, physics, {}, config, torch.device('cpu'))
     
     # 記錄學習率變化
     lr_history = [trainer.optimizer.param_groups[0]['lr']]

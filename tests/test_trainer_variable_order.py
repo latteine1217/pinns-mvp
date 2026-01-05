@@ -41,25 +41,25 @@ def _base_config(tmp_path, out_dim: int):
     }
 
 
-def test_variable_order_three_outputs(tmp_path):
+def test_variable_order_three_outputs(tmp_path, create_trainer):
     device = torch.device('cpu')
     model = DummyModel(in_dim=2, out_dim=3).to(device)
     physics = DummyPhysics()
     config = _base_config(tmp_path, out_dim=3)
 
-    trainer = Trainer(model, physics, losses={}, config=config, device=device)
+    trainer = create_trainer(model, physics, losses={}, config=config, device=device)
 
     inferred = trainer._infer_variable_order(3, context='unit-test')
     assert inferred == ['u', 'v', 'p']
 
 
-def test_variable_order_four_outputs(tmp_path):
+def test_variable_order_four_outputs(tmp_path, create_trainer):
     device = torch.device('cpu')
     model = DummyModel(in_dim=3, out_dim=4).to(device)
     physics = DummyPhysics()
     config = _base_config(tmp_path, out_dim=4)
 
-    trainer = Trainer(model, physics, losses={}, config=config, device=device)
+    trainer = create_trainer(model, physics, losses={}, config=config, device=device)
 
     inferred = trainer._infer_variable_order(4, context='unit-test')
     assert inferred == ['u', 'v', 'w', 'p']

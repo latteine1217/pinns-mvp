@@ -13,7 +13,7 @@ from pathlib import Path
 from pinnx.train.trainer import Trainer
 
 
-def test_best_model_auto_save(tmp_path):
+def test_best_model_auto_save(tmp_path, create_trainer):
     """測試最佳模型自動保存到磁碟"""
     
     # 簡單模型和配置
@@ -45,12 +45,8 @@ def test_best_model_auto_save(tmp_path):
     }
     
     # 創建訓練器
-    trainer = Trainer(
-        model=model,
-        physics=None,
-        losses={},
-        config=config,
-        device=torch.device('cpu')
+    trainer = create_trainer(
+        model=model, physics=None, losses={}, config=config, device=torch.device('cpu')
     )
     
     # 模擬發現新最佳模型（初始 val_loss=100）
@@ -84,7 +80,7 @@ def test_best_model_auto_save(tmp_path):
     print("✅ 測試通過：最佳模型自動保存功能正常")
 
 
-def test_early_stopping_restores_best_model(tmp_path):
+def test_early_stopping_restores_best_model(tmp_path, create_trainer):
     """測試早停觸發時恢復最佳模型"""
     
     model = torch.nn.Sequential(
@@ -111,7 +107,7 @@ def test_early_stopping_restores_best_model(tmp_path):
         }
     }
     
-    trainer = Trainer(model, None, {}, config, device=torch.device('cpu'))
+    trainer = create_trainer(model, None, {}, config, device=torch.device('cpu'))
     
     # 模擬訓練歷史
     trainer.epoch = 5

@@ -134,6 +134,9 @@ def basic_config():
                 'min_delta': 1e-6,
             }
         },
+        'model': {
+            'output_variables': ['u', 'v', 'p'],  # 2D flow fields
+        },
         'losses': {
             'data_weight': 100.0,
             'pde_weight': 1.0,
@@ -230,9 +233,9 @@ def validation_data(device):
 class TestTrainerInitialization:
     """測試 Trainer 初始化邏輯"""
     
-    def test_init_basic(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_init_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試基本初始化"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         # 檢查基本屬性
         assert trainer.model is simple_model
@@ -249,55 +252,55 @@ class TestTrainerInitialization:
         assert trainer.train_cfg['epochs'] == 100
         assert trainer.train_cfg['lr'] == 1e-3
     
-    def test_init_optimizer_adam(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_init_optimizer_adam(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試 Adam 優化器初始化"""
         basic_config['training']['optimizer'] = 'adam'
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         assert isinstance(trainer.optimizer, torch.optim.Adam)
     
-    def test_init_optimizer_adamw(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_init_optimizer_adamw(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試 AdamW 優化器初始化"""
         basic_config['training']['optimizer'] = 'adamw'
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         assert isinstance(trainer.optimizer, torch.optim.AdamW)
     
-    def test_init_optimizer_lbfgs(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_init_optimizer_lbfgs(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試 L-BFGS 優化器初始化"""
         basic_config['training']['optimizer'] = 'lbfgs'
         basic_config['training']['optimizer'] = {
             'type': 'lbfgs',
             'lr': 1.0,
         }
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         assert isinstance(trainer.optimizer, torch.optim.LBFGS)
     
-    def test_init_with_normalizer(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_init_with_normalizer(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試帶輸入標準化器的初始化"""
         mock_normalizer = Mock()
         mock_normalizer.transform = Mock(side_effect=lambda x: x)  # 恆等映射
         
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model, mock_physics, mock_losses, basic_config, device,
             input_normalizer=mock_normalizer
         )
         
         assert trainer.input_normalizer is mock_normalizer
     
-    def test_init_early_stopping_disabled(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_init_early_stopping_disabled(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試早停機制禁用"""
         basic_config['training']['early_stopping']['enabled'] = False
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         assert trainer.early_stopping_enabled is False
     
-    def test_init_early_stopping_enabled(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_init_early_stopping_enabled(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試早停機制啟用"""
         basic_config['training']['early_stopping']['enabled'] = True
         basic_config['training']['early_stopping']['patience'] = 30
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         assert trainer.early_stopping_enabled is True
         assert trainer.patience == 30
@@ -308,9 +311,9 @@ class TestTrainerInitialization:
 class TestTrainerStep:
     """測試 Trainer.step() 方法"""
     
-    def test_step_2d_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_step_2d_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試 2D PINN 基本單步訓練"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         # 執行訓練步驟
@@ -334,14 +337,14 @@ class TestTrainerStep:
         # 檢查物理模組被調用
         assert mock_physics.residual.called
     
-    def test_step_3d_vs_pinn(self, simple_model_3d, mock_physics_vs, mock_losses, basic_config, device, training_data_3d):
+    def test_step_3d_vs_pinn(self, simple_model_3d, mock_physics_vs, mock_losses, basic_config, device, training_data_3d, create_trainer):
         """測試 3D VS-PINN 單步訓練"""
         # 修改配置為 VS-PINN
         basic_config['physics']['type'] = 'vs_pinn_channel_flow'
         basic_config['domain']['z_min'] = 0.0
         basic_config['domain']['z_max'] = 6.0
         
-        trainer = Trainer(simple_model_3d, mock_physics_vs, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model_3d, mock_physics_vs, mock_losses, basic_config, device)
         trainer.training_data = training_data_3d
         
         # 執行訓練步驟
@@ -356,9 +359,9 @@ class TestTrainerStep:
         assert mock_physics_vs.compute_momentum_residuals.called
         assert mock_physics_vs.compute_continuity_residual.called
     
-    def test_step_gradient_computation(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_step_gradient_computation(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試梯度計算正確性"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         # 執行前檢查梯度為空
@@ -377,12 +380,12 @@ class TestTrainerStep:
         
         assert has_gradient, "模型參數未計算梯度"
     
-    def test_step_with_point_weights(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_step_with_point_weights(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試帶點權重的訓練步驟"""
         # 添加點權重
         training_data_2d['pde_point_weights'] = torch.rand(50, 1, device=device) + 0.5
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         result = trainer.step(training_data_2d, epoch=0)
@@ -392,7 +395,7 @@ class TestTrainerStep:
         assert result['total_loss'] >= 0
     
     def test_step_with_gradnorm_weighting(self, simple_model, mock_physics, mock_losses,
-                                          basic_config, device, training_data_2d):
+                                          basic_config, device, training_data_2d, create_trainer):
         """測試權重應用邏輯（簡化版 - GradNorm 需要額外初始化）"""
         basic_config['losses'].update({
             'adaptive_weighting': True,
@@ -401,7 +404,7 @@ class TestTrainerStep:
             'grad_norm_alpha': 0.2,
         })
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         result = trainer.step(training_data_2d, epoch=0)
@@ -422,10 +425,10 @@ class TestTrainerStep:
         assert result['weighted_data_loss'] > 0
         assert result['total_loss'] > 0
     
-    def test_step_gradient_clip(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_step_gradient_clip(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試梯度裁剪"""
         basic_config['training']['gradient_clip'] = 1.0
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         result = trainer.step(training_data_2d, epoch=0)
@@ -447,9 +450,9 @@ class TestTrainerStep:
 class TestTrainerValidation:
     """測試 Trainer.validate() 方法"""
     
-    def test_validate_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, validation_data):
+    def test_validate_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, validation_data, create_trainer):
         """測試基本驗證功能"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.validation_data = validation_data
         
         metrics = trainer.validate()
@@ -465,27 +468,27 @@ class TestTrainerValidation:
         assert metrics['mse'] >= 0
         assert metrics['relative_l2'] >= 0
     
-    def test_validate_no_data(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_validate_no_data(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試無驗證資料時返回 None"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.validation_data = None
         
         metrics = trainer.validate()
         
         assert metrics is None
     
-    def test_validate_empty_data(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_validate_empty_data(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試空驗證資料時返回 None"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.validation_data = {'size': 0}
         
         metrics = trainer.validate()
         
         assert metrics is None
     
-    def test_validate_dimension_mismatch(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_validate_dimension_mismatch(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試維度不匹配時的處理（模型輸出 3，目標 4）"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         # 驗證資料目標維度為 4（模型輸出為 3）
         trainer.validation_data = {
@@ -500,9 +503,9 @@ class TestTrainerValidation:
         assert metrics is not None
         assert not np.isnan(metrics['mse'])
     
-    def test_validate_preserves_training_mode(self, simple_model, mock_physics, mock_losses, basic_config, device, validation_data):
+    def test_validate_preserves_training_mode(self, simple_model, mock_physics, mock_losses, basic_config, device, validation_data, create_trainer):
         """測試驗證後恢復訓練模式"""
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.validation_data = validation_data
         
         # 設置為訓練模式
@@ -521,12 +524,12 @@ class TestTrainerValidation:
 class TestTrainerTraining:
     """測試 Trainer.train() 方法"""
     
-    def test_train_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_train_basic(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試基本訓練循環"""
         basic_config['training']['epochs'] = 5  # 減少 epoch 以加速測試
         basic_config['training']['log_interval'] = 2
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         result = trainer.train()
@@ -542,14 +545,14 @@ class TestTrainerTraining:
         assert result['training_time'] > 0
         assert len(result['history']['total_loss']) == 5
     
-    def test_train_with_early_stopping(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_train_with_early_stopping(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試帶早停的訓練循環"""
         basic_config['training']['epochs'] = 100
         basic_config['training']['early_stopping']['enabled'] = True
         basic_config['training']['early_stopping']['patience'] = 3
         basic_config['training']['early_stopping']['monitor'] = 'val_loss'
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         # Mock 驗證指標（模擬不改善情況：指標遞增）
@@ -576,7 +579,7 @@ class TestTrainerTraining:
         assert result['epochs_completed'] < 100, "Early stopping should trigger before 100 epochs"
         assert trainer.best_epoch == 0, f"Best epoch should be 0, got {trainer.best_epoch}"
     
-    def test_train_with_lr_scheduler(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_train_with_lr_scheduler(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試帶學習率調度器的訓練"""
         basic_config['training']['epochs'] = 10
         basic_config['training']['log_interval'] = 1  # 每個 epoch 都記錄
@@ -586,7 +589,7 @@ class TestTrainerTraining:
             'gamma': 0.5
         }
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         initial_lr = trainer.get_current_lr()
@@ -606,14 +609,14 @@ class TestTrainerTraining:
         assert trainer.history['lr'][6] < trainer.history['lr'][5]  # epoch 6 時第二次下降
         assert trainer.history['lr'][9] < trainer.history['lr'][8]  # epoch 9 時第三次下降
     
-    def test_train_with_checkpointing(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_train_with_checkpointing(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試檢查點保存"""
         with tempfile.TemporaryDirectory() as tmpdir:
             basic_config['training']['epochs'] = 10
             basic_config['training']['checkpoint_freq'] = 5
             basic_config['output']['checkpoint_dir'] = tmpdir
             
-            trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+            trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
             trainer.training_data = training_data_2d
             
             result = trainer.train()
@@ -625,7 +628,7 @@ class TestTrainerTraining:
             # 應該有 epoch_5 和最終檢查點
             assert len(checkpoint_files) >= 1
     
-    def test_train_fast_convergence(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d):
+    def test_train_fast_convergence(self, simple_model, mock_physics, mock_losses, basic_config, device, training_data_2d, create_trainer):
         """測試快速收斂時提前停止"""
         basic_config['training']['epochs'] = 100
         basic_config['training']['early_stopping'] = {
@@ -634,7 +637,7 @@ class TestTrainerTraining:
             'min_delta': 1e-6,
         }
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
         
         # Mock step() 返回極小損失（模擬快速收斂）
@@ -658,11 +661,11 @@ class TestTrainerTraining:
 class TestTrainerCheckpointing:
     """測試檢查點保存與載入"""
     
-    def test_save_checkpoint(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_save_checkpoint(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試檢查點保存"""
         with tempfile.TemporaryDirectory() as tmpdir:
             basic_config['output']['checkpoint_dir'] = tmpdir
-            trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+            trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
             
             # 保存檢查點
             trainer.save_checkpoint(epoch=10, metrics={'loss': 0.5})
@@ -678,7 +681,7 @@ class TestTrainerCheckpointing:
             assert 'optimizer_state_dict' in checkpoint
             assert checkpoint['epoch'] == 10
     
-    def test_load_checkpoint(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_load_checkpoint(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試檢查點載入"""
         with tempfile.TemporaryDirectory() as tmpdir:
             basic_config['output']['checkpoint_dir'] = tmpdir
@@ -703,11 +706,11 @@ class TestTrainerCheckpointing:
             # 檢查狀態恢復
             assert trainer2.epoch == 15
     
-    def test_save_best_model(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_save_best_model(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試最佳模型保存"""
         with tempfile.TemporaryDirectory() as tmpdir:
             basic_config['output']['checkpoint_dir'] = tmpdir
-            trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+            trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
             
             # 保存最佳模型
             trainer.save_checkpoint(epoch=20, metrics={'loss': 0.1}, is_best=True)
@@ -722,12 +725,12 @@ class TestTrainerCheckpointing:
 class TestTrainerEarlyStopping:
     """測試早停邏輯"""
     
-    def test_early_stopping_improvement(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_early_stopping_improvement(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試指標改善時不觸發早停"""
         basic_config['training']['early_stopping']['enabled'] = True
         basic_config['training']['early_stopping']['patience'] = 5
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         # 模擬指標改善
         assert trainer.check_early_stopping(1.0) is False
@@ -738,12 +741,12 @@ class TestTrainerEarlyStopping:
         assert trainer.best_val_loss == 0.6
         assert trainer.patience_counter == 0
     
-    def test_early_stopping_trigger(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_early_stopping_trigger(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試達到 patience 時觸發早停"""
         basic_config['training']['early_stopping']['enabled'] = True
         basic_config['training']['early_stopping']['patience'] = 3
         
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         # 模擬指標不改善
         assert trainer.check_early_stopping(1.0) is False  # 新最佳
@@ -754,10 +757,10 @@ class TestTrainerEarlyStopping:
         # 檢查計數器
         assert trainer.patience_counter == 3
     
-    def test_early_stopping_disabled(self, simple_model, mock_physics, mock_losses, basic_config, device):
+    def test_early_stopping_disabled(self, simple_model, mock_physics, mock_losses, basic_config, device, create_trainer):
         """測試早停禁用時不觸發"""
         basic_config['training']['early_stopping']['enabled'] = False
-        trainer = Trainer(simple_model, mock_physics, mock_losses, basic_config, device)
+        trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         
         # 無論指標如何都不應觸發
         assert trainer.check_early_stopping(1.0) is False

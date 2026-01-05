@@ -174,9 +174,9 @@ class TestPhysicsLossInPhysicalSpace:
     """驗證物理損失計算發生在物理空間（而非標準化空間）"""
     
     def test_pde_residuals_receive_physical_quantities(self, simple_model_3d, mock_physics_vs,
-                                                       basic_config, device, training_data_physical):
+                                                       basic_config, device, training_data_physical, create_trainer):
         """驗證 PDE 殘差計算收到物理量（非標準化量）"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
@@ -193,9 +193,9 @@ class TestPhysicsLossInPhysicalSpace:
         )
     
     def test_boundary_loss_in_physical_space(self, simple_model_3d, mock_physics_vs,
-                                             basic_config, device, training_data_physical):
+                                             basic_config, device, training_data_physical, create_trainer):
         """驗證壁面邊界損失在物理空間計算（u_wall = 0）"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
@@ -206,9 +206,9 @@ class TestPhysicsLossInPhysicalSpace:
         assert 'loss' in result or 'total_loss' in result, "應包含損失資訊"
     
     def test_data_loss_in_physical_space(self, simple_model_3d, mock_physics_vs,
-                                         basic_config, device, training_data_physical):
+                                         basic_config, device, training_data_physical, create_trainer):
         """驗證資料監督損失在物理空間計算"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
@@ -219,7 +219,7 @@ class TestPhysicsLossInPhysicalSpace:
         assert result is not None, "訓練步驟應返回結果"
     
     def test_gradnorm_weights_balanced_for_vs_pinn(self, simple_model_3d, mock_physics_vs,
-                                                   basic_config, device, training_data_physical):
+                                                   basic_config, device, training_data_physical, create_trainer):
         """驗證 VS-PINN 下 GradNorm 權重不會過度失衡"""
         loss_names = ['data', 'momentum_x', 'momentum_y', 'momentum_z', 'continuity', 'wall_constraint']
         gradnorm = GradNormWeighter(
@@ -230,12 +230,8 @@ class TestPhysicsLossInPhysicalSpace:
             max_ratio=10.0
         )
         
-        trainer = Trainer(
-            simple_model_3d,
-            mock_physics_vs,
-            {},
-            basic_config,
-            device,
+        trainer = create_trainer(
+            simple_model_3d, mock_physics_vs, {}, basic_config, device,
             weighters={'gradnorm': gradnorm}
         )
         
@@ -273,9 +269,9 @@ class TestValidationDenormalization:
     """驗證 validate() 在物理空間比較預測值與真實值"""
     
     def test_validate_computes_physical_metrics(self, simple_model_3d, mock_physics_vs,
-                                                basic_config, device, training_data_physical):
+                                                basic_config, device, training_data_physical, create_trainer):
         """驗證 validate() 計算物理空間的指標"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
@@ -304,9 +300,9 @@ class TestValidationDenormalization:
             assert 'val_loss' in val_metrics or 'mse' in val_metrics, "應包含驗證指標"
     
     def test_validate_handles_normalization_correctly(self, simple_model_3d, mock_physics_vs,
-                                                      basic_config, device, training_data_physical):
+                                                      basic_config, device, training_data_physical, create_trainer):
         """驗證 validate() 正確處理標準化（模型輸出反標準化後比較）"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
@@ -348,9 +344,9 @@ class TestFullIntegration:
     """端到端測試：驗證完整訓練流程的標準化正確性"""
     
     def test_training_convergence_with_normalization(self, simple_model_3d, mock_physics_vs,
-                                                     basic_config, device, training_data_physical):
+                                                     basic_config, device, training_data_physical, create_trainer):
         """驗證標準化不影響訓練收斂"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
@@ -369,9 +365,9 @@ class TestFullIntegration:
         assert result_final is not None, "最終訓練應成功"
     
     def test_gradient_flow_with_normalization(self, simple_model_3d, mock_physics_vs,
-                                              basic_config, device, training_data_physical):
+                                              basic_config, device, training_data_physical, create_trainer):
         """驗證標準化不阻斷梯度流"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
@@ -389,13 +385,13 @@ class TestFullIntegration:
     
     def test_checkpoint_save_restore_with_normalization(self, simple_model_3d, mock_physics_vs,
                                                         basic_config, device, training_data_physical,
-                                                        tmp_path):
+                                                        tmp_path, create_trainer):
         """驗證檢查點保存/載入包含標準化器狀態"""
         # 修改配置以使用臨時目錄
         test_config = basic_config.copy()
         test_config['output'] = {'checkpoint_dir': str(tmp_path)}
         
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, test_config, device
         )
         
@@ -440,9 +436,9 @@ class TestBoundaryConditions:
     """測試邊界條件的特殊處理"""
     
     def test_wall_boundary_zero_velocity(self, simple_model_3d, mock_physics_vs,
-                                         basic_config, device):
+                                         basic_config, device, create_trainer):
         """驗證壁面邊界條件：物理空間 u=v=w=0"""
-        trainer = Trainer(
+        trainer = create_trainer(
             simple_model_3d, mock_physics_vs, {}, basic_config, device
         )
         
