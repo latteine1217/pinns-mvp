@@ -298,12 +298,115 @@ class StandardCheckpointManager(CheckpointManager):
         if self.save_physics_validation and 'physics_validation' in kwargs:
             data['physics_validation'] = kwargs['physics_validation']
 
+        # 🆕 保存 normalization metadata（優先級：明確傳入 > normalizers dict/object > config）
+        if 'normalization_stats' in kwargs and kwargs['normalization_stats'] is not None:
+            # 優先使用明確傳入的統計量
+            data['normalization'] = kwargs['normalization_stats']
+            logging.debug(f"✅ Saved normalization metadata (from explicit stats)")
+        elif 'normalizers' in kwargs and kwargs['normalizers'] is not None:
+            # 從 normalizers 提取（可能是 dict 或對象）
+            normalizers = kwargs['normalizers']
+            if isinstance(normalizers, dict):
+                # 已經是 metadata dict（來自 get_metadata()）
+                data['normalization'] = normalizers
+                logging.debug(f"✅ Saved normalization metadata (from normalizers dict)")
+            else:
+                # 是 normalizer 對象，需要提取
+                norm_metadata = self._extract_normalization_from_normalizers(normalizers)
+                if norm_metadata:
+                    data['normalization'] = norm_metadata
+                    logging.debug(f"✅ Saved normalization metadata (from normalizers object)")
+        elif 'normalization' in config:
+            # 從 config 提取（包含 variable_order，可能包含統計量）
+            norm_cfg = config['normalization'].copy()
+            # 如果 kwargs 中有訓練數據統計量，補充進去
+            if 'training_data_stats' in kwargs and kwargs['training_data_stats'] is not None:
+                norm_cfg.update(kwargs['training_data_stats'])
+                logging.debug(f"✅ Saved normalization metadata (config + training data stats)")
+            else:
+                logging.debug(f"✅ Saved normalization config (stats may be computed at eval time)")
+            data['normalization'] = norm_cfg
+
         # 支持額外參數
         optional_keys = ['scheduler_state', 'scaler_state', 'normalizers', 'gradient_scaler']
         for key in optional_keys:
             if key in kwargs:
                 data[key] = kwargs[key]
 
+        return data
+
+    def _extract_normalization_from_normalizers(self, normalizers) -> Dict[str, Any]:
+        """
+        從 normalizers 對象中提取 normalization metadata
+        
+        Args:
+            normalizers: TrainerComponents.normalizers 對象或類似結構
+            
+        Returns:
+            包含 variable_order, means, stds 的字典；若無法提取則返回空字典
+        """
+        metadata = {}
+        
+        # 嘗試從 output_transform 提取（最常見情況）
+        if hasattr(normalizers, 'output_transform') and normalizers.output_transform is not None:
+            ot = normalizers.output_transform
+            
+            # 提取 variable_order
+            if hasattr(ot, 'variable_order'):
+                metadata['variable_order'] = ot.variable_order
+            
+            # 提取 means 和 stds（轉為可序列化格式）
+            if hasattr(ot, 'means') and ot.means is not None:
+                metadata['means'] = self._to_serializable(ot.means)
+            
+            if hasattr(ot, 'stds') and ot.stds is not None:
+                metadata['stds'] = self._to_serializable(ot.stds)
+            
+            # 標記 normalization 方法
+            metadata['method'] = getattr(ot, 'method', 'z_score')
+        
+        # 嘗試從 input_transform 提取（如果 output_transform 不存在）
+        elif hasattr(normalizers, 'input_transform') and normalizers.input_transform is not None:
+            it = normalizers.input_transform
+            if hasattr(it, 'x_mean') and hasattr(it, 'x_std'):
+                metadata['input_means'] = self._to_serializable(it.x_mean)
+                metadata['input_stds'] = self._to_serializable(it.x_std)
+        
+        return metadata
+
+    def _to_serializable(self, data):
+        """
+        將 tensor/numpy/dict 轉為可序列化的格式
+        
+        Args:
+            data: torch.Tensor, np.ndarray, dict, list 或基本類型
+            
+        Returns:
+            可被 torch.save() 序列化的格式（保留為 tensor 或轉為 dict/list）
+        """
+        import torch
+        import numpy as np
+        
+        if data is None:
+            return None
+        
+        # Dict: 遞歸處理每個值
+        if isinstance(data, dict):
+            return {k: self._to_serializable(v) for k, v in data.items()}
+        
+        # Tensor: 保留為 tensor（torch.save 支持）
+        if isinstance(data, torch.Tensor):
+            return data.detach().cpu()
+        
+        # Numpy: 轉為 tensor
+        if isinstance(data, np.ndarray):
+            return torch.from_numpy(data)
+        
+        # List/Tuple: 遞歸處理
+        if isinstance(data, (list, tuple)):
+            return [self._to_serializable(item) for item in data]
+        
+        # 基本類型直接返回
         return data
 
     def _generate_filepath(self, epoch: int, metrics: Dict[str, float]) -> Path:

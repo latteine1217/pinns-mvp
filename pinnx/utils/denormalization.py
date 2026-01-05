@@ -24,6 +24,13 @@ from typing import Dict, Optional, Tuple, Union
 import logging
 from pathlib import Path
 
+from pinnx.constants import (
+    JHTDB_RETAU1000_STATS, 
+    JHTDB_RETAU1000_RANGES,
+    KOLMOGOROV_RE50_STATS,
+    KOLMOGOROV_RE50_RANGES
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +70,49 @@ def _load_normalization_metadata(checkpoint_path: str) -> Optional[Dict]:
     except Exception as e:
         logger.error(f"❌ 載入 checkpoint 失敗: {e}")
         return None
+
+
+def _detect_physics_type(config: Optional[Dict], checkpoint_path: Optional[str] = None) -> str:
+    """
+    從 config 或 checkpoint 推斷物理場景類型
+    
+    Args:
+        config: 訓練配置字典
+        checkpoint_path: checkpoint 路徑（可選）
+        
+    Returns:
+        'kolmogorov_2d' 或 'channel_3d'
+    """
+    # 1. 從 checkpoint 中的 config 檢測
+    if checkpoint_path is not None:
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            if 'config' in checkpoint:
+                config = checkpoint['config']
+        except Exception:
+            pass
+    
+    # 2. 從 config['physics']['type'] 檢測
+    if config and 'physics' in config:
+        physics_type = config['physics'].get('type', '').lower()
+        if 'kolmogorov' in physics_type:
+            return 'kolmogorov_2d'
+        elif 'channel' in physics_type or 'jhtdb' in physics_type:
+            return 'channel_3d'
+    
+    # 3. 從 variable_order 推斷（2變數 = Kolmogorov, 3-4變數 = Channel）
+    if config and 'normalization' in config:
+        variable_order = config['normalization'].get('variable_order', [])
+        if len(variable_order) in [2, 3] and 'w' not in variable_order:
+            # u, v (可能包含 p) -> Kolmogorov 2D
+            return 'kolmogorov_2d'
+        elif len(variable_order) >= 3 and 'w' in variable_order:
+            # u, v, w, p -> Channel 3D
+            return 'channel_3d'
+    
+    # 4. 預設為 channel_3d（保守策略）
+    logger.debug("無法確定物理類型，預設為 channel_3d")
+    return 'channel_3d'
 
 
 def denormalize_output(
@@ -138,11 +188,18 @@ def denormalize_output(
     
     predictions = np.array(predictions, dtype=np.float32)
     
-    # 確定標準化類型
+    # 確定標準化類型（優先級：參數 > config['model']['scaling'] > config['normalization']['type']）
     if output_norm_type is None:
+        # 優先從 model.scaling.output_norm 讀取（舊配置方式）
         if 'model' in config and 'scaling' in config['model']:
-            output_norm_type = config['model']['scaling'].get('output_norm', 'none')
-        else:
+            output_norm_type = config['model']['scaling'].get('output_norm', None)
+        
+        # 如果沒有，從 normalization.type 讀取（新配置方式）
+        if output_norm_type is None and 'normalization' in config:
+            output_norm_type = config['normalization'].get('type', 'none')
+        
+        # 最後默認為 'none'
+        if output_norm_type is None:
             output_norm_type = 'none'
     
     if verbose:
@@ -258,7 +315,7 @@ def _denormalize_training_data(
                     logger.info(f"   means={means}")
                     logger.info(f"   stds={stds}")
     
-    # 優先級 3: 硬編碼預設值（JHTDB Channel Re_tau=1000 正確統計量）
+    # 優先級 3: 根據物理類型選擇預設統計量
     # 檢查是否有任何統計量為 None 或空字典
     needs_default = False
     if means is None or stds is None:
@@ -267,53 +324,66 @@ def _denormalize_training_data(
         # 檢查字典是否為空或任何值為 None
         if not means or not stds:
             needs_default = True
-        elif any(means.get(k) is None for k in ['u', 'v', 'w', 'p']):
+        # 檢查必要的變數是否存在（根據 variable_order）
+        required_vars = ['u', 'v', 'p']  # 最小集合
+        if any(means.get(k) is None for k in required_vars):
             needs_default = True
-        elif any(stds.get(k) is None for k in ['u', 'v', 'w', 'p']):
+        elif any(stds.get(k) is None for k in required_vars):
             needs_default = True
     
     if needs_default:
-        means = {
-            'u': 9.921185,
-            'v': -0.000085,
-            'w': -0.002202,
-            'p': -40.374241
-        }
-        stds = {
-            'u': 4.593879,
-            'v': 0.329614,
-            'w': 3.865396,
-            'p': 28.619722
-        }
-        if verbose:
-            logger.warning("⚠️  未找到標準化係數，使用硬編碼預設值（JHTDB Re_tau=1000 正確統計）")
+        # 🆕 根據物理類型選擇預設統計量
+        physics_type = _detect_physics_type(config, checkpoint_path)
+        
+        if physics_type == 'kolmogorov_2d':
+            means = KOLMOGOROV_RE50_STATS['means'].copy()
+            stds = KOLMOGOROV_RE50_STATS['stds'].copy()
+            if verbose:
+                logger.warning("⚠️  未找到標準化係數，使用預設值（Kolmogorov Re=50 統計）")
+        else:  # channel_3d
+            means = JHTDB_RETAU1000_STATS['means'].copy()
+            stds = JHTDB_RETAU1000_STATS['stds'].copy()
+            if verbose:
+                logger.warning("⚠️  未找到標準化係數，使用預設值（JHTDB Re_tau=1000 統計）")
     
     # 確保 means 和 stds 是字典類型
     if not isinstance(means, dict) or not isinstance(stds, dict):
         logger.error(f"❌ 標準化係數格式錯誤: means={type(means)}, stds={type(stds)}")
-        # 回退到預設值
-        means = {
-            'u': 9.921185,
-            'v': -0.000085,
-            'w': -0.002202,
-            'p': -40.374241
-        }
-        stds = {
-            'u': 4.593879,
-            'v': 0.329614,
-            'w': 3.865396,
-            'p': 28.619722
-        }
+        # 回退：根據物理類型選擇預設值
+        physics_type = _detect_physics_type(config, checkpoint_path)
+        if physics_type == 'kolmogorov_2d':
+            means = KOLMOGOROV_RE50_STATS['means'].copy()
+            stds = KOLMOGOROV_RE50_STATS['stds'].copy()
+        else:
+            means = JHTDB_RETAU1000_STATS['means'].copy()
+            stds = JHTDB_RETAU1000_STATS['stds'].copy()
     
-    u_mean, v_mean, w_mean, p_mean = means['u'], means['v'], means['w'], means['p']
-    u_std, v_std, w_std, p_std = stds['u'], stds['v'], stds['w'], stds['p']
+    # 提取各變數的統計量（安全獲取，支持 2D 和 3D）
+    u_mean = means.get('u', 0.0)
+    v_mean = means.get('v', 0.0)
+    w_mean = means.get('w', 0.0)  # Kolmogorov 2D 不需要
+    p_mean = means.get('p', 0.0)
     
-    # 🆕 檢查 variable_order（從 checkpoint metadata）
+    u_std = stds.get('u', 1.0)
+    v_std = stds.get('v', 1.0)
+    w_std = stds.get('w', 1.0)
+    p_std = stds.get('p', 1.0)
+    
+    # 🆕 檢查 variable_order（優先順序：checkpoint metadata > config）
     variable_order = None
+    
+    # 1. 從 checkpoint metadata 讀取
     if checkpoint_path is not None:
         metadata = _load_normalization_metadata(checkpoint_path)
         if metadata is not None:
             variable_order = metadata.get('variable_order', None)
+    
+    # 2. 如果 checkpoint 沒有，從 config 讀取
+    if variable_order is None and config is not None:
+        if 'normalization' in config and 'variable_order' in config['normalization']:
+            variable_order = config['normalization']['variable_order']
+            if verbose:
+                logger.info(f"📋 使用 config 中的 variable_order: {variable_order}")
     
     if verbose:
         logger.info("🔧 執行 Z-score 反標準化 (x * std + mean)")
@@ -327,26 +397,17 @@ def _denormalize_training_data(
     result = predictions.copy()
     out_dim = predictions.shape[-1]
     
-    # 🔍 DEBUG: 強制輸出變數順序資訊（無論 verbose）
-    logger.info(f"🔍 DEBUG denormalization:")
-    logger.info(f"  - variable_order: {variable_order}")
-    logger.info(f"  - out_dim: {out_dim}")
-    logger.info(f"  - 條件檢查: variable_order is not None = {variable_order is not None}")
-    logger.info(f"  - 條件檢查: len(variable_order) == out_dim = {len(variable_order) == out_dim if variable_order else 'N/A'}")
-    logger.info(f"  - 預測範圍（標準化）: [{predictions.min():.6f}, {predictions.max():.6f}]")
-    
-    # 🆕 使用 variable_order 動態處理
+    # 使用 variable_order 動態處理
     if variable_order is not None and len(variable_order) == out_dim:
-        logger.info(f"✅ 使用 variable_order 動態分支: {variable_order}")
+        if verbose:
+            logger.info(f"✅ 使用 variable_order 動態分支: {variable_order}")
+        
         var_map = {'u': (u_mean, u_std), 'v': (v_mean, v_std), 
                    'w': (w_mean, w_std), 'p': (p_mean, p_std)}
         for i, var_name in enumerate(variable_order):
             if var_name in var_map:
                 mean, std = var_map[var_name]
-                before_val = result[0, i] if len(result) > 0 else None
                 result[:, i] = result[:, i] * std + mean
-                after_val = result[0, i] if len(result) > 0 else None
-                logger.info(f"  - 變數 {i} ({var_name}): {before_val:.6f} * {std:.6f} + {mean:.6f} = {after_val:.6f}")
             # 其他變數（如 S）不處理
     
     else:
@@ -355,13 +416,6 @@ def _denormalize_training_data(
             "請在 checkpoint metadata 或配置中提供 variable_order，"
             f"且其長度需等於輸出維度 ({out_dim})."
         )
-    
-    # 🔍 DEBUG: 強制輸出反標準化後的統計
-    logger.info(f"🔍 反標準化後範圍: [{result.min():.6f}, {result.max():.6f}]")
-    var_names = variable_order if variable_order else ['u', 'v', 'w', 'p', 'S'][:out_dim]
-    for i in range(out_dim):
-        name = var_names[i] if i < len(var_names) else f'var{i}'
-        logger.info(f"  {name}: mean={result[:, i].mean():.6f}, [{result[:, i].min():.6f}, {result[:, i].max():.6f}]")
     
     if verbose:
         logger.info("✅ Z-score 反標準化完成")
@@ -606,12 +660,7 @@ def _extract_output_ranges(
             return output_ranges
     
     # 硬編碼默認值（基於 JHTDB Channel Re1000）
-    output_ranges = {
-        'u': (0.0, 20.0),
-        'v': (-1.0, 1.0),
-        'w': (-5.0, 5.0),
-        'p': (-100.0, 10.0)
-    }
+    output_ranges = JHTDB_RETAU1000_RANGES.copy()
     
     if verbose:
         logger.warning("⚠️  使用硬編碼默認輸出範圍（可能不準確）")
