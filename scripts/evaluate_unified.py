@@ -59,7 +59,9 @@ from pinnx.utils.evaluation_utils import load_model_for_evaluation, predict_with
 from pinnx.utils.denormalization import denormalize_output
 from pinnx.evals.metrics import (
     relative_L2, rmse_metrics, conservation_error,
-    energy_spectrum_1d, wall_shear_stress, comprehensive_evaluation
+    energy_spectrum_1d, energy_spectrum_2d, wall_shear_stress, 
+    compute_kinetic_energy_2d, compute_enstrophy_2d,
+    comprehensive_evaluation
 )
 
 # 設定日誌
@@ -277,8 +279,83 @@ def compute_physics_metrics(pred: Dict, coords: np.ndarray, shape: Tuple) -> Dic
     return metrics
 
 
+def compute_kolmogorov_physics(pred: Dict, ref: Dict, shape: Tuple, 
+                               domain_size: float = 2*np.pi) -> Dict:
+    """
+    計算 Kolmogorov Flow 專用物理量
+    
+    Args:
+        pred: 預測數據 {'u': [N], 'v': [N], ...}
+        ref: 參考數據 {'u': [N], 'v': [N], ...}
+        shape: 網格形狀 (Nx, Ny)
+        domain_size: 域大小（預設 2π）
+    
+    Returns:
+        物理量字典
+    """
+    physics = {}
+    
+    # 重塑為 2D 網格
+    nx, ny = shape
+    u_pred = pred['u'].reshape(nx, ny)
+    v_pred = pred['v'].reshape(nx, ny)
+    u_ref = ref['u'].reshape(nx, ny)
+    v_ref = ref['v'].reshape(nx, ny)
+    
+    # 轉換為 torch tensor（metrics.py 中的函數需要 torch tensor）
+    u_pred_t = torch.from_numpy(u_pred).float()
+    v_pred_t = torch.from_numpy(v_pred).float()
+    u_ref_t = torch.from_numpy(u_ref).float()
+    v_ref_t = torch.from_numpy(v_ref).float()
+    
+    # 1. 動能 (Kinetic Energy)
+    ke_pred = compute_kinetic_energy_2d(u_pred_t.flatten(), v_pred_t.flatten())
+    ke_ref = compute_kinetic_energy_2d(u_ref_t.flatten(), v_ref_t.flatten())
+    
+    physics['kinetic_energy'] = {
+        'prediction': ke_pred,
+        'reference': ke_ref,
+        'error': (ke_pred - ke_ref) / ke_ref * 100  # 百分比
+    }
+    
+    # 2. 擾動度 (Enstrophy) - 需要計算渦度
+    # 手動計算渦度（因為 compute_enstrophy_2d 需要座標）
+    dx = domain_size / (nx - 1)
+    dy = domain_size / (ny - 1)
+    
+    dvdx_pred = np.gradient(v_pred, dx, axis=1)
+    dudy_pred = np.gradient(u_pred, dy, axis=0)
+    vorticity_pred = dvdx_pred - dudy_pred
+    enstrophy_pred = 0.5 * np.mean(vorticity_pred**2)
+    
+    dvdx_ref = np.gradient(v_ref, dx, axis=1)
+    dudy_ref = np.gradient(u_ref, dy, axis=0)
+    vorticity_ref = dvdx_ref - dudy_ref
+    enstrophy_ref = 0.5 * np.mean(vorticity_ref**2)
+    
+    physics['enstrophy'] = {
+        'prediction': enstrophy_pred,
+        'reference': enstrophy_ref,
+        'error': (enstrophy_pred - enstrophy_ref) / enstrophy_ref * 100
+    }
+    
+    # 3. 能量譜 (Energy Spectrum)
+    k_pred, E_k_pred = energy_spectrum_2d(u_pred_t, v_pred_t, domain_size)
+    k_ref, E_k_ref = energy_spectrum_2d(u_ref_t, v_ref_t, domain_size)
+    
+    physics['energy_spectrum'] = {
+        'k_pred': k_pred,
+        'E_k_pred': E_k_pred,
+        'k_ref': k_ref,
+        'E_k_ref': E_k_ref
+    }
+    
+    return physics
+
+
 def compute_all_metrics(pred: Dict, ref: Dict, coords: np.ndarray, 
-                       shape: Tuple, physics_type: str) -> Dict:
+                       shape: Tuple, physics_type: str, 
+                       compute_advanced_physics: bool = False) -> Dict:
     """計算所有評估指標"""
     logger.info("計算評估指標...")
     
@@ -289,6 +366,11 @@ def compute_all_metrics(pred: Dict, ref: Dict, coords: np.ndarray,
     
     # 物理指標
     metrics['physics'] = compute_physics_metrics(pred, coords, shape)
+    
+    # Kolmogorov Flow 專用物理量
+    if compute_advanced_physics and physics_type == 'kolmogorov_2d':
+        logger.info("計算 Kolmogorov Flow 物理量...")
+        metrics['kolmogorov_physics'] = compute_kolmogorov_physics(pred, ref, shape)
     
     # 總結
     all_rel_l2 = [m['rel_l2'] for m in metrics['basic'].values()]
@@ -417,6 +499,115 @@ def plot_error_distribution(metrics: Dict, output_dir: Path):
     logger.info(f"  已保存: {output_dir / 'error_distribution.png'}")
 
 
+def plot_kolmogorov_physics_4panel(metrics: Dict, output_dir: Path):
+    """
+    繪製 Kolmogorov Flow 4-panel 物理量對比圖
+    
+    (a) 相對 L2 誤差 (u, v)
+    (b) 動能對比
+    (c) 擾動度對比
+    (d) 能量譜（log-log with scaling lines）
+    """
+    logger.info("生成 Kolmogorov Flow 物理量 4-panel 對比圖...")
+    
+    if 'kolmogorov_physics' not in metrics:
+        logger.warning("未找到 Kolmogorov 物理量數據，跳過 4-panel 圖")
+        return
+    
+    kol_phys = metrics['kolmogorov_physics']
+    basic = metrics['basic']
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # ========== Panel (a): 相對 L2 誤差 ==========
+    ax = axes[0, 0]
+    variables = ['u', 'v']
+    errors = [basic[var]['rel_l2'] for var in variables if var in basic]
+    
+    ax.bar(variables, errors, color=['#2E86AB', '#A23B72'], alpha=0.7, width=0.5)
+    ax.set_ylabel('Relative L2 Error (%)', fontsize=11)
+    ax.set_title('(a) Velocity Field Errors', fontsize=12, fontweight='bold')
+    ax.grid(axis='y', alpha=0.3)
+    ax.set_ylim([0, max(errors) * 1.2])
+    
+    # 標註數值
+    for i, (var, err) in enumerate(zip(variables, errors)):
+        ax.text(i, err, f'{err:.2f}%', ha='center', va='bottom', fontweight='bold')
+    
+    # ========== Panel (b): 動能對比 ==========
+    ax = axes[0, 1]
+    ke_ref = kol_phys['kinetic_energy']['reference']
+    ke_pred = kol_phys['kinetic_energy']['prediction']
+    ke_error = kol_phys['kinetic_energy']['error']
+    
+    bars = ax.bar(['Reference', 'Prediction'], [ke_ref, ke_pred], 
+                  color=['#06A77D', '#D4AF37'], alpha=0.7, width=0.5)
+    ax.axhline(ke_ref, color='red', linestyle='--', alpha=0.5, linewidth=1.5, label='Reference')
+    
+    ax.set_ylabel('Kinetic Energy', fontsize=11)
+    ax.set_title(f'(b) Kinetic Energy (Error: {ke_error:+.2f}%)', 
+                 fontsize=12, fontweight='bold')
+    ax.grid(axis='y', alpha=0.3)
+    ax.legend()
+    
+    # 標註數值
+    for bar, val in zip(bars, [ke_ref, ke_pred]):
+        ax.text(bar.get_x() + bar.get_width()/2, val, 
+                f'{val:.4f}', ha='center', va='bottom', fontweight='bold', fontsize=9)
+    
+    # ========== Panel (c): 擾動度對比 ==========
+    ax = axes[1, 0]
+    ens_ref = kol_phys['enstrophy']['reference']
+    ens_pred = kol_phys['enstrophy']['prediction']
+    ens_error = kol_phys['enstrophy']['error']
+    
+    bars = ax.bar(['Reference', 'Prediction'], [ens_ref, ens_pred],
+                  color=['#265077', '#F5A962'], alpha=0.7, width=0.5)
+    ax.axhline(ens_ref, color='red', linestyle='--', alpha=0.5, linewidth=1.5, label='Reference')
+    
+    ax.set_ylabel('Enstrophy', fontsize=11)
+    ax.set_title(f'(c) Enstrophy (Error: {ens_error:+.2f}%)', 
+                 fontsize=12, fontweight='bold')
+    ax.grid(axis='y', alpha=0.3)
+    ax.legend()
+    
+    # 標註數值
+    for bar, val in zip(bars, [ens_ref, ens_pred]):
+        ax.text(bar.get_x() + bar.get_width()/2, val, 
+                f'{val:.4f}', ha='center', va='bottom', fontweight='bold', fontsize=9)
+    
+    # ========== Panel (d): 能量譜 ==========
+    ax = axes[1, 1]
+    k_ref = kol_phys['energy_spectrum']['k_ref']
+    E_k_ref = kol_phys['energy_spectrum']['E_k_ref']
+    k_pred = kol_phys['energy_spectrum']['k_pred']
+    E_k_pred = kol_phys['energy_spectrum']['E_k_pred']
+    
+    ax.loglog(k_ref, E_k_ref, 'o-', label='Reference', markersize=4, alpha=0.7, linewidth=2)
+    ax.loglog(k_pred, E_k_pred, 's-', label='Prediction', markersize=3, alpha=0.7, linewidth=2)
+    
+    # 理論標度線
+    k_range = np.linspace(3.0, 30.0, 20)
+    E_inertial = 1e3 * k_range**(-5.0/3.0)
+    E_dissipation = 1e-2 * k_range**(-3.0)
+    
+    ax.loglog(k_range, E_inertial, 'k--', alpha=0.5, linewidth=1.5, label=r'$k^{-5/3}$')
+    ax.loglog(k_range, E_dissipation, 'k:', alpha=0.5, linewidth=1.5, label=r'$k^{-3}$')
+    
+    ax.set_xlabel('Wavenumber $k$', fontsize=11)
+    ax.set_ylabel('Energy Spectrum $E(k)$', fontsize=11)
+    ax.set_title('(d) Energy Spectrum', fontsize=12, fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3, which='both')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'kolmogorov_physics_4panel.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    logger.info(f"  已保存: {output_dir / 'kolmogorov_physics_4panel.png'}")
+
+
+
 def generate_visualizations(pred: Dict, ref: Dict, metrics: Dict,
                            shape: Tuple, output_dir: Path, physics_type: str):
     """生成所有視覺化"""
@@ -427,6 +618,10 @@ def generate_visualizations(pred: Dict, ref: Dict, metrics: Dict,
     
     # 誤差分布圖
     plot_error_distribution(metrics, output_dir)
+    
+    # Kolmogorov 物理量 4-panel 圖（如果有計算）
+    if 'kolmogorov_physics' in metrics:
+        plot_kolmogorov_physics_4panel(metrics, output_dir)
     
     logger.info("✅ 視覺化完成")
 
@@ -527,7 +722,8 @@ def generate_markdown_report(metrics: Dict, output_path: Path, model_info: Dict)
 
 def evaluate_single_model(checkpoint_path: str, output_dir: Path, 
                          metrics_level: str = 'all',
-                         visualize_level: str = 'all') -> Dict:
+                         visualize_level: str = 'all',
+                         physics_analysis: bool = False) -> Dict:
     """評估單一模型"""
     
     logger.info("="*80)
@@ -582,10 +778,11 @@ def evaluate_single_model(checkpoint_path: str, output_dir: Path,
             'p': pred_array[:, 3]
         }
     
-    # 5. 計算指標
+    # 5. 計算指標（包含物理量分析）
     metrics = compute_all_metrics(
         pred_data, ref_data, ref_data['coords'], 
-        ref_data['shape'], physics_type
+        ref_data['shape'], physics_type,
+        compute_advanced_physics=physics_analysis
     )
     
     # 6. 生成視覺化
@@ -683,6 +880,9 @@ def main():
   # 單一模型評估
   python scripts/evaluate_unified.py --checkpoint checkpoints/model.pth
   
+  # Kolmogorov Flow 物理量分析
+  python scripts/evaluate_unified.py --checkpoint checkpoints/model.pth --physics-analysis
+  
   # 多模型比較
   python scripts/evaluate_unified.py \\
       --checkpoints ckpt1.pth ckpt2.pth ckpt3.pth \\
@@ -703,6 +903,8 @@ def main():
     parser.add_argument('--visualize', type=str, default='all',
                        choices=['all', 'fields', 'errors', 'none'],
                        help='視覺化層級')
+    parser.add_argument('--physics-analysis', action='store_true',
+                       help='計算進階物理量（Kolmogorov: KE, Enstrophy, Energy Spectrum）')
     
     args = parser.parse_args()
     
@@ -725,7 +927,8 @@ def main():
         elif args.checkpoint:
             evaluate_single_model(
                 args.checkpoint, output_dir, 
-                args.metrics, args.visualize
+                args.metrics, args.visualize,
+                physics_analysis=args.physics_analysis
             )
         
         else:
