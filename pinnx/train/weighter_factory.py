@@ -4,13 +4,14 @@
 此模組負責根據配置創建各種損失權重調度器，包括：
 - CurriculumScheduler: 課程訓練調度器（最高優先級）
 - StagedWeightScheduler: 階段式權重調度器
-- GradNormWeighter: 自適應梯度範數權重器
+- GradNormWeighter: 自適應梯度範數權重器（JaxPI 風格）
 - CausalWeighter: 因果權重器（基於時間順序）
 - AdaptiveWeightScheduler: 自適應權重調度器
 
 📌 Phase 5: Factory Functions Extraction
 Created: 2026-01-03
 From: scripts/train/train.py lines 116-220 (~105 lines)
+Updated: 2026-01-05 - Removed NTK weighting (GradNorm sufficient for turbulence)
 """
 
 import logging
@@ -20,6 +21,7 @@ import torch
 import torch.nn as nn
 
 from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
+from pinnx.losses.causal_weighter_v2 import create_causal_weighter
 from pinnx.train.schedulers import StagedWeightScheduler, CurriculumScheduler
 from pinnx.train.config_loader import derive_loss_weights
 
@@ -103,8 +105,10 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         weighters['gradnorm'] = GradNormWeighter(
             model=model,
             loss_names=adaptive_terms,
-            alpha=loss_cfg.get('grad_norm_alpha', 0.12),
-            update_frequency=loss_cfg.get('weight_update_freq', 100),
+            alpha=loss_cfg.get('grad_norm_alpha', 1.5),          # 對齊 JaxPI 默認值
+            update_frequency=loss_cfg.get('weight_update_freq', 1000),  # 對齊 JaxPI 默認值
+            momentum=loss_cfg.get('grad_norm_momentum', 0.9),    # 新增：EMA 平滑（對齊 JaxPI）
+            normalize_weights=loss_cfg.get('grad_norm_normalize', True),  # 新增：權重正規化開關（True=PINNx, False=JaxPI）
             initial_weights=initial_weights,
             device=str(device),
             min_weight=loss_cfg.get('grad_norm_min_weight', 0.1),
@@ -116,25 +120,44 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         if loss_cfg.get('adaptive_weighting', False) and weighters['staged'] is not None:
             logging.info("⚠️  adaptive_weighting disabled (using staged_weights)")
     
-    # 因果權重器（jaxpi: chunk-based, 僅依時間排序）
+    # 因果權重器（對齊 JaxPI 參數）
     if loss_cfg.get('causal_weighting', False):
+        # 獲取配置參數
+        causal_cfg = loss_cfg.get('weighting', {}).get('causal', {})
+        causal_version = causal_cfg.get('version', 'v1')  # 默認 v1 保持向後相容
+        causal_tol = causal_cfg.get('causal_tol', loss_cfg.get('causal_tol', 1.0))
+        num_chunks = causal_cfg.get('num_chunks', loss_cfg.get('num_chunks', 32))
+        
         # 獲取時間範圍（用於預計算因果矩陣）
         kol_cfg = config['data'].get('kolmogorov_config', {})
         time_range = kol_cfg.get('time_range', [0.0, 1.0])
         t_min, t_max = time_range
         
-        weighters['causal'] = CausalWeighter(
-            epsilon=loss_cfg.get('causal_eps', 1.0),
-            num_chunks=loss_cfg.get('causal_n_bins', 10),
-            t_min=t_min,
-            t_max=t_max,
-            device=device  # 預計算因果矩陣到正確設備
-        )
-        logging.info(
-            f"✅ Causal weighting enabled: ε={loss_cfg.get('causal_eps', 1.0):.2f}, "
-            f"chunks={loss_cfg.get('causal_n_bins', 10)}, "
-            f"time_range=[{t_min}, {t_max}], device={device}"
-        )
+        if causal_version == 'v2':
+            # 使用新的分量級因果權重器（對齊 JAX-PI）
+            weighters['causal'] = create_causal_weighter(
+                version='v2',
+                causal_tol=causal_tol,
+                num_chunks=num_chunks,
+                device=str(device)
+            )
+            logging.info(
+                f"✅ Causal weighting v2 enabled (JAX-PI aligned): "
+                f"tol={causal_tol:.2f}, chunks={num_chunks}, device={device}"
+            )
+        else:
+            # 使用舊版因果權重器（向後相容）
+            weighters['causal'] = CausalWeighter(
+                causal_tol=causal_tol,
+                num_chunks=num_chunks,
+                t_min=t_min,
+                t_max=t_max,
+                device=str(device)
+            )
+            logging.info(
+                f"✅ Causal weighting v1 enabled: tol={causal_tol:.2f}, "
+                f"chunks={num_chunks}, time_range=[{t_min}, {t_max}], device={device}"
+            )
     else:
         weighters['causal'] = None
     

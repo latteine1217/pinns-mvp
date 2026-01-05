@@ -1,0 +1,196 @@
+# ===================================================================
+# 時間窗口訓練測試配置：2 Windows (Fast Test)
+# ===================================================================
+# 目的：快速驗證 Time Window Training 管線是否正常運作
+# - 只訓練 2 個窗口
+# - 每個窗口僅 1000 步（快速測試）
+# - 驗證 IC transfer 和參數轉移邏輯
+# ===================================================================
+
+# ===== 數據配置 =====
+data:
+  source: kolmogorov
+  dataset: kolmogorov_flow_2d
+  
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov/dns_Re10000_test.h5
+    resolution: 64
+    Re: 10000
+    time_range: [0.0, 50.0]  # 總範圍 50s → 2 窗口 = 25s/窗口
+    dt: 0.5
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]
+    variables: [u, v, p]
+    
+  normalize: true
+  cache_dir: ./data/kolmogorov/Re10000
+
+# ===== 標準化配置 =====
+normalization:
+  type: training_data_norm  # 修正：使用支持的標準化類型
+  params:
+    epsilon: 1.0e-8
+
+# ===== 感測器配置 =====
+sensors:
+  K: 100
+  sensor_file: ./data/sensors/random_K100_test.json
+  selection_method: random
+  spatial_coverage: uniform
+
+# ===== 採樣配置 =====
+sampling:
+  N_pde: 4096
+
+# ===== 模型配置 =====
+model:
+  type: fourier_vs_mlp
+  in_dim: 3  # (x, y, t)
+  out_dim: 3  # (u, v, p)
+  output_variables: [u, v, p]  # 輸出變量順序
+  width: 256
+  depth: 3
+  activation: tanh
+  use_residual: false
+  use_layer_norm: false
+  dropout: 0.0
+  block_type: piratenet
+  res_block_alpha_init: 0.0
+  use_rwf: true
+  rwf_scale_mean: 1.0
+  rwf_scale_std: 0.1
+  
+  fourier_features:
+    type: standard
+    fourier_m: 128
+    fourier_sigma: 2.0
+    trainable_fourier: false
+    fourier_use_2pi: true
+
+# ===== 物理配置 =====
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.0001  # Re = 10000
+  rho: 1.0
+  forcing:
+    amplitude: 2.0
+    wavenumber: 4
+  domain:
+    x_range: [0.0, 6.283185307179586]  # 修正：使用 x_range 格式
+    y_range: [0.0, 6.283185307179586]  # 修正：使用 y_range 格式
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ===== 損失權重配置 =====
+losses:
+  data_weight: 100.0
+  prior_weight: 0.1
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  adaptive_weighting: true
+  
+  weighting:
+    scheme: grad_norm
+    update_every_steps: 1000
+    momentum: 0.9
+
+# ===== 訓練配置 =====
+training:
+  # 🪟 時間窗口配置（測試用）
+  num_time_windows: 2  # 🎯 只訓練 2 個窗口
+  time_window_overlap: 0.0
+  transfer_learning: true
+  
+  # 每個窗口的訓練設置（快速測試）
+  epochs: 10  # 🎯 只跑 10 步驗證邏輯（原本 500）
+  batch_size: 4096
+  
+  sampling:
+    N_pde: 4096
+    N_ic: 256
+    N_bc: 256
+  
+  # Causal Weighting
+  causal_weighting:
+    enabled: true
+    num_chunks: 16
+    causal_tol: 1.0
+  
+  # 混合精度訓練
+  use_amp: false
+  
+  # 梯度裁剪（加強）
+  gradient_clipping:
+    enabled: true
+    max_norm: 0.5  # 🎯 降低到 0.5（原本 1.0）以避免 loss 爆炸
+
+# ===== 優化器配置 =====
+optimizer:
+  type: soap
+  learning_rate: 0.001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  
+  soap_config:
+    precondition_frequency: 2
+  
+  scheduler:
+    type: exponential_decay_with_warmup
+    warmup_steps: 200  # 🎯 減少 warmup 步數（原本 2000）
+    decay_steps: 500
+    decay_rate: 0.9
+    staircase: false
+
+# ===== Checkpoint 配置 =====
+checkpointing:
+  enabled: true
+  checkpoint_dir: ./checkpoints/time_window_test_2w
+  save_every_steps: 500  # 🎯 更頻繁保存（原本 5000）
+  keep_best: true
+  keep_last_n: 2
+
+# ===== 驗證配置 =====
+validation:
+  enabled: true
+  val_every_steps: 100
+  metrics:
+    - relative_l2
+    - mse
+    - max_error
+
+# ===== 日誌配置 =====
+logging:
+  log_every_steps: 1  # 🎯 每步都記錄（原本 50）
+  use_wandb: false  # 🎯 關閉 wandb 加快速度
+  wandb:
+    project: PINNx-TimeWindow
+    name: test_2windows
+    group: time_window_test
+    tags:
+      - time_window
+      - test
+      - 2_windows
+    notes: |
+      Quick test for Time Window Training pipeline
+      - Only 2 windows
+      - 1000 steps per window
+      - Verify IC transfer and parameter transfer
+
+# ===== 實驗說明 =====
+experiment:
+  name: time_window_test_2w
+  description: |
+    快速測試 Time Window Training 管線
+    
+    測試目標：
+    1. ✅ Window 0 成功訓練並保存 checkpoint
+    2. ✅ Window 1 成功載入 Window 0 的參數（Transfer Learning）
+    3. ✅ Window 1 成功接收 Window 0 預測的 IC（IC Transfer）
+    4. ✅ 訓練過程無錯誤、無 NaN
+    5. ✅ 最終 checkpoint 正常保存
+    
+    如果測試通過，即可增加窗口數量和訓練步數。

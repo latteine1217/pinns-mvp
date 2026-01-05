@@ -56,10 +56,9 @@ class LossWeighter(ABC):
                    例如：{'data': tensor(0.5), 'pde': tensor(1.2)}
 
             context: 上下文參數字典，包含所有可選參數：
-                - step (int): 當前訓練步數（適用於 NTK、Adaptive）
+                - step (int): 當前訓練步數（適用於 Adaptive）
                 - total_steps (int): 總訓練步數（適用於 Adaptive）
                 - total_loss (torch.Tensor): 總損失（適用於 GradNorm）
-                - x_train (torch.Tensor): 訓練數據（適用於 NTK）
                 - time_coords (torch.Tensor): 時間坐標（適用於 Causal）
                 - pde_losses (torch.Tensor): PDE 損失（適用於 Causal）
                 - epoch (int): 當前訓練輪次

@@ -171,6 +171,62 @@ git add configs/archive/my_exp_20260103.yml
 git commit -m "Archive config for run #42"
 ```
 
+## Losses 配置重點說明
+
+### GradNorm 自適應權重（對齊 JaxPI）
+
+GradNorm 動態調整多項損失的權重，確保梯度平衡：
+
+```yaml
+losses:
+  # 基本權重設定
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  continuity_weight: 1.0
+  
+  # GradNorm 自適應權重
+  adaptive_weighting: true            # 啟用 GradNorm
+  weight_update_freq: 1000            # 每 1000 步更新權重（JaxPI 默認）
+  grad_norm_momentum: 0.9             # EMA 平滑係數（0.9=JaxPI 默認，0=不使用）
+  grad_norm_alpha: 1.5                # 權重更新激進程度（非 JaxPI 參數）
+  grad_norm_normalize: true           # 權重正規化開關（見下方說明）
+  
+  adaptive_loss_terms:                # 參與自適應調整的損失項
+    - data
+    - momentum_x
+    - continuity
+```
+
+#### `grad_norm_normalize` 參數詳解
+
+控制是否正規化權重總和，影響訓練穩定性與行為：
+
+| 值 | 行為 | 特點 | 適用場景 |
+|----|------|------|---------|
+| `true` (默認) | **PINNx 穩定模式**<br>保持權重總和恆定 | ✅ 訓練穩定<br>✅ 損失尺度可預測<br>✅ 易於調試<br>❌ 非完全 JaxPI 對齊 | 一般生產使用，需要穩定訓練 |
+| `false` | **JaxPI 精確對齊**<br>權重反映純梯度比率 | ✅ 完全對齊 JaxPI<br>✅ 程式碼更簡潔<br>❌ 權重總和漂移<br>❌ 損失尺度變化 | 與 JaxPI 論文比較，或追求純理論實現 |
+
+**技術細節**:
+
+- **True**: 每次更新後調整權重，使其總和等於初始總和（如 `data=10, residual=1` → 總和保持 11）
+- **False**: 權重直接由梯度比率決定（`w_i = mean_grad / grad_i`），總和隨時間變化
+
+**建議**:
+- 實驗對比時設為 `false` 以精確對齊 JaxPI
+- 生產訓練時設為 `true` 以提升穩定性
+- 兩者數學核心相同，僅後處理方式不同
+
+### Causal Weighting（對齊 JaxPI）
+
+適用於時間依賴問題（如 Burgers、Navier-Stokes）：
+
+```yaml
+losses:
+  causal_weighting: true              # 啟用因果權重
+  causal_tol: 1.0                     # 權重衰減容忍度（JaxPI 默認）
+  num_chunks: 32                      # 時間分塊數（Burgers=32, NS=16）
+```
+
 ## 進階主題
 
 ### 動態配置（程式化生成）
@@ -228,5 +284,5 @@ training:
 
 ---
 
-**最後更新**: 2026-01-03  
-**版本**: v1.2.1
+**最後更新**: 2026-01-05  
+**版本**: v1.2.2 (新增 GradNorm normalize_weights 參數說明)

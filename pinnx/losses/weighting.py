@@ -6,16 +6,14 @@
 
 主要功能：
 - GradNorm 梯度範數平衡
-- NTK 權重策略 
 - 時間因果權重 (Causal Weighting)
 - 自適應權重調度
 - 多項損失函數動態平衡
 
 核心算法：
-1. GradNorm: 通過梯度範數平衡不同損失項
+1. GradNorm: 通過梯度範數平衡不同損失項（JaxPI 風格）
 2. Causal Weights: 時間序列訓練中的因果約束
-3. NTK Weighting: 基於神經正切核的權重策略
-4. Adaptive Scheduling: 訓練過程中的自適應調整
+3. Adaptive Scheduling: 訓練過程中的自適應調整
 """
 
 import torch
@@ -53,17 +51,21 @@ class GradNormWeighter(LossWeighter):
                  device: Optional[str] = None,
                  min_weight: float = 0.1,
                  max_weight: float = 10.0,
-                 max_ratio: float = 50.0):
+                 max_ratio: float = 50.0,
+                 momentum: float = 0.9,
+                 normalize_weights: bool = True):
         """
         Args:
             model: PINN 模型
             loss_names: 損失項名稱列表 ['data', 'residual', 'boundary', 'prior']
             alpha: 梯度平衡的更新率 (1.5 為推薦值，配合低頻更新提升響應強度)
-            update_frequency: 權重更新頻率 (每多少步更新一次)
+            update_frequency: 權重更新頻率 (每多少步更新一次，JaxPI 默認 1000)
             initial_weights: 初始權重字典
             target_gradient_ratio: 目標梯度比例
             target_ratios: 目標比例列表（可選，用於測試相容性）
             device: 計算設備 (None 為自動檢測)
+            momentum: EMA 平滑係數 (0.9 為 JaxPI 默認值，0 表示不使用 EMA)
+            normalize_weights: 是否正規化權重總和 (True=PINNx 穩定模式, False=JaxPI 精確對齊)
         """
         self.model = model
         self.loss_names = loss_names
@@ -74,6 +76,8 @@ class GradNormWeighter(LossWeighter):
         self.min_weight = float(min_weight)
         self.max_weight = float(max_weight)
         self.max_ratio = float(max(1.0, max_ratio))
+        self.momentum = float(momentum)  # EMA 平滑係數 (對齊 JaxPI)
+        self.normalize_weights = bool(normalize_weights)  # 控制是否正規化權重總和
         self.eps = _EPS
         
         if device is None:
@@ -125,8 +129,12 @@ class GradNormWeighter(LossWeighter):
         self.step_count = 0
         self.initial_losses = None
         
-    def compute_gradients(self, losses: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """計算每個損失項對模型參數的梯度範數"""
+    def compute_gradients(self, losses: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """計算每個損失項對模型參數的梯度範數
+        
+        Returns:
+            Dict[str, torch.Tensor]: 每個損失項的梯度範數（Tensor 類型）
+        """
         gradients = {}
         for name, loss in losses.items():
             if name not in self.loss_names:
@@ -252,13 +260,24 @@ class GradNormWeighter(LossWeighter):
                 self.max_weight
             )
             
-            self.weights[name] = new_weight.detach()
+            # 應用 EMA 平滑（對齊 JaxPI 的 momentum）
+            # JaxPI: w_new = w_old * momentum + w_computed * (1 - momentum)
+            if self.momentum > 0:
+                old_weight = self.weights[name]
+                smoothed_weight = old_weight * self.momentum + new_weight * (1 - self.momentum)
+                self.weights[name] = smoothed_weight.detach()
+            else:
+                self.weights[name] = new_weight.detach()
             
             self.gradient_history[name].append(current_grad.item())
             if len(self.gradient_history[name]) > 100:
                 self.gradient_history[name].pop(0)
         
-        self._normalize_weights()
+        # 根據配置決定是否正規化權重
+        # True: PINNx 穩定模式（保持權重總和恆定）
+        # False: JaxPI 精確對齊（權重反映純梯度比率，總和可能漂移）
+        if self.normalize_weights:
+            self._normalize_weights()
         
         return self.get_weights()
     
@@ -276,7 +295,8 @@ class GradNormWeighter(LossWeighter):
                 min=self.min_weight,
                 max=self.max_weight
             )
-        self._normalize_weights()
+        if self.normalize_weights:
+            self._normalize_weights()
         self.step_count = 0
         self.initial_losses = None
         self.gradient_history.clear()
@@ -314,13 +334,15 @@ class GradNormWeighter(LossWeighter):
         if ratio > self.max_ratio:
             geometric_mean = torch.exp(torch.log(weights_tensor + self.eps).mean())
             span = math.sqrt(self.max_ratio)
+            # 轉換為 float 以避免 Tensor/float 比較問題
+            geometric_mean_val = float(geometric_mean.item()) if torch.is_tensor(geometric_mean) else float(geometric_mean)
             lower = torch.tensor(
-                max(self.min_weight, geometric_mean / span),
+                max(self.min_weight, geometric_mean_val / span),
                 device=self.device,
                 dtype=torch.float32
             )
             upper = torch.tensor(
-                min(self.max_weight, geometric_mean * span),
+                min(self.max_weight, geometric_mean_val * span),
                 device=self.device,
                 dtype=torch.float32
             )
@@ -351,9 +373,13 @@ class CausalWeighter(PointWeighter):
     基於 Wang et al. (2022) "Respecting Causality is all you need for training Physics-Informed Neural Networks"
     遵循 PointWeighter 接口，計算每個時間點的因果權重。
 
-    核心機制：
-    w_k = exp(-epsilon * sum_{i<k} mean(L_i))
+    核心機制（對齊 JaxPI）：
+    gamma_k = exp(-tol * sum_{i<k} mean(L_i))
     其中 L_i 是第 i 個時間分塊的平均殘差平方。
+    
+    JaxPI 參數對應：
+    - causal_tol (JaxPI) = epsilon (本實現)
+    - num_chunks (JaxPI) = num_chunks (本實現)
 
     優化版本（v2.0）：
     - 預計算因果矩陣（避免每次調用重新生成）
@@ -363,21 +389,24 @@ class CausalWeighter(PointWeighter):
     
     def __init__(
         self,
-        epsilon: float = 1.0,
-        num_chunks: int = 10,
+        causal_tol: float = 1.0,  # 對齊 JaxPI 命名
+        num_chunks: int = 32,      # 對齊 JaxPI 默認值
         t_min: float = 0.0,
         t_max: float = 1.0,
         device: str = 'cpu',
     ):
         """
         Args:
-            epsilon: 因果容差參數，控制權重衰減速度。值越大，對早期時間的強制性越強。
-            num_chunks: 時間分塊數量（jaxpi 設定）。
+            causal_tol: 因果容差參數（對齊 JaxPI），控制權重衰減速度。值越大，對早期時間的強制性越強。
+                       JaxPI 默認值: 1.0
+            num_chunks: 時間分塊數量（對齊 JaxPI）。
+                       JaxPI 默認值: 32 (Burgers), 16 (NS unsteady cylinder)
             t_min: 時間域下界
             t_max: 時間域上界
             device: 計算設備 ('cpu', 'cuda', 'mps')
         """
-        self.epsilon = float(epsilon)
+        self.causal_tol = float(causal_tol)  # 對齊 JaxPI 命名
+        self.epsilon = self.causal_tol       # 保持向後兼容
         self.num_chunks = int(num_chunks)
         self.t_min = t_min
         self.t_max = t_max
@@ -426,14 +455,21 @@ class CausalWeighter(PointWeighter):
                 若 context['return_pointwise']=False，返回 chunk 權重的重複版本
         """
         return_pointwise = context.get('return_pointwise', True)
-        return self._compute_weights_impl(residuals, coords, return_pointwise)
+        result = self._compute_weights_impl(residuals, coords, return_pointwise)
+        # 確保符合接口：始終返回 Tensor
+        if isinstance(result, tuple):
+            # 若內部返回 tuple，將 chunk weights 轉為 point weights
+            chunk_weights, _ = result
+            # 簡單重複策略：返回第一個 chunk 的權重
+            return chunk_weights[0].unsqueeze(0).expand(residuals.shape[0], 1)
+        return result
 
     def _compute_weights_impl(
         self,
         pde_losses: torch.Tensor,
         time_coords: torch.Tensor,
         return_pointwise: bool = True
-    ):
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         計算每個採樣點的因果權重（內部實現）
 
@@ -512,97 +548,6 @@ class CausalWeighter(PointWeighter):
     # 舊接口（time_window / compute_causal_weights / temporal_decay）已移除
 
 
-class NTKWeighter(LossWeighter):
-    """
-    神經正切核 (NTK) 權重器
-
-    基於神經正切核特徵值分析調整損失權重。
-    遵循統一的 LossWeighter 接口。
-    """
-
-    def __init__(self,
-                 model: nn.Module,
-                 loss_names: List[str] = None,
-                 sample_size: int = 100,
-                 update_frequency: int = 2000,
-                 update_freq: Optional[int] = None,
-                 reg_param: float = 1e-6):
-        self.model = model
-        self.loss_names = loss_names or ['data', 'pde']
-        self.sample_size = sample_size
-        self.update_frequency = update_freq if update_freq is not None else update_frequency
-        self.reg_param = reg_param
-        self.step_count = 0
-        self.ntk_weights = {name: 1.0 for name in self.loss_names}
-        
-    def compute_ntk_eigenvalues(self, inputs: torch.Tensor, loss_type: str) -> torch.Tensor:
-        batch_size = min(self.sample_size, inputs.shape[0])
-        sample_inputs = inputs[:batch_size]
-        
-        outputs = self.model(sample_inputs)
-        jacobians = []
-        
-        for i in range(outputs.shape[1]):
-            grads = torch.autograd.grad(
-                outputs[:, i].sum(),
-                self.model.parameters(),
-                retain_graph=True,
-                create_graph=False
-            )
-            jacobian = torch.cat([g.view(-1) for g in grads])
-            jacobians.append(jacobian)
-        
-        J = torch.stack(jacobians, dim=0)
-        K = J @ J.T
-        eigenvals = torch.linalg.eigvals(K).real
-        
-        return eigenvals
-    
-    def update_weights(
-        self,
-        losses: Dict[str, torch.Tensor],
-        context: Dict[str, Any]
-    ) -> Dict[str, float]:
-        """
-        更新 NTK 權重
-
-        Args:
-            losses: 損失項字典
-            context: 上下文參數，需包含：
-                - x_train (torch.Tensor): 訓練數據
-                - step (int): 當前訓練步數（可選）
-
-        Returns:
-            Dict[str, float]: 更新後的權重字典
-        """
-        # 更新步數
-        step = context.get('step', self.step_count)
-        self.step_count = step + 1
-
-        # 低頻更新（避免計算開銷）
-        if self.step_count % self.update_frequency != 0:
-            return self.ntk_weights.copy()
-
-        # 提取訓練數據
-        x_train = context.get('x_train', None)
-        if x_train is None:
-            # 無訓練數據，返回當前權重
-            return self.ntk_weights.copy()
-
-        # TODO: 實際的 NTK 計算邏輯（預留擴展）
-        # 目前僅返回當前權重
-        return self.ntk_weights.copy()
-
-    def get_weights(self) -> Dict[str, float]:
-        """獲取當前緩存的 NTK 權重"""
-        return self.ntk_weights.copy()
-
-    def reset_weights(self) -> None:
-        """重置 NTK 權重到初始狀態"""
-        self.ntk_weights = {name: 1.0 for name in self.loss_names}
-        self.step_count = 0
-
-
 class AdaptiveWeightScheduler(LossWeighter):
     """
     自適應權重調度器
@@ -613,7 +558,7 @@ class AdaptiveWeightScheduler(LossWeighter):
 
     def __init__(self,
                  loss_names: List[str],
-                 phases: Dict[str, Dict] = None,
+                 phases: Optional[Dict[str, Dict]] = None,
                  adaptation_method: str = 'exponential',
                  adaptation_rate: float = 0.1):
         self.loss_names = loss_names
@@ -688,17 +633,20 @@ class MultiWeightManager:
     
     def __init__(self,
                  objectives_or_model = None,
-                 loss_names: List[str] = None,
-                 strategies: List[str] = ['gradnorm', 'adaptive'],
+                 loss_names: Optional[List[str]] = None,
+                 strategies: Optional[List[str]] = None,
                  strategy_weights: Optional[Dict[str, float]] = None,
                  method: str = 'weighted_sum',
-                 preference_weights: List[float] = None,
+                 preference_weights: Optional[List[float]] = None,
                  config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.preference_weights = preference_weights
         self.eps = _EPS
         if strategies is None:
             strategies = self.config.get('strategies', ['gradnorm', 'adaptive'])
+        
+        # 確保 strategies 不為 None
+        self.strategies: List[str] = strategies if strategies is not None else ['gradnorm', 'adaptive']
             
         if isinstance(objectives_or_model, list):
             self.objectives = objectives_or_model
@@ -709,16 +657,13 @@ class MultiWeightManager:
             self.loss_names = loss_names or ['data', 'residual']
             self.objectives = self.loss_names
             
-        self.strategies = strategies
         self.weighters = {}
         
-        if 'gradnorm' in strategies and self.model is not None:
+        if 'gradnorm' in self.strategies and self.model is not None:
             self.weighters['gradnorm'] = GradNormWeighter(self.model, self.loss_names)
-        if 'causal' in strategies:
+        if 'causal' in self.strategies:
             self.weighters['causal'] = CausalWeighter()
-        if 'ntk' in strategies and self.model is not None:
-            self.weighters['ntk'] = NTKWeighter(self.model, self.loss_names)
-        if 'adaptive' in strategies:
+        if 'adaptive' in self.strategies:
             self.weighters['adaptive'] = AdaptiveWeightScheduler(self.loss_names)
             
     def update_weights(self, losses, current_step=0, total_steps=100000, **kwargs):

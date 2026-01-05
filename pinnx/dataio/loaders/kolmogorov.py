@@ -248,3 +248,165 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}]")
     
     return training_data
+
+
+def prepare_time_window_data(
+    config: Dict[str, Any],
+    device: torch.device,
+    window_idx: int,
+    num_windows: int,
+    prev_window_ic: Dict[str, torch.Tensor] | None = None
+) -> Dict[str, torch.Tensor]:
+    """
+    為時間窗口訓練準備單一窗口的資料
+    
+    核心策略（對齊 JAX-PI）：
+    1. 時間切片：將總時間範圍劃分為 num_windows 個無重疊窗口
+    2. 資料提取：只載入當前窗口的感測點時間序列
+    3. IC 轉移：Window N+1 使用 Window N 的預測作為初始條件（可選）
+    4. 配點採樣：在當前窗口的時空域內隨機採樣
+    
+    Args:
+        config: 配置字典（包含完整的時間範圍）
+        device: PyTorch 設備
+        window_idx: 當前窗口索引（0-based）
+        num_windows: 總窗口數
+        prev_window_ic: 前一個窗口的初始條件（可選）
+            格式：{
+                'x': Tensor[N_ic, 1],    # IC 點的 x 座標
+                'y': Tensor[N_ic, 1],    # IC 點的 y 座標
+                't': Tensor[N_ic, 1],    # IC 時間（應該等於 t_window_start）
+                'u': Tensor[N_ic, 1],    # u 速度
+                'v': Tensor[N_ic, 1],    # v 速度
+                'p': Tensor[N_ic, 1],    # 壓力
+            }
+    
+    Returns:
+        當前窗口的訓練資料字典（格式同 prepare_kolmogorov_training_data）
+    
+    Examples:
+        >>> # 訓練 25 個窗口
+        >>> for window_idx in range(25):
+        >>>     window_data = prepare_time_window_data(
+        >>>         config, device, window_idx, num_windows=25
+        >>>     )
+        >>>     # 訓練當前窗口...
+    
+    Notes:
+        - 窗口劃分為無重疊（overlap=0%）
+        - 若需要 IC 轉移，需在訓練完成後調用模型預測 t_window_end 的全場
+        - 配點採樣在當前窗口時空域內均勻隨機
+    """
+    # ========== 1. 計算當前窗口的時間範圍 ==========
+    kol_cfg = config['data']['kolmogorov_config']
+    t_total_start, t_total_end = kol_cfg['time_range']
+    
+    # 窗口劃分（無重疊）
+    window_duration = (t_total_end - t_total_start) / num_windows
+    t_window_start = t_total_start + window_idx * window_duration
+    t_window_end = t_window_start + window_duration
+    
+    # 檢查窗口索引有效性
+    if window_idx < 0 or window_idx >= num_windows:
+        raise ValueError(
+            f"Invalid window_idx={window_idx}. Must be in [0, {num_windows-1}]"
+        )
+    
+    logging.info(f"{'='*70}")
+    logging.info(f"🪟 準備時間窗口資料")
+    logging.info(f"   窗口索引: {window_idx}/{num_windows-1}")
+    logging.info(f"   窗口時間範圍: [{t_window_start:.2f}, {t_window_end:.2f}]")
+    logging.info(f"   窗口持續時間: {window_duration:.2f}s")
+    logging.info(f"{'='*70}")
+    
+    # ========== 2. 修改配置為當前窗口的時間範圍 ==========
+    # 深拷貝配置，避免修改原始配置
+    import copy
+    window_config = copy.deepcopy(config)
+    window_config['data']['kolmogorov_config']['time_range'] = [
+        t_window_start, t_window_end
+    ]
+    
+    # ========== 3. 調用原有函數載入當前窗口資料 ==========
+    training_data = prepare_kolmogorov_training_data(window_config, device)
+
+    # ========== 3.5 載入低保真先驗（若啟用） ==========
+    from pinnx.dataio.loaders.rans_prior import load_rans_prior_data
+
+    rans_prior = load_rans_prior_data(window_config, training_data, device)
+    if rans_prior:
+        training_data['lowfi_prior'] = rans_prior
+        training_data['has_prior'] = True
+    else:
+        training_data['has_prior'] = False
+    
+    # ========== 4. 處理初始條件（IC）==========
+    # 策略：
+    # - Window 0: 使用 DNS t=0 的資料作為 IC（若有）
+    # - Window N (N>0): 使用前窗口的預測作為 IC（Transfer Learning）
+    
+    if window_idx == 0:
+        # 第一個窗口：可以從 DNS 提取 t=t_window_start 的全場作為 IC
+        # 這裡暫時留空，因為 Kolmogorov Flow 是週期性的，IC 約束較弱
+        logging.info("   Window 0: 使用默認初始條件（或從 DNS 提取）")
+        
+    elif prev_window_ic is not None:
+        # 後續窗口：使用前窗口的預測作為 IC
+        logging.info("   Window N>0: 使用前窗口預測作為初始條件（IC Transfer）")
+        
+        # 驗證 prev_window_ic 格式
+        required_keys = ['x', 'y', 't', 'u', 'v', 'p']
+        missing_keys = [k for k in required_keys if k not in prev_window_ic]
+        if missing_keys:
+            raise ValueError(
+                f"prev_window_ic 缺少必要欄位: {missing_keys}. "
+                f"必須包含: {required_keys}"
+            )
+        
+        # 將 IC 資料添加到訓練資料中
+        # 注意：這裡的 t 應該等於 t_window_start
+        training_data['x_ic'] = prev_window_ic['x']
+        training_data['y_ic'] = prev_window_ic['y']
+        training_data['t_ic'] = prev_window_ic['t']
+        training_data['u_ic'] = prev_window_ic['u']
+        training_data['v_ic'] = prev_window_ic['v']
+        training_data['p_ic'] = prev_window_ic['p']
+        
+        # 更新預拼接座標
+        training_data['coords_ic_spatial'] = torch.cat([
+            prev_window_ic['x'], prev_window_ic['y']
+        ], dim=1)
+        
+        N_ic = len(prev_window_ic['x'])
+        logging.info(f"   ✅ 已添加 {N_ic} 個初始條件點（來自前窗口預測）")
+        
+        # 驗證時間一致性
+        expected_t = torch.full_like(prev_window_ic['t'], t_window_start)
+        if not torch.allclose(prev_window_ic['t'], expected_t, atol=1e-3):
+            logging.warning(
+                f"⚠️  IC 時間不匹配！\n"
+                f"   預期: t={t_window_start:.4f}\n"
+                f"   實際: t 範圍 [{prev_window_ic['t'].min():.4f}, "
+                f"{prev_window_ic['t'].max():.4f}]"
+            )
+    else:
+        # Window N>0 但沒有提供 IC：使用默認行為
+        logging.warning(
+            f"⚠️  Window {window_idx}>0 但未提供 prev_window_ic，"
+            f"將缺少 IC 約束（可能影響收斂）"
+        )
+    
+    # ========== 5. 添加窗口元資訊 ==========
+    training_data['window_metadata'] = {
+        'window_idx': window_idx,
+        'num_windows': num_windows,
+        't_start': t_window_start,
+        't_end': t_window_end,
+        'duration': window_duration,
+        'has_ic_transfer': (prev_window_ic is not None),
+    }
+    
+    logging.info(f"✅ 時間窗口 {window_idx} 資料準備完成")
+    logging.info(f"{'='*70}\n")
+    
+    return training_data

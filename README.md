@@ -35,6 +35,13 @@ python scripts/evaluate/evaluate_checkpoint.py \
   --config configs/<exp>.yml
 ```
 
+### Time Window 快速驗證
+
+```bash
+MPLCONFIGDIR=./.mplconfig PYTHONPATH=. \
+  python scripts/train/train.py --cfg configs/quick_test_full.yml
+```
+
 ## 支援場景
 
 ### 2D Kolmogorov Flow ✅
@@ -57,6 +64,7 @@ python scripts/evaluate/evaluate_checkpoint.py \
 | [API_REFERENCE.md](docs/API_REFERENCE.md) | API 文檔 | 開發者 |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | 問題診斷 | 調試 |
 | [TECHNICAL_DOCUMENTATION.md](docs/TECHNICAL_DOCUMENTATION.md) | 系統架構 | 深入理解 |
+| [TIME_WINDOW_TRAINING_GUIDE.md](docs/TIME_WINDOW_TRAINING_GUIDE.md) | Time Window 訓練指南 | 長時間序列 |
 
 ## 驗收指標
 
@@ -66,6 +74,11 @@ python scripts/evaluate/evaluate_checkpoint.py \
 - 收斂速度提升 ≥ 30%
 
 ## 重要更新
+
+### ✅ v1.3.5 (2026-01-05): Time Window Prior 修正
+- **Prior Loss 修正**: Time Window 訓練補上 lowfi prior 載入與 `has_prior` 設定
+- **文件補強**: 新增 Time Window 低保真先驗說明
+- **驗證命令**: 提供 time window 快速驗證流程
 
 ### ✅ v1.3.4 (2026-01-05): P2-3 Init Simplification
 - **架構重構**: TrainerBuilder + TrainerComponents 完整實施

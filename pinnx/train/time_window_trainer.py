@@ -353,29 +353,44 @@ class TimeWindowTrainer:
         with torch.no_grad():
             predictions = self.model(coords)
         
-        # 構建 IC 資料
-        ic_data = {
-            'x_ic': coords,
-        }
+        # 構建 IC 資料（修正格式以匹配 prepare_time_window_data 期望）
+        # 分離 coords 張量為獨立的 x, y, t 陣列
+        if spatial_dim == 2:
+            # 2D: coords shape is [N, 3] containing [x, y, t]
+            ic_data = {
+                'x': coords[:, 0:1],  # Extract x column
+                'y': coords[:, 1:2],  # Extract y column
+                't': coords[:, 2:3],  # Extract t column
+            }
+        elif spatial_dim == 3:
+            # 3D: coords shape is [N, 4] containing [x, y, z, t]
+            ic_data = {
+                'x': coords[:, 0:1],
+                'y': coords[:, 1:2],
+                'z': coords[:, 2:3],
+                't': coords[:, 3:4],
+            }
+        else:
+            raise ValueError(f"Unsupported spatial_dim: {spatial_dim}. Must be 2 or 3.")
         
-        # 根據模型輸出維度分配各變數
+        # 根據模型輸出維度分配各變數（移除 _ic 後綴）
         # 假設模型輸出順序：[u, v, (w), p]
         if predictions.shape[1] >= 2:
-            ic_data['u_ic'] = predictions[:, 0:1]
-            ic_data['v_ic'] = predictions[:, 1:2]
+            ic_data['u'] = predictions[:, 0:1]  # No '_ic' suffix
+            ic_data['v'] = predictions[:, 1:2]
         
         if spatial_dim == 3 and predictions.shape[1] >= 3:
-            ic_data['w_ic'] = predictions[:, 2:3]
+            ic_data['w'] = predictions[:, 2:3]
             if predictions.shape[1] >= 4:
-                ic_data['p_ic'] = predictions[:, 3:4]
+                ic_data['p'] = predictions[:, 3:4]
         elif spatial_dim == 2 and predictions.shape[1] >= 3:
-            ic_data['p_ic'] = predictions[:, 2:3]
+            ic_data['p'] = predictions[:, 2:3]
         
         logger.info(f"   IC transferred: {coords.shape[0]} points")
         
         # 可選：診斷 IC 品質
         if logger.isEnabledFor(logging.DEBUG):
-            u_ic = ic_data['u_ic']
+            u_ic = ic_data['u']  # Changed from 'u_ic'
             logger.debug(f"   IC statistics:")
             logger.debug(f"     u: min={u_ic.min():.4f}, max={u_ic.max():.4f}, mean={u_ic.mean():.4f}")
         
@@ -406,7 +421,7 @@ class TimeWindowTrainer:
         Returns:
             訓練結果字典：{'window_results': [...], 'final_loss': ...}
         """
-        from pinnx.train.trainer import Trainer
+        from pinnx.train.trainer_builder import TrainerBuilder
         
         logger.info(f"\n{'='*70}")
         logger.info(f"🪟 Starting Time Window Training")
@@ -424,17 +439,26 @@ class TimeWindowTrainer:
             logger.info(f"   Duration: {t_end - t_start:.2f}s")
             logger.info(f"{'='*70}\n")
             
-            # 1. 提取當前窗口的資料
-            window_data = self._extract_window_data(idx, t_start, t_end)
+            # 1. 載入當前窗口的資料（使用數據加載器）
+            from pinnx.dataio.loaders import prepare_time_window_data
             
-            # 2. IC 轉移（Window 2+）
+            # 準備 IC 轉移（Window 2+）
+            prev_window_ic = None
             if idx > 0:
-                ic_data = self._transfer_initial_condition(idx, t_start)
-                window_data.update(ic_data)
+                prev_window_ic = self._transfer_initial_condition(idx, t_start)
                 logger.info(f"   IC transferred from Window {idx}")
             
-            # 3. Transfer Learning：載入前窗口的模型參數（Window 2+）
-            if idx > 0:
+            # 調用數據加載器
+            window_data = prepare_time_window_data(
+                config=self.config,
+                device=self.device,
+                window_idx=idx,
+                num_windows=self.num_windows,
+                prev_window_ic=prev_window_ic
+            )
+            
+            # 2. Transfer Learning：載入前窗口的模型參數（Window 2+）
+            if idx > 0 and self.config.get('training', {}).get('transfer_learning', True):
                 prev_checkpoint_path = self._get_checkpoint_path(idx - 1)
                 if os.path.exists(prev_checkpoint_path):
                     logger.info(f"   Loading previous window checkpoint: {prev_checkpoint_path}")
@@ -444,30 +468,39 @@ class TimeWindowTrainer:
                 else:
                     logger.warning(f"   ⚠️ Previous checkpoint not found, starting from current parameters")
             
-            # 4. 更新 CausalWeighter 的時間範圍（如果使用）
-            if self.weighters and 'causal' in self.weighters:
-                # 更新時間範圍到當前窗口
-                self.weighters['causal'].time_range = (t_start, t_end)
-                logger.info(f"   Causal weighter updated to [{t_start:.2f}, {t_end:.2f}]s")
+            # 3. 更新 CausalWeighter 的時間範圍（如果使用）
+            if self.weighters and 'causal' in self.weighters and self.weighters['causal'] is not None:
+                causal_weighter = self.weighters['causal']
+                # 檢查是否有 time_range 屬性（v1 版本）
+                if hasattr(causal_weighter, 'time_range'):
+                    # 舊版 CausalWeighter (v1)
+                    causal_weighter.time_range = (t_start, t_end)
+                    logger.info(f"   Causal weighter (v1) updated to [{t_start:.2f}, {t_end:.2f}]s")
+                else:
+                    # 新版 CausalWeighterPerComponent (v2) 不需要時間範圍
+                    logger.info(f"   Causal weighter (v2) active - time range handled dynamically")
             
-            # 5. 創建當前窗口的 Trainer
-            trainer = Trainer(
-                model=self.model,
-                physics=self.physics,
-                losses=self.losses,
-                config=self.config,
-                device=self.device,
-                weighters=self.weighters,
-                input_normalizer=self.input_normalizer,
-                training_data=window_data
-            )
-            trainer.training_data = window_data
+            # 4. 使用 TrainerBuilder 創建當前窗口的 Trainer
+            logger.info(f"   Building trainer for Window {idx+1}...")
+            builder = TrainerBuilder(self.config, self.device)
+            builder.with_model(self.model)
+            builder.with_physics(self.physics)
+            builder.with_losses(self.losses)
+            builder.with_training_data(window_data)
             
-            # 設置輸出標準化（如有）
-            if self.data_normalizer:
-                trainer.data_normalizer = self.data_normalizer
+            # 注入標準化器（使用正確的方法名）
+            if self.input_normalizer:
+                builder.with_normalizer(self.input_normalizer)
+            # data_normalizer 會在 build() 中自動創建
             
-            # 6. 訓練當前窗口
+            # 注入權重器
+            if self.weighters:
+                builder.with_weighters(self.weighters)
+            
+            # 構建 Trainer
+            trainer = builder.build()
+            
+            # 5. 訓練當前窗口
             logger.info(f"   Starting training for Window {idx+1}...")
             result = trainer.train()
             all_results.append(result)
@@ -475,7 +508,7 @@ class TimeWindowTrainer:
             logger.info(f"   ✅ Window {idx+1} training completed")
             logger.info(f"   Final loss: {result.get('final_loss', 'N/A'):.6f}")
             
-            # 7. 保存窗口 checkpoint
+            # 6. 保存窗口 checkpoint
             checkpoint_path = self._get_checkpoint_path(idx)
             self._save_window_checkpoint(idx, t_start, t_end, checkpoint_path)
             logger.info(f"   💾 Checkpoint saved: {checkpoint_path}")

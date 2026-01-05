@@ -3,6 +3,7 @@
 from .base_normalizer import BaseNormalizer
 from .config import BaseNormConfig, InputNormConfig, OutputNormConfig
 from .input_transform import InputTransform
+from .kolmogorov_transform import KolmogorovInputTransform
 from .output_transform import OutputTransform, compute_friction_velocity_scales
 
 __all__ = [
@@ -11,6 +12,7 @@ __all__ = [
     "InputNormConfig",
     "OutputNormConfig",
     "InputTransform",
+    "KolmogorovInputTransform",
     "OutputTransform",
     "compute_friction_velocity_scales",
 ]

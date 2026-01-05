@@ -9,7 +9,12 @@ from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
 import torch
 
-from pinnx.utils.normalization import InputTransform, InputNormConfig, OutputTransform
+from pinnx.utils.normalization import (
+    InputTransform, 
+    InputNormConfig, 
+    OutputTransform,
+    KolmogorovInputTransform
+)
 
 
 def _collect_coordinate_tensors(training_data: Dict[str, torch.Tensor]) -> List[torch.Tensor]:
@@ -135,7 +140,7 @@ def create_input_normalizer(
         device: PyTorch 設備
         
     Returns:
-        InputTransform 實例或 None（若不需要標準化）
+        InputTransform 或 KolmogorovInputTransform 實例，或 None（若不需要標準化）
     """
     scaling_cfg = config.get('model', {}).get('scaling', {})
     norm_type = scaling_cfg.get('input_norm', 'none')
@@ -150,6 +155,22 @@ def create_input_normalizer(
     if is_vs_pinn and norm_type in ('vs_pinn', 'channel_flow'):
         # VS-PINN already applies dedicated scaling; avoid double normalization.
         return None
+    
+    # 🆕 特殊處理：Kolmogorov 標準化（與 JAX-PI 對齊）
+    if norm_type == 'kolmogorov':
+        # 從配置中獲取 t_max
+        kol_cfg = config.get('data', {}).get('kolmogorov_config', {})
+        time_range = kol_cfg.get('time_range', [0.0, 1.0])
+        t_max = float(time_range[1])
+        
+        logging.info(f"🌀 使用 Kolmogorov 標準化器 (JAX-PI aligned)")
+        logging.info(f"   t_max = {t_max:.2f}")
+        logging.info(f"   時間維度: [0, {t_max}] → [0, 1]")
+        logging.info(f"   空間維度: 保持不變 [0, 2π]")
+        
+        normalizer = KolmogorovInputTransform(t_max=t_max)
+        normalizer.to(device)
+        return normalizer
 
     bounds_tensor: Optional[torch.Tensor] = None
     if norm_type in ('channel_flow',):

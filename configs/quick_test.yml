@@ -59,6 +59,7 @@ sensors:
   K: 50  # 減少感測器數量
   selection_method: random  # 使用隨機選擇加速
   random_seed: 42
+  sensor_file: ./data/sensors/kolmogorov/sensors_K50_re50_256x256.json
 
 model:
   type: fourier_vs_mlp
@@ -84,10 +85,8 @@ model:
 
 physics:
   domain:
-    x_min: 0.0
-    x_max: 12.566370614359172
-    y_min: 0.0
-    y_max: 6.283185307179586
+    x_range: [0.0, 12.566370614359172]
+    y_range: [0.0, 6.283185307179586]
     periodic_dims:
     - x
     - y
@@ -118,6 +117,10 @@ training:
     enabled: false  # 關閉驗證加速測試
   early_stopping:
     enabled: false
+  sampling:
+    pde_points: 1000  # 減少 PDE 配點
+    boundary_points: 200  # 減少邊界點
+    N_pde: 1000  # Kolmogorov 使用的欄位名稱
 
 losses:
   sensor:
@@ -131,12 +134,19 @@ losses:
   bc:
     type: boundary
     enabled: false  # 週期域不需要 BC
+  prior_weight: 0.0  # 關閉 prior 加速測試
+  nu: 0.039374  # 物理黏度
+  rho: 1.0  # 密度
 
 weighting:
   method: gradnorm
   enabled: true
   alpha: 1.5
   update_every: 1
+
+logging:
+  log_dir: ./log
+  log_level: INFO
 
 wandb:
   enabled: false  # 關閉 wandb 加速測試

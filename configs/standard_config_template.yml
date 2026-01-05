@@ -186,9 +186,13 @@ losses:
   prior_weight: 0.1
   source_l1: 1.0e-06
   gradient_penalty: 0.0001
-  adaptive_weighting: false
-  weight_update_freq: 1000
-  grad_norm_alpha: 1.5
+  
+  # GradNorm 自適應權重（對齊 JaxPI）
+  adaptive_weighting: false           # 是否啟用 GradNorm
+  weight_update_freq: 1000            # 權重更新頻率（JaxPI 默認 1000）
+  grad_norm_momentum: 0.9             # EMA 平滑係數（對齊 JaxPI，0 表示不使用）
+  grad_norm_alpha: 1.5                # 權重更新激進程度（非 JaxPI 參數）
+  grad_norm_normalize: true           # 權重正規化開關（true=PINNx 穩定模式, false=JaxPI 精確對齊）
   adaptive_loss_terms:
   - data
   - momentum_x
@@ -197,7 +201,12 @@ losses:
   - continuity
   - wall_constraint
   - periodicity
-  causal_weighting: false
+  
+  # 因果權重（Causal Weighting）- 適用於時間依賴問題（對齊 JaxPI）
+  causal_weighting: false             # 是否啟用因果權重
+  causal_tol: 1.0                     # JaxPI: causal_tol，控制權重衰減速度
+  num_chunks: 32                      # JaxPI: num_chunks，時間分塊數（Burgers=32, NS=16）
+  
 training:
   optimizer:
     type: adam

@@ -14,7 +14,6 @@ if repo_root not in sys.path:
 
 from pinnx.losses.weighting import (
     GradNormWeighter,
-    NTKWeighter,
     AdaptiveWeightScheduler,
     CausalWeighter,
     MultiWeightManager,
@@ -89,26 +88,6 @@ class TestWeightingStrategies:
         max_w = max(weights.values())
         min_w = min(weights.values())
         assert max_w / max(min_w, 1e-12) <= gradnorm.max_ratio + 1e-6
-
-    def test_ntk_weighting(self):
-        """測試 NTK 權重策略"""
-        ntk = NTKWeighter(self.model, update_freq=100, reg_param=1e-6)
-
-        # 模擬訓練點
-        x_train = torch.randn(20, 2, device=self.device)
-
-        # 模擬損失
-        losses = {
-            'data': torch.tensor(0.8, device=self.device),
-            'pde': torch.tensor(1.5, device=self.device)
-        }
-
-        # 使用統一的接口：context 字典包含所有可選參數
-        context = {'x_train': x_train, 'step': 100}
-        weights = ntk.update_weights(losses, context)
-
-        assert len(weights) == len(losses)
-        assert all(w > 0 for w in weights.values())
 
     def test_adaptive_weighting(self):
         """測試自適應權重策略"""

@@ -26,6 +26,16 @@ class InputTransform(BaseNormalizer):
 
     def __init__(self, config: InputNormConfig):
         norm_type = (config.norm_type or "none").lower()
+        
+        # Handle Kolmogorov-specific normalization
+        # Return KolmogorovInputTransform directly instead of InputTransform
+        if norm_type == 'kolmogorov':
+            # This branch should not be reached in practice
+            # Users should instantiate KolmogorovInputTransform directly
+            logger.warning(
+                "建議直接使用 KolmogorovInputTransform 而非透過 InputTransform 工廠方法"
+            )
+        
         super().__init__(norm_type=norm_type)
         self.feature_range = config.feature_range
         self.bounds = config.bounds

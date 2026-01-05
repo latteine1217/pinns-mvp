@@ -7,7 +7,7 @@ PINNs 損失函數模組
 主要組件：
 - residuals: NS方程殘差、邊界條件、初始條件
 - priors: 低保真一致性、統計約束、守恆定律
-- weighting: GradNorm、因果權重、NTK策略
+- weighting: GradNorm、因果權重
 
 使用範例：
 ```python
@@ -45,7 +45,6 @@ from .priors import (
 from .weighting import (
     GradNormWeighter,
     CausalWeighter,
-    NTKWeighter,
     AdaptiveWeightScheduler,
     MultiWeightManager,
     create_weight_manager
@@ -370,7 +369,7 @@ class CompleteLossManager:
                     chunk_loss = self.compute_residual_loss(chunk_points, chunk_time)
                     time_losses.append(chunk_loss)
             
-            # 準備輸入數據（用於 NTK）
+            # 準備輸入數據
             data_inputs = {}
             if 'obs_points' in batch:
                 data_inputs['data'] = batch['obs_points'].to(device)
@@ -563,7 +562,6 @@ __all__ = [
     # 動態權重
     'GradNormWeighter',
     'CausalWeighter',
-    'NTKWeighter',
     'AdaptiveWeightScheduler',
     'MultiWeightManager',
     'create_weight_manager',

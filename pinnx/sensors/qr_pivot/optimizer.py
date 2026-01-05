@@ -8,10 +8,7 @@ import logging
 import numpy as np
 
 from .base import BaseSensorSelector
-from .selectors.greedy import GreedySelector
-from .selectors.multi_objective import MultiObjectiveSelector
-from .selectors.pod_based import PODBasedSelector
-from .selectors.qr_pivot import QRPivotSelector
+from .factory import create_sensor_selector
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +41,8 @@ class SensorOptimizer:
         return selected_indices, metrics
 
     def _create_selector(self, strategy: str) -> BaseSensorSelector:
-        if strategy == "qr_pivot":
-            return QRPivotSelector(**self.config.get("qr_pivot", {}))
-        if strategy == "pod_based":
-            return PODBasedSelector(**self.config.get("pod_based", {}))
-        if strategy == "greedy":
-            return GreedySelector(**self.config.get("greedy", {}))
-        if strategy == "multi_objective":
-            return MultiObjectiveSelector(**self.config.get("multi_objective", {}))
-
-        raise ValueError(f"未知的感測點選擇策略: {strategy}")
+        selector_cfg = self.config.get(strategy, {})
+        return create_sensor_selector(strategy, **selector_cfg)
 
     def _auto_strategy_selection(
         self,

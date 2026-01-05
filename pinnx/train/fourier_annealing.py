@@ -12,10 +12,50 @@ Fourier Features 頻率退火調度器
 3. 與 AxisSelectiveFourierFeatures 無縫集成
 """
 
+import logging
 import torch
 import torch.nn as nn
-from typing import List, Dict, Optional, Tuple
+from typing import Any, Callable, List, Dict, Optional, Tuple
 from dataclasses import dataclass
+
+
+_DEFAULT_ANNEALING_BUILDERS: Dict[str, Callable[[], List["AnnealingStage"]]] = {}
+_ANNEALING_STRATEGY_FACTORIES: Dict[str, Callable[[Dict[str, Any]], Optional["FourierAnnealingScheduler"]]] = {}
+
+
+def register_default_annealing(name: str) -> Callable[[Callable[[], List["AnnealingStage"]]], Callable[[], List["AnnealingStage"]]]:
+    """Register a default annealing stages builder."""
+    def decorator(func: Callable[[], List["AnnealingStage"]]) -> Callable[[], List["AnnealingStage"]]:
+        _DEFAULT_ANNEALING_BUILDERS[name.lower()] = func
+        return func
+    return decorator
+
+
+def register_annealing_strategy(name: str) -> Callable[[Callable[[Dict[str, Any]], Optional["FourierAnnealingScheduler"]]], Callable[[Dict[str, Any]], Optional["FourierAnnealingScheduler"]]]:
+    """Register a Fourier annealing strategy factory."""
+    def decorator(func: Callable[[Dict[str, Any]], Optional["FourierAnnealingScheduler"]]) -> Callable[[Dict[str, Any]], Optional["FourierAnnealingScheduler"]]:
+        _ANNEALING_STRATEGY_FACTORIES[name.lower()] = func
+        return func
+    return decorator
+
+
+def list_annealing_strategies() -> List[str]:
+    """List available Fourier annealing strategies."""
+    return sorted(_ANNEALING_STRATEGY_FACTORIES.keys())
+
+
+def create_fourier_annealing(annealing_cfg: Dict[str, Any]) -> Optional["FourierAnnealingScheduler"]:
+    """Create Fourier annealing scheduler from config."""
+    if not annealing_cfg.get('enabled', False):
+        return None
+
+    strategy = annealing_cfg.get('strategy', 'conservative')
+    factory = _ANNEALING_STRATEGY_FACTORIES.get(strategy.lower())
+    if factory is None:
+        logging.warning(f"⚠️ 未知退火策略 '{strategy}'，禁用退火")
+        return None
+
+    return factory(annealing_cfg)
 
 
 @dataclass
@@ -206,6 +246,39 @@ class FourierAnnealingScheduler:
 
 # ========== 預設配置工廠 ==========
 
+@register_default_annealing('conservative')
+def _build_conservative_stages() -> List[AnnealingStage]:
+    return [
+        AnnealingStage(0.3, [1, 2], "低頻預熱（K=1,2）"),
+        AnnealingStage(0.6, [1, 2, 4], "中頻解鎖（K=4）"),
+        AnnealingStage(1.0, [1, 2, 4, 8], "全頻段（K=8）")
+    ]
+
+
+@register_default_annealing('aggressive')
+def _build_aggressive_stages() -> List[AnnealingStage]:
+    return [
+        AnnealingStage(0.4, [1, 2, 4], "低中頻（K≤4）"),
+        AnnealingStage(1.0, [1, 2, 4, 8], "全頻段（K=8）")
+    ]
+
+
+@register_default_annealing('fine')
+def _build_fine_stages() -> List[AnnealingStage]:
+    return [
+        AnnealingStage(0.2, [1, 2], "極低頻"),
+        AnnealingStage(0.4, [1, 2, 4], "低中頻"),
+        AnnealingStage(0.7, [1, 2, 4, 8], "中高頻"),
+        AnnealingStage(1.0, [1, 2, 4, 8, 16], "全頻段")
+    ]
+
+
+@register_default_annealing('custom')
+def _build_custom_stages() -> List[AnnealingStage]:
+    # custom 策略由上層讀取配置，這裡保留空列表以維持舊行為
+    return []
+
+
 def create_default_annealing(strategy: str = 'conservative') -> List[AnnealingStage]:
     """
     創建預設退火配置
@@ -220,30 +293,10 @@ def create_default_annealing(strategy: str = 'conservative') -> List[AnnealingSt
     Returns:
         階段配置列表（custom 策略返回空列表）
     """
-    if strategy == 'conservative':
-        return [
-            AnnealingStage(0.3, [1, 2], "低頻預熱（K=1,2）"),
-            AnnealingStage(0.6, [1, 2, 4], "中頻解鎖（K=4）"),
-            AnnealingStage(1.0, [1, 2, 4, 8], "全頻段（K=8）")
-        ]
-    elif strategy == 'aggressive':
-        return [
-            AnnealingStage(0.4, [1, 2, 4], "低中頻（K≤4）"),
-            AnnealingStage(1.0, [1, 2, 4, 8], "全頻段（K=8）")
-        ]
-    elif strategy == 'fine':
-        return [
-            AnnealingStage(0.2, [1, 2], "極低頻"),
-            AnnealingStage(0.4, [1, 2, 4], "低中頻"),
-            AnnealingStage(0.7, [1, 2, 4, 8], "中高頻"),
-            AnnealingStage(1.0, [1, 2, 4, 8, 16], "全頻段")
-        ]
-    elif strategy == 'custom':
-        # 🔧 custom 策略：由 Trainer 從配置文件的 fourier_annealing.stages 讀取
-        # Factory 階段返回空列表，避免重複定義
-        return []
-    else:
+    builder = _DEFAULT_ANNEALING_BUILDERS.get(strategy.lower())
+    if builder is None:
         raise ValueError(f"未知策略: {strategy}，可選: conservative, aggressive, fine, custom")
+    return builder()
 
 
 def create_channel_flow_annealing() -> Dict[str, List[AnnealingStage]]:
@@ -272,6 +325,62 @@ def create_channel_flow_annealing() -> Dict[str, List[AnnealingStage]]:
     ]
     
     return {'x': x_stages, 'y': y_stages, 'z': z_stages}
+
+
+# ========== 策略工廠（Registry）==========
+
+def _build_default_scheduler(annealing_cfg: Dict[str, Any], strategy: str) -> FourierAnnealingScheduler:
+    stages = create_default_annealing(strategy)
+    axes_names = annealing_cfg.get('axes_names', ['x', 'y', 'z'])
+    scheduler = FourierAnnealingScheduler(stages, axes_names=axes_names)
+    logging.info(f"✅ Fourier 退火啟用（策略: {strategy}）")
+    return scheduler
+
+
+@register_annealing_strategy('conservative')
+def _build_conservative_scheduler(annealing_cfg: Dict[str, Any]) -> FourierAnnealingScheduler:
+    return _build_default_scheduler(annealing_cfg, 'conservative')
+
+
+@register_annealing_strategy('aggressive')
+def _build_aggressive_scheduler(annealing_cfg: Dict[str, Any]) -> FourierAnnealingScheduler:
+    return _build_default_scheduler(annealing_cfg, 'aggressive')
+
+
+@register_annealing_strategy('fine')
+def _build_fine_scheduler(annealing_cfg: Dict[str, Any]) -> FourierAnnealingScheduler:
+    return _build_default_scheduler(annealing_cfg, 'fine')
+
+
+@register_annealing_strategy('channel_flow')
+def _build_channel_flow_scheduler(annealing_cfg: Dict[str, Any]) -> FourierAnnealingScheduler:
+    per_axis_config = create_channel_flow_annealing()
+    global_stages = per_axis_config['x']
+    per_axis_stages = {'y': per_axis_config['y'], 'z': per_axis_config['z']}
+    scheduler = FourierAnnealingScheduler(
+        global_stages,
+        per_axis_stages=per_axis_stages,
+        axes_names=annealing_cfg.get('axes_names', ['x', 'y', 'z'])
+    )
+    logging.info("✅ Fourier 退火啟用（通道流專用配置）")
+    return scheduler
+
+
+@register_annealing_strategy('custom')
+def _build_custom_scheduler(annealing_cfg: Dict[str, Any]) -> Optional[FourierAnnealingScheduler]:
+    stages_cfg = annealing_cfg.get('stages', [])
+    if not stages_cfg:
+        logging.warning("⚠️ 自定義退火策略未提供階段配置，禁用退火")
+        return None
+
+    stages = [
+        AnnealingStage(s['end_ratio'], s['frequencies'], s.get('description', ''))
+        for s in stages_cfg
+    ]
+    axes_names = annealing_cfg.get('axes_names', ['x', 'y', 'z'])
+    scheduler = FourierAnnealingScheduler(stages, axes_names=axes_names)
+    logging.info(f"✅ Fourier 退火啟用（自定義配置，{len(stages)} 階段）")
+    return scheduler
 
 
 # ========== 工具函數 ==========

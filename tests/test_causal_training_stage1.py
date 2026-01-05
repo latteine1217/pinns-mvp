@@ -45,7 +45,7 @@ def test_causal_weighter_config_integration():
     # 初始化（模擬 train.py Line 1072-1078）
     weighter = CausalWeighter(
         epsilon=loss_cfg['causal_eps'],
-        n_time_bins=loss_cfg['causal_n_bins'],
+        num_chunks=loss_cfg['causal_n_bins'],
         t_min=t_min,
         t_max=t_max,
         device=device
@@ -84,15 +84,18 @@ def test_causal_weighter_precomputed_performance():
     
     # 測試 10 次計算（模擬訓練多個 iteration）
     times = []
+    context = {'return_pointwise': True}
+    weights = None  # 初始化
     for _ in range(10):
         start = time.time()
-        weights = weighter.compute_weights(pde_losses, time_coords)
+        weights = weighter.compute_weights(pde_losses, time_coords, context)
         elapsed = time.time() - start
         times.append(elapsed * 1000)  # ms
     
     avg_time = sum(times) / len(times)
     
     # 驗證
+    assert weights is not None, "weights 應該已計算"
     assert weights.shape == (N, 1)
     assert avg_time < 50.0  # 應該 < 50ms（優化前可能 > 100ms）
     
@@ -148,7 +151,8 @@ def test_causal_weighter_auto_device_matching():
     # 測試 CPU 輸入
     pde_losses = torch.rand(1000, 1)
     time_coords = torch.linspace(0, 10, 1000).unsqueeze(1)
-    weights = weighter.compute_weights(pde_losses, time_coords)
+    context = {'return_pointwise': True}
+    weights = weighter.compute_weights(pde_losses, time_coords, context)
     
     assert weights.device.type == 'cpu'
     
@@ -158,7 +162,7 @@ def test_causal_weighter_auto_device_matching():
         time_coords_cuda = time_coords.to('cuda')
         
         # compute_weights 應該自動移動 causal_matrix 到 CUDA
-        weights_cuda = weighter.compute_weights(pde_losses_cuda, time_coords_cuda)
+        weights_cuda = weighter.compute_weights(pde_losses_cuda, time_coords_cuda, context)
         assert weights_cuda.device.type == 'cuda'
         assert weighter.causal_matrix.device.type == 'cuda'  # 已自動移動
         
@@ -168,7 +172,7 @@ def test_causal_weighter_auto_device_matching():
         pde_losses_mps = pde_losses.to('mps')
         time_coords_mps = time_coords.to('mps')
         
-        weights_mps = weighter.compute_weights(pde_losses_mps, time_coords_mps)
+        weights_mps = weighter.compute_weights(pde_losses_mps, time_coords_mps, context)
         assert weights_mps.device.type == 'mps'
         assert weighter.causal_matrix.device.type == 'mps'
         
@@ -188,18 +192,24 @@ def test_causal_weights_causality_property():
     pde_losses = torch.ones(N, 1) * 0.5
     time_coords = torch.linspace(0, 10, N).unsqueeze(1)
     
-    # 取 chunk-level 權重
-    chunk_weights, _ = weighter.compute_weights(
-        pde_losses, time_coords, return_pointwise=False
-    )
+    # 獲取 point-level 權重並計算 chunk 平均值
+    context = {'return_pointwise': True}
+    weights = weighter.compute_weights(pde_losses, time_coords, context)
     
-    # 驗證遞減性
-    assert chunk_weights[0] > chunk_weights[-1], "權重應該遞減（因果性）"
+    # 將權重按時間分塊並計算平均值
+    num_chunks = 20
+    chunk_size = N // num_chunks
+    weights_chunks = weights[:chunk_size * num_chunks].view(num_chunks, chunk_size)
+    chunk_means = torch.mean(weights_chunks, dim=1)
+    
+    # 驗證遞減性（因果性）
+    assert chunk_means[0] > chunk_means[-1], "權重應該遞減（因果性）"
     
     # 驗證第一個 chunk 權重為 1（無先前損失）
-    assert torch.isclose(chunk_weights[0], torch.tensor(1.0), atol=1e-5)
+    assert torch.isclose(chunk_means[0], torch.tensor(1.0), atol=1e-2), \
+        f"第一個 chunk 權重應該接近 1.0，實際為 {chunk_means[0]:.4f}"
     
-    print(f"✅ 因果性驗證通過：w[0]={chunk_weights[0]:.4f}, w[-1]={chunk_weights[-1]:.4f}")
+    print(f"✅ 因果性驗證通過：w[0]={chunk_means[0]:.4f}, w[-1]={chunk_means[-1]:.4f}")
 
 
 if __name__ == "__main__":

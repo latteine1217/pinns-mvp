@@ -342,55 +342,10 @@ class TrainerBuilder:
 
     def _create_fourier_annealing(self):
         """創建 Fourier Annealing（從 Trainer._setup_fourier_annealing 遷移）"""
-        from pinnx.train.fourier_annealing import (
-            FourierAnnealingScheduler,
-            create_default_annealing,
-            create_channel_flow_annealing,
-            AnnealingStage
-        )
+        from pinnx.train.fourier_annealing import create_fourier_annealing
 
         annealing_cfg = self.config.get('fourier_annealing', {})
-        if not annealing_cfg.get('enabled', False):
-            return None
-
-        strategy = annealing_cfg.get('strategy', 'conservative')
-
-        if strategy in ['conservative', 'aggressive', 'fine']:
-            stages = create_default_annealing(strategy)
-            axes_names = annealing_cfg.get('axes_names', ['x', 'y', 'z'])
-            fourier_annealing = FourierAnnealingScheduler(stages, axes_names=axes_names)
-            logging.info(f"✅ Fourier 退火啟用（策略: {strategy}）")
-
-        elif strategy == 'channel_flow':
-            per_axis_config = create_channel_flow_annealing()
-            global_stages = per_axis_config['x']
-            per_axis_stages = {'y': per_axis_config['y'], 'z': per_axis_config['z']}
-            fourier_annealing = FourierAnnealingScheduler(
-                global_stages,
-                per_axis_stages=per_axis_stages,
-                axes_names=['x', 'y', 'z']
-            )
-            logging.info("✅ Fourier 退火啟用（通道流專用配置）")
-
-        elif strategy == 'custom':
-            stages_cfg = annealing_cfg.get('stages', [])
-            if not stages_cfg:
-                logging.warning("⚠️ 自定義退火策略未提供階段配置，禁用退火")
-                return None
-
-            stages = [
-                AnnealingStage(s['end_ratio'], s['frequencies'], s.get('description', ''))
-                for s in stages_cfg
-            ]
-            axes_names = annealing_cfg.get('axes_names', ['x', 'y', 'z'])
-            fourier_annealing = FourierAnnealingScheduler(stages, axes_names=axes_names)
-            logging.info(f"✅ Fourier 退火啟用（自定義配置，{len(stages)} 階段）")
-
-        else:
-            logging.warning(f"⚠️ 未知退火策略 '{strategy}'，禁用退火")
-            return None
-
-        return fourier_annealing
+        return create_fourier_annealing(annealing_cfg)
 
     def _create_adaptive_sampler(self):
         """創建 Adaptive Sampler（從 Trainer._setup_adaptive_sampling 遷移）"""

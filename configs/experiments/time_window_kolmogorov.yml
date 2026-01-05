@@ -1,0 +1,226 @@
+# ===================================================================
+# 時間窗口訓練配置範例：Kolmogorov Flow
+# ===================================================================
+# 
+# 參考 JAX-PI 實現：
+# - 25 個時間窗口
+# - 無重疊劃分
+# - Transfer Learning（從前窗口恢復參數）
+# - IC 直接轉移（從前窗口預測）
+# - 窗口內使用 Causal Weighting
+#
+# 預期效果：
+# - 相比單次長時間訓練，減少 ~50% 訓練時間
+# - 更好的長時間範圍誤差控制（> 2 T_eddy）
+# ===================================================================
+
+# ===== 數據配置 =====
+data:
+  source: kolmogorov  # 或使用 jhtdb
+  dataset: kolmogorov_flow_2d
+  
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov/dns_Re10000_test.h5  # 測試資料路徑
+    resolution: 64  # 測試資料解析度
+    Re: 10000
+    time_range: [0.0, 50.0]  # 總時間範圍（將被劃分為窗口）
+    dt: 0.5  # 測試資料時間步長
+    domain:
+      x: [0.0, 6.283185307179586]  # 2π
+      y: [0.0, 6.283185307179586]
+    variables: [u, v, p]  # 2D 流場
+    
+  normalize: true
+  cache_dir: ./data/kolmogorov/Re10000
+
+# ===== 標準化配置 =====
+normalization:
+  type: kolmogorov  # JAX-PI aligned: t/t_max, spatial dims unchanged
+  params:
+    # t_max 自動從 data.kolmogorov_config.time_range[1] 提取
+
+# ===== 感測器配置 =====
+sensors:
+  K: 100  # 感測點數量
+  sensor_file: ./data/sensors/random_K100_test.json  # 測試感測點位置檔案
+  selection_method: random  # 測試用隨機選擇
+  spatial_coverage: uniform
+
+# ===== 採樣配置 =====
+sampling:
+  N_pde: 4096  # PDE 殘差採樣點
+
+# ===== 模型配置 =====
+model:
+  type: fourier_vs_mlp
+  in_dim: 3  # (x, y, t)
+  out_dim: 3  # (u, v, p) - 2D 流場
+  width: 256
+  depth: 3  # 對齊 JAX-PI（較淺）
+  activation: tanh
+  use_residual: false
+  use_layer_norm: false
+  dropout: 0.0
+  block_type: piratenet  # 使用 PirateNet 架構
+  res_block_alpha_init: 0.0  # α 初始化為 0（淺層開始）
+  use_rwf: true  # 使用 Random Weight Factorization
+  rwf_scale_mean: 1.0
+  rwf_scale_std: 0.1
+  
+  # 🌀 輸入標準化配置（JAX-PI aligned）
+  scaling:
+    input_norm: kolmogorov  # 使用 Kolmogorov 專用標準化
+    input_norm_range: [0.0, 1.0]  # 時間維度映射範圍
+  
+  fourier_features:
+    type: standard
+    fourier_m: 128  # 較高的 Fourier 特徵數
+    fourier_sigma: 2.0  # Fourier 頻率尺度（對齊 JAX-PI）
+    trainable_fourier: false
+    fourier_use_2pi: true
+
+# ===== 物理配置 =====
+physics:
+  type: kolmogorov_flow_2d  # 修正：使用註冊的物理類型
+  nu: 0.0001  # Re = 10000 → ν = 1/Re
+  rho: 1.0
+  forcing:  # 修正：匹配 KolmogorovFlow2D 的參數名
+    amplitude: 2.0
+    wavenumber: 4
+  domain:
+    x_min: 0.0
+    x_max: 6.283185307179586  # 2π
+    y_min: 0.0
+    y_max: 6.283185307179586  # 2π
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+
+# ===== 損失權重配置 =====
+losses:
+  data_weight: 100.0  # 較高的數據權重（對齊 JAX-PI 的 IC 權重）
+  prior_weight: 0.1  # Prior consistency 權重（對 Kolmogorov Flow 較低）
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  adaptive_weighting: true
+  
+  # Gradient Norm Weighting（對齊 JAX-PI）
+  weighting:
+    scheme: grad_norm
+    update_every_steps: 1000
+    momentum: 0.9
+
+# ===== 訓練配置 =====
+training:
+  # 🪟 時間窗口配置（核心）
+  num_time_windows: 25  # 對齊 JAX-PI
+  time_window_overlap: 0.0  # 無重疊（Physics Review 建議）
+  transfer_learning: true  # 從前窗口恢復參數
+  
+  # 每個窗口的訓練設置
+  epochs: 20000  # 每個窗口訓練 20k steps（對齊 JAX-PI）
+  batch_size: 4096
+  
+  sampling:
+    N_pde: 4096  # PDE 殘差採樣點
+    N_ic: 256  # IC 採樣點（每個窗口）
+    N_bc: 256  # BC 採樣點
+  
+  # Causal Weighting（窗口內使用）
+  causal_weighting:
+    enabled: true
+    num_chunks: 16  # 對齊 JAX-PI
+    causal_tol: 1.0
+  
+  # 混合精度訓練
+  use_amp: false  # JAX-PI 未使用 AMP
+  
+  # 梯度裁剪
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+
+# ===== 優化器配置 =====
+optimizer:
+  type: soap  # 🎯 使用 SOAP（對齊 JAX-PI）
+  learning_rate: 0.001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  
+  # SOAP 特定參數
+  soap_config:
+    precondition_frequency: 2  # 對齊 JAX-PI
+  
+  # 學習率調度
+  scheduler:
+    type: exponential_decay_with_warmup
+    warmup_steps: 2000  # 對齊 JAX-PI
+    decay_steps: 2000
+    decay_rate: 0.9
+    staircase: false
+
+# ===== Checkpoint 配置 =====
+checkpointing:
+  enabled: true
+  checkpoint_dir: ./checkpoints/time_window_kf
+  save_every_steps: 5000  # 每個窗口內保存
+  keep_best: true
+  keep_last_n: 2
+
+# ===== 驗證配置 =====
+validation:
+  enabled: true
+  val_every_steps: 100
+  metrics:
+    - relative_l2
+    - mse
+    - max_error
+
+# ===== 日誌配置 =====
+logging:
+  log_every_steps: 100
+  use_wandb: true
+  wandb:
+    project: PINNx-TimeWindow
+    name: kolmogorov_flow_25windows
+    group: time_window_experiment
+    tags:
+      - time_window
+      - kolmogorov_flow
+      - piratenet
+      - soap
+      - 25_windows
+    notes: |
+      Time Window Training for Kolmogorov Flow (Re=10000)
+      - 25 windows, no overlap
+      - Transfer learning enabled
+      - Causal weighting within windows
+      - SOAP optimizer
+      - PirateNet architecture
+
+# ===== 實驗說明 =====
+experiment:
+  name: time_window_kolmogorov_25w
+  description: |
+    時間窗口訓練實驗：Kolmogorov Flow
+    
+    核心策略（對齊 JAX-PI）：
+    1. 時間劃分：[0, 50]s → 25 窗口 × 2s/窗口
+    2. 無重疊劃分（overlap = 0%）
+    3. Transfer Learning（從前窗口恢復模型參數）
+    4. IC 直接轉移（從前窗口預測值）
+    5. 窗口內使用 Causal Weighting（16 chunks）
+    6. SOAP 優化器 + 指數衰減 + Warmup
+    7. PirateNet 架構（3 層 × 256 寬度）
+    
+    預期效果：
+    - 相比單次訓練（50s），減少 ~50% 訓練時間
+    - 更好的長時間範圍誤差控制
+    - 每個窗口獨立收斂，避免誤差累積
+  
+  baseline_comparison:
+    single_training_time: 12_hours  # 預估
+    time_window_training_time: 6_hours  # 預估（25 窗口 × 20k steps）
+    expected_speedup: 2.0x
