@@ -1085,8 +1085,9 @@ class Trainer:
             if validation_freq > 0 and epoch % validation_freq == 0:
                 val_metrics = self.validate()
                 if val_metrics is not None:
-                    loss_dict['val_loss'] = val_metrics['relative_l2']
-                    loss_dict['val_mse'] = val_metrics['mse']
+                    # 使用 .get() 以支持不同格式的驗證結果
+                    loss_dict['val_loss'] = val_metrics.get('val_loss', val_metrics.get('relative_l2', 0.0))
+                    loss_dict['val_mse'] = val_metrics.get('val_mse', val_metrics.get('mse', 0.0))
 
                 # 🆕 物理驗證（降低頻率：每隔 5 次驗證才做一次物理驗證）
                 physics_validation_freq = validation_freq * 5
@@ -1202,17 +1203,17 @@ class Trainer:
     def _check_and_handle_early_stopping(self, loss_dict: Dict, epoch: int) -> bool:
         """
         檢查並處理早停邏輯
-        
+
         Args:
             loss_dict: 損失字典
             epoch: 當前 epoch
-        
+
         Returns:
             True 表示應該停止訓練
         """
         if not self.early_stopping_enabled:
             return False
-        
+
         # 選擇監控指標
         metric_name = self.early_stopping_cfg.get('monitor', 'total_loss')
         if metric_name == 'val_loss' and 'val_loss' in loss_dict:
@@ -1519,17 +1520,18 @@ class Trainer:
                 **extra_data
             )
 
-            # 4. 更新最佳 checkpoint 記錄
-            if is_best and metrics:
-                metric_value = metrics.get(self.checkpoint_strategy.metric_name, float('inf'))
-                self.checkpoint_strategy.update_best_checkpoints(metric_value, filepath)
-
-            # 5. 向後兼容：如果是最佳模型，額外保存為 best_model.pth
+            # 4. 向後兼容：如果是最佳模型，先保存為 best_model.pth
+            #    （必須在 update_best_checkpoints 之前，因為後者可能刪除 filepath）
             if is_best:
                 best_model_path = self.checkpoint_dir / "best_model.pth"
                 import shutil
                 shutil.copy2(filepath, best_model_path)
                 logging.info(f"⭐ 最佳模型已保存: {best_model_path}")
+
+            # 5. 更新最佳 checkpoint 記錄（可能刪除舊檢查點）
+            if is_best and metrics:
+                metric_value = metrics.get(self.checkpoint_strategy.metric_name, float('inf'))
+                self.checkpoint_strategy.update_best_checkpoints(metric_value, filepath)
 
             return filepath
 

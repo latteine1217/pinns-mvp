@@ -426,11 +426,13 @@ class TrainerBuilder:
             'enabled': early_stopping_cfg.get('enabled', False),
             'patience': early_stopping_cfg.get('patience', 50),
             'min_delta': early_stopping_cfg.get('min_delta', 1e-6),
-            'convergence_threshold': early_stopping_cfg.get('convergence_threshold', None)
+            'convergence_threshold': early_stopping_cfg.get('convergence_threshold', None),
+            'monitor': early_stopping_cfg.get('monitor', 'total_loss'),  # 監控指標
+            'restore_best_weights': early_stopping_cfg.get('restore_best_weights', True)  # 是否恢復最佳模型
         }
 
         if config['enabled']:
-            logging.info(f"✅ 早停機制啟用（patience={config['patience']}, min_delta={config['min_delta']}）")
+            logging.info(f"✅ 早停機制啟用（patience={config['patience']}, min_delta={config['min_delta']}, monitor={config['monitor']}）")
         if config['convergence_threshold'] is not None:
             logging.info(f"✅ 快速收斂檢查啟用（threshold={config['convergence_threshold']:.2e}）")
 
