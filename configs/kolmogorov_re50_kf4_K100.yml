@@ -131,8 +131,8 @@ losses:
   normalize_losses: false
   adaptive_weighting: false
   causal_weighting: true
-  causal_eps: 1.5
-  causal_n_bins: 20
+  causal_tol: 1.5
+  num_chunks: 20
 training:
   optimizer:
     type: soap

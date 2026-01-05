@@ -47,15 +47,12 @@ sensors:
   selection_method: random  # 測試用隨機選擇
   spatial_coverage: uniform
 
-# ===== 採樣配置 =====
-sampling:
-  N_pde: 4096  # PDE 殘差採樣點
-
 # ===== 模型配置 =====
 model:
   type: fourier_vs_mlp
   in_dim: 3  # (x, y, t)
   out_dim: 3  # (u, v, p) - 2D 流場
+  output_variables: [u, v, p]
   width: 256
   depth: 3  # 對齊 JAX-PI（較淺）
   activation: tanh
@@ -122,6 +119,21 @@ training:
   # 每個窗口的訓練設置
   epochs: 20000  # 每個窗口訓練 20k steps（對齊 JAX-PI）
   batch_size: 4096
+  optimizer:
+    type: soap  # 🎯 使用 SOAP（對齊 JAX-PI）
+    lr: 0.001
+    betas: [0.9, 0.999]
+    weight_decay: 0.0
+    # SOAP 特定參數
+    soap_config:
+      precondition_frequency: 2  # 對齊 JAX-PI
+    # 學習率調度
+    scheduler:
+      type: exponential_decay_with_warmup
+      warmup_steps: 2000  # 對齊 JAX-PI
+      decay_steps: 2000
+      decay_rate: 0.9
+      staircase: false
   
   sampling:
     N_pde: 4096  # PDE 殘差採樣點
@@ -141,25 +153,13 @@ training:
   gradient_clipping:
     enabled: true
     max_norm: 1.0
-
-# ===== 優化器配置 =====
-optimizer:
-  type: soap  # 🎯 使用 SOAP（對齊 JAX-PI）
-  learning_rate: 0.001
-  betas: [0.9, 0.999]
-  weight_decay: 0.0
-  
-  # SOAP 特定參數
-  soap_config:
-    precondition_frequency: 2  # 對齊 JAX-PI
-  
-  # 學習率調度
-  scheduler:
-    type: exponential_decay_with_warmup
-    warmup_steps: 2000  # 對齊 JAX-PI
-    decay_steps: 2000
-    decay_rate: 0.9
-    staircase: false
+  validation:
+    enabled: true
+    val_every_steps: 100
+    metrics:
+      - relative_l2
+      - mse
+      - max_error
 
 # ===== Checkpoint 配置 =====
 checkpointing:
@@ -168,15 +168,6 @@ checkpointing:
   save_every_steps: 5000  # 每個窗口內保存
   keep_best: true
   keep_last_n: 2
-
-# ===== 驗證配置 =====
-validation:
-  enabled: true
-  val_every_steps: 100
-  metrics:
-    - relative_l2
-    - mse
-    - max_error
 
 # ===== 日誌配置 =====
 logging:

@@ -40,10 +40,6 @@ sensors:
   selection_method: random
   spatial_coverage: uniform
 
-# ===== 採樣配置 =====
-sampling:
-  N_pde: 4096
-
 # ===== 模型配置 =====
 model:
   type: fourier_vs_mlp
@@ -108,6 +104,19 @@ training:
   # 每個窗口的訓練設置（快速測試）
   epochs: 10  # 🎯 只跑 10 步驗證邏輯（原本 500）
   batch_size: 4096
+  optimizer:
+    type: soap
+    lr: 0.001
+    betas: [0.9, 0.999]
+    weight_decay: 0.0
+    soap_config:
+      precondition_frequency: 2
+    scheduler:
+      type: exponential_decay_with_warmup
+      warmup_steps: 200  # 🎯 減少 warmup 步數（原本 2000）
+      decay_steps: 500
+      decay_rate: 0.9
+      staircase: false
   
   sampling:
     N_pde: 4096
@@ -127,23 +136,13 @@ training:
   gradient_clipping:
     enabled: true
     max_norm: 0.5  # 🎯 降低到 0.5（原本 1.0）以避免 loss 爆炸
-
-# ===== 優化器配置 =====
-optimizer:
-  type: soap
-  learning_rate: 0.001
-  betas: [0.9, 0.999]
-  weight_decay: 0.0
-  
-  soap_config:
-    precondition_frequency: 2
-  
-  scheduler:
-    type: exponential_decay_with_warmup
-    warmup_steps: 200  # 🎯 減少 warmup 步數（原本 2000）
-    decay_steps: 500
-    decay_rate: 0.9
-    staircase: false
+  validation:
+    enabled: true
+    val_every_steps: 100
+    metrics:
+      - relative_l2
+      - mse
+      - max_error
 
 # ===== Checkpoint 配置 =====
 checkpointing:
@@ -152,15 +151,6 @@ checkpointing:
   save_every_steps: 500  # 🎯 更頻繁保存（原本 5000）
   keep_best: true
   keep_last_n: 2
-
-# ===== 驗證配置 =====
-validation:
-  enabled: true
-  val_every_steps: 100
-  metrics:
-    - relative_l2
-    - mse
-    - max_error
 
 # ===== 日誌配置 =====
 logging:

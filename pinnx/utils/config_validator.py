@@ -46,6 +46,29 @@ class ConfigValidator:
         'training': ['epochs', 'optimizer'],
         'model': ['in_dim', 'out_dim'],
     }
+
+    VALID_MODEL_TYPES = {
+        'fourier_vs_mlp',
+        'resnet',
+        'piratenet',
+        'axis_selective_fourier_mlp',
+    }
+    VALID_PHYSICS_TYPES = {
+        'vs_pinn_channel_flow',
+        'ns_2d',
+        'kolmogorov_flow_2d',
+    }
+    VALID_OPTIMIZERS = {'adam', 'adamw', 'lbfgs', 'soap', 'sgd'}
+    VALID_SCHEDULERS = {
+        'none',
+        'constant',
+        'cosine',
+        'warmup_cosine',
+        'step',
+        'exponential',
+        'multistep',
+        'reduce_on_plateau',
+    }
     
     def __init__(self, strict_mode: bool = False):
         """
@@ -149,24 +172,75 @@ class ConfigValidator:
     
     def _check_value_types(self, config: Dict[str, Any]) -> None:
         """檢查值類型與範圍"""
-        # 檢查學習率
-        if 'training' in config and 'optimizer' in config['training']:
-            optimizer_cfg = config['training']['optimizer']
-            if isinstance(optimizer_cfg, dict):
-                lr = optimizer_cfg.get('lr')
-                if lr is not None:
-                    if not isinstance(lr, (int, float)):
-                        self.errors.append(
-                            f"❌ 學習率類型錯誤: {type(lr).__name__}\n"
-                            f"   期望類型: float\n"
-                            f"   當前值: {lr}"
-                        )
-                    elif lr <= 0 or lr > 1.0:
-                        self.warnings.append(
-                            f"⚠️  學習率範圍異常: {lr}\n"
-                            f"   建議範圍: 1e-5 ~ 1e-2\n"
-                            f"   當前值看起來{'過大' if lr > 1.0 else '過小'}"
-                        )
+        # 檢查學習率與 optimizer 結構
+        if 'training' in config:
+            optimizer_cfg = config['training'].get('optimizer')
+            if optimizer_cfg is None:
+                return
+            if not isinstance(optimizer_cfg, dict):
+                self.errors.append(
+                    f"❌ training.optimizer 必須是字典類型，當前類型: {type(optimizer_cfg).__name__}"
+                )
+                return
+            opt_type = optimizer_cfg.get('type')
+            if not isinstance(opt_type, str):
+                self.errors.append(
+                    "❌ 缺少必要配置: training.optimizer.type\n"
+                    "   修復方法: 設置 optimizer.type（如 'adam' / 'soap'）"
+                )
+            else:
+                opt_type_norm = opt_type.lower()
+                if opt_type_norm not in self.VALID_OPTIMIZERS:
+                    self.warnings.append(
+                        f"⚠️  未知的 optimizer.type: {opt_type}\n"
+                        f"   允許值: {sorted(self.VALID_OPTIMIZERS)}"
+                    )
+            lr = optimizer_cfg.get('lr')
+            lr_alt = optimizer_cfg.get('learning_rate')
+            if lr is None and lr_alt is not None:
+                self.warnings.append(
+                    "⚠️  建議使用 optimizer.lr（目前使用 learning_rate）\n"
+                    "   部分模組只讀取 lr，可能導致學習率未生效"
+                )
+                lr = lr_alt
+            if lr is None:
+                self.errors.append(
+                    "❌ 缺少必要配置: training.optimizer.lr\n"
+                    "   修復方法: 設置 optimizer.lr（如 1e-3）"
+                )
+            elif not isinstance(lr, (int, float)):
+                self.errors.append(
+                    f"❌ 學習率類型錯誤: {type(lr).__name__}\n"
+                    f"   期望類型: float\n"
+                    f"   當前值: {lr}"
+                )
+            elif lr <= 0 or lr > 1.0:
+                self.warnings.append(
+                    f"⚠️  學習率範圍異常: {lr}\n"
+                    f"   建議範圍: 1e-5 ~ 1e-2\n"
+                    f"   當前值看起來{'過大' if lr > 1.0 else '過小'}"
+                )
+
+        # 檢查 scheduler
+        if 'training' in config:
+            scheduler_cfg = config['training'].get('lr_scheduler')
+            if isinstance(scheduler_cfg, dict):
+                scheduler_type = scheduler_cfg.get('type')
+                if not isinstance(scheduler_type, str):
+                    self.errors.append(
+                        "❌ 缺少必要配置: training.lr_scheduler.type"
+                    )
+                elif scheduler_type.lower() not in self.VALID_SCHEDULERS:
+                    self.warnings.append(
+                        f"⚠️  未知的 lr_scheduler.type: {scheduler_type}\n"
+                        f"   允許值: {sorted(self.VALID_SCHEDULERS)}"
+                    )
+            elif isinstance(scheduler_cfg, str):
+                if scheduler_cfg.lower() not in self.VALID_SCHEDULERS:
+                    self.warnings.append(
+                        f"⚠️  未知的 lr_scheduler.type: {scheduler_cfg}\n"
+                        f"   允許值: {sorted(self.VALID_SCHEDULERS)}"
+                    )
         
         # 檢查 epochs
         if 'training' in config:
@@ -188,11 +262,18 @@ class ConfigValidator:
         if 'model' in config:
             in_dim = config['model'].get('in_dim')
             out_dim = config['model'].get('out_dim')
+            output_variables = config['model'].get('output_variables')
+            model_type = config['model'].get('type')
+            if isinstance(model_type, str) and model_type not in self.VALID_MODEL_TYPES:
+                self.warnings.append(
+                    f"⚠️  未知的 model.type: {model_type}\n"
+                    f"   允許值: {sorted(self.VALID_MODEL_TYPES)}"
+                )
             
-            if in_dim is not None and in_dim not in [2, 3]:
+            if in_dim is not None and in_dim not in [2, 3, 4]:
                 self.warnings.append(
                     f"⚠️  輸入維度異常: {in_dim}\n"
-                    f"   本專案僅支援 2D 或 3D 問題\n"
+                    f"   本專案預期 2D/3D 或加上時間維度\n"
                     f"   如確認正確，可忽略此警告"
                 )
             
@@ -201,6 +282,45 @@ class ConfigValidator:
                     f"❌ 輸出維度過小: {out_dim}\n"
                     f"   NS 方程至少需要 [u, v] 兩個速度分量"
                 )
+            if output_variables is None:
+                self.errors.append(
+                    "❌ 缺少必要配置: model.output_variables\n"
+                    "   修復方法: 設置 output_variables 並確保長度等於 out_dim"
+                )
+            elif not isinstance(output_variables, list):
+                self.errors.append(
+                    f"❌ model.output_variables 必須是列表，當前類型: {type(output_variables).__name__}"
+                )
+            elif out_dim is not None and len(output_variables) != out_dim:
+                self.errors.append(
+                    f"❌ model.output_variables 長度 ({len(output_variables)}) "
+                    f"與 out_dim ({out_dim}) 不一致"
+                )
+
+            ff_cfg = config['model'].get('fourier_features')
+            if not isinstance(ff_cfg, dict):
+                self.errors.append(
+                    "❌ 缺少必要配置: model.fourier_features（必須是 dict）"
+                )
+            else:
+                ff_type = ff_cfg.get('type')
+                if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+                    self.errors.append(
+                        "❌ model.fourier_features.type 必須是 "
+                        "'standard' / 'axis_selective' / 'disabled'"
+                    )
+                if ff_type != 'disabled':
+                    if 'fourier_m' not in ff_cfg or 'fourier_sigma' not in ff_cfg:
+                        self.errors.append(
+                            "❌ Fourier features 啟用時必須提供 "
+                            "model.fourier_features.fourier_m 與 "
+                            "model.fourier_features.fourier_sigma"
+                        )
+                    if ff_type == 'axis_selective' and 'axes_config' not in ff_cfg:
+                        self.errors.append(
+                            "❌ axis_selective 模式需提供 "
+                            "model.fourier_features.axes_config"
+                        )
     
     def _check_logical_consistency(self, config: Dict[str, Any]) -> None:
         """檢查邏輯一致性"""
@@ -215,27 +335,36 @@ class ConfigValidator:
                     "   或者設置 lowfi_prior.enabled=false"
                 )
         
-        # 檢查 2: 模型輸入維度與物理域不匹配
+        # 檢查 2: 模型輸入維度與物理域不匹配（考慮時間維度）
         if 'model' in config and 'physics' in config:
             in_dim = config['model'].get('in_dim')
             domain = config['physics'].get('domain', {})
             has_z = 'z_range' in domain
-            
-            if in_dim == 2 and has_z:
-                self.warnings.append(
-                    "⚠️  模型輸入維度 (in_dim=2) 與物理域 (3D) 不匹配\n"
-                    "   可能原因:\n"
-                    "   1. 2D 切片訓練（正常，可忽略）\n"
-                    "   2. 配置錯誤（應設置 in_dim=3）"
-                )
-            elif in_dim == 3 and not has_z:
+            spatial_dim = 3 if has_z else 2
+            has_time = _has_time_dimension(config)
+            expected_dims = {spatial_dim}
+            if has_time:
+                expected_dims.add(spatial_dim + 1)
+
+            if in_dim is not None and in_dim not in expected_dims:
+                if has_z:
+                    domain_desc = "3D"
+                else:
+                    domain_desc = "2D"
+                expected_desc = ", ".join(str(dim) for dim in sorted(expected_dims))
                 self.errors.append(
-                    "❌ 模型輸入維度 (in_dim=3) 與物理域 (2D) 不匹配\n"
-                    "   修復方法: 設置 in_dim=2 或在 physics.domain 中添加 z_range"
+                    f"❌ 模型輸入維度 (in_dim={in_dim}) 與物理域 ({domain_desc}) 不匹配\n"
+                    f"   允許的維度: {expected_desc}\n"
+                    f"   修復方法: 調整 model.in_dim 或更新 physics.domain"
                 )
         
         # 檢查 3: VS-PINN 配置不完整
         physics_type = config.get('physics', {}).get('type', '')
+        if isinstance(physics_type, str) and physics_type not in self.VALID_PHYSICS_TYPES:
+            self.warnings.append(
+                f"⚠️  未知的 physics.type: {physics_type}\n"
+                f"   允許值: {sorted(self.VALID_PHYSICS_TYPES)}"
+            )
         if 'vs_pinn' in physics_type.lower():
             vs_pinn_cfg = config.get('physics', {}).get('vs_pinn', {})
             if not vs_pinn_cfg:
@@ -244,6 +373,33 @@ class ConfigValidator:
                     "   修復方法: 添加 physics.vs_pinn.scaling_factors\n"
                     "   參考: configs/standard_config_template.yml"
                 )
+        if physics_type == 'kolmogorov_flow_2d':
+            domain = config.get('physics', {}).get('domain', {})
+            has_ranges = 'x_range' in domain and 'y_range' in domain
+            has_minmax = all(k in domain for k in ('x_min', 'x_max', 'y_min', 'y_max'))
+            if not has_ranges and not has_minmax:
+                self.errors.append(
+                    "❌ kolmogorov_flow_2d 需要 physics.domain 的 "
+                    "x_range/y_range 或 x_min/x_max/y_min/y_max"
+                )
+
+
+def _has_time_dimension(config: Dict[str, Any]) -> bool:
+    """判斷配置是否包含時間維度資訊"""
+    data_cfg = config.get('data', {})
+    for key in ('jhtdb_config', 'kolmogorov_config'):
+        nested = data_cfg.get(key)
+        if isinstance(nested, dict) and 'time_range' in nested:
+            return True
+    if 'time_range' in data_cfg:
+        return True
+    training_cfg = config.get('training', {})
+    if training_cfg.get('num_time_windows', 1) > 1:
+        return True
+    steady_state = config.get('normalization', {}).get('steady_state', {})
+    if isinstance(steady_state, dict) and 'time_window' in steady_state:
+        return True
+    return False
 
 
 def validate_config_file(config: Dict[str, Any], strict_mode: bool = False) -> None:

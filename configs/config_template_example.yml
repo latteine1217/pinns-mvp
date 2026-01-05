@@ -1,3 +1,10 @@
+experiment:
+  name: config_template_example
+  version: v1.0
+  seed: 42
+  device: auto
+  precision: float32
+  description: Example config template
 data:
   source: jhtdb
   dataset: channel
@@ -39,8 +46,8 @@ sensors:
     wall_thickness: 0.1
 model:
   type: fourier_vs_mlp
-  in_dim: 2
-  out_dim: 3
+  in_dim: 4
+  out_dim: 4
   width: 256
   depth: 8
   activation: sine

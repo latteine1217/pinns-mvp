@@ -55,6 +55,7 @@ sensors:
     wall_thickness: 0.1
 model:
   type: fourier_vs_mlp
+  in_dim: 4
   width: 200
   depth: 8
   out_dim: 4
@@ -133,6 +134,11 @@ physics:
   type: vs_pinn_channel_flow
   nu: 5.0e-05
   rho: 1.0
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
   channel_flow:
     Re_tau: 1000.0
     Re_bulk: 39998.0

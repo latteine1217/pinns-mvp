@@ -33,6 +33,15 @@ KNOWN_TOP_LEVEL_KEYS = {
     'checkpointing', 'task_008_gates', 'optimizer_switching'
 }
 
+# 已移除/不允許的頂層鍵（需移動到正確位置）
+LEGACY_TOP_LEVEL_KEYS = {
+    'sampling': "移至 training.sampling",
+    'validation': "移至 training.validation 或 evaluation",
+    'optimizer': "移至 training.optimizer",
+    'wandb': "移至 logging.wandb",
+    'weighting': "移至 losses.weighting",
+}
+
 # losses 段落下的所有已知鍵
 KNOWN_LOSS_KEYS = {
     # 基礎損失
@@ -50,8 +59,14 @@ KNOWN_LOSS_KEYS = {
     'source_l1', 'gradient_penalty',
     # 自適應權重
     'adaptive_weighting', 'weight_update_freq', 'grad_norm_alpha', 'adaptive_loss_terms',
+    'grad_norm_momentum', 'grad_norm_normalize',
     # 因果權重
-    'causal_weighting',
+    'causal_weighting', 'causal_tol', 'num_chunks', 'causal_eps', 'causal_n_bins',
+    # 其他實驗性/legacy
+    'l2_regularization', 'merge_momentum',
+    'adaptation_frequency', 'adaptation_alpha',
+    'adaptation_method', 'normalization_method',
+    'weighting', 'rho', 'nu', 'pde', 'sensor', 'bc',
     # 損失歸一化（已支援但未從配置讀取）
     'normalize_losses', 'warmup_epochs',
 }
@@ -159,12 +174,20 @@ def check_config_keys(config_path: str) -> Tuple[bool, List[str], List[str]]:
                     f"   這些鍵可能不會被使用，請確認拼寫是否正確"
                 )
             
-    # 檢查 3: 檢查未知的頂層鍵
-    unknown_top_keys = set(config.keys()) - KNOWN_TOP_LEVEL_KEYS
+    # 檢查 3: 不允許的頂層鍵（legacy）
+    legacy_hits = set(config.keys()) & set(LEGACY_TOP_LEVEL_KEYS.keys())
+    for key in sorted(legacy_hits):
+        errors.append(
+            f"❌ 不允許的頂層配置鍵: {key}\n"
+            f"   修復方法: {LEGACY_TOP_LEVEL_KEYS[key]}"
+        )
+
+    # 檢查 4: 檢查未知的頂層鍵（嚴格）
+    unknown_top_keys = set(config.keys()) - KNOWN_TOP_LEVEL_KEYS - set(LEGACY_TOP_LEVEL_KEYS.keys())
     if unknown_top_keys:
-        warnings.append(
-            f"⚠️  發現未知的頂層配置鍵: {', '.join(unknown_top_keys)}\n"
-            f"   這些鍵可能不會被使用"
+        errors.append(
+            f"❌ 發現未知的頂層配置鍵: {', '.join(sorted(unknown_top_keys))}\n"
+            f"   請確認拼寫或移至正確段落"
         )
     
     # 檢查 4: 驗證關鍵配置是否存在

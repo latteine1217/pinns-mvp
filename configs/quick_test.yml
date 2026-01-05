@@ -84,6 +84,7 @@ model:
   - p
 
 physics:
+  nu: 0.039374
   domain:
     x_range: [0.0, 12.566370614359172]
     y_range: [0.0, 6.283185307179586]
@@ -101,7 +102,9 @@ training:
   epochs: 10  # 僅訓練 10 個 epoch
   lr: 0.001
   batch_size: 256
-  optimizer: adam
+  optimizer:
+    type: adam
+    lr: 0.001
   weight_decay: 0.0
   amp:
     enabled: false
@@ -137,16 +140,14 @@ losses:
   prior_weight: 0.0  # 關閉 prior 加速測試
   nu: 0.039374  # 物理黏度
   rho: 1.0  # 密度
-
-weighting:
-  method: gradnorm
-  enabled: true
-  alpha: 1.5
-  update_every: 1
+  weighting:
+    method: gradnorm
+    enabled: true
+    alpha: 1.5
+    update_every: 1
 
 logging:
   log_dir: ./log
   log_level: INFO
-
-wandb:
-  enabled: false  # 關閉 wandb 加速測試
+  wandb:
+    enabled: false  # 關閉 wandb 加速測試

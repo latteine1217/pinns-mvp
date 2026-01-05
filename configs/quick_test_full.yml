@@ -142,6 +142,7 @@ model:
 # 物理配置
 # ========================================
 physics:
+  nu: 0.039374
   domain:
     x_range: [0.0, 12.566370614359172]
     y_range: [0.0, 6.283185307179586]
@@ -162,7 +163,9 @@ training:
   epochs: 6  # 極少 epoch（3個 time window × 2 epoch/window）
   lr: 0.001
   batch_size: 128  # 減小批次
-  optimizer: adam
+  optimizer:
+    type: adam
+    lr: 0.001
   weight_decay: 0.0
   
   # ⭐ Time Window 配置
@@ -238,20 +241,16 @@ losses:
     - momentum_y
     - continuity
     - periodicity
+  weighting:
+    method: gradnorm  # 使用 GradNorm
+    enabled: true
+    alpha: 1.5
+    update_every: 1
   
   # ⭐ 因果權重（Causal Weighting）
   causal_weighting: true  # 啟用！
   causal_tol: 1.0
   num_chunks: 8  # 減少分塊數（測試用）
-
-# ========================================
-# Weighting 配置
-# ========================================
-weighting:
-  method: gradnorm  # 使用 GradNorm
-  enabled: true
-  alpha: 1.5
-  update_every: 1
 
 # ========================================
 # Curriculum 配置
@@ -301,18 +300,6 @@ logging:
   save_loss_history: true
   save_weight_evolution: true  # 保存權重演化（測試 GradNorm）
   log_nonlinearities: false
-
-# ========================================
-# WandB 配置
-# ========================================
-wandb:
-  enabled: false  # 關閉 wandb 加速測試
-  project: pinns-sparse-flow
-  entity: null
-  name: quick_test_full
-  tags:
-    - quick_test
-    - full_features
 
 # ========================================
 # Output 配置

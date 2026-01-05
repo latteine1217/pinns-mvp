@@ -42,15 +42,12 @@ sensors:
   selection_method: random
   spatial_coverage: uniform
 
-# ===== 採樣配置 =====
-sampling:
-  N_pde: 2048  # 較少採樣點用於快速測試
-
 # ===== 模型配置 =====
 model:
-  type: fourier_mlp
+  type: fourier_vs_mlp
   in_dim: 3  # (x, y, t)
   out_dim: 3  # (u, v, p)
+  output_variables: [u, v, p]
   width: 128  # 較小網路用於快速測試
   depth: 3
   activation: tanh
@@ -104,6 +101,15 @@ losses:
 training:
   epochs: 5000  # 較少 epochs 用於快速測試
   batch_size: 2048
+  optimizer:
+    type: adam  # 使用 Adam 用於快速測試（SOAP 需要特殊實現）
+    lr: 0.001
+    betas: [0.9, 0.999]
+    weight_decay: 0.0
+    scheduler:
+      type: exponential
+      decay_steps: 1000
+      decay_rate: 0.95
   
   sampling:
     N_pde: 2048
@@ -115,18 +121,12 @@ training:
   gradient_clipping:
     enabled: true
     max_norm: 1.0
-
-# ===== 優化器配置 =====
-optimizer:
-  type: adam  # 使用 Adam 用於快速測試（SOAP 需要特殊實現）
-  learning_rate: 0.001
-  betas: [0.9, 0.999]
-  weight_decay: 0.0
-  
-  scheduler:
-    type: exponential
-    decay_steps: 1000
-    decay_rate: 0.95
+  validation:
+    enabled: true
+    val_every_steps: 100
+    metrics:
+      - relative_l2
+      - mse
 
 # ===== Checkpoint 配置 =====
 checkpointing:
@@ -135,14 +135,6 @@ checkpointing:
   save_every_steps: 1000
   keep_best: true
   keep_last_n: 2
-
-# ===== 驗證配置 =====
-validation:
-  enabled: true
-  val_every_steps: 100
-  metrics:
-    - relative_l2
-    - mse
 
 # ===== 日誌配置 =====
 logging:

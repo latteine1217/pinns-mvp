@@ -1,8 +1,8 @@
 # PINNs 湍流逆重建技術文檔
 
-**文檔版本**: v2.1  
-**更新日期**: 2025-12-07  
-**狀態**: 開發中
+**文檔版本**: v2.3  
+**更新日期**: 2026-01-05  
+**狀態**: 持續更新
 
 ---
 
@@ -10,15 +10,8 @@
 
 1. [專案概述](#1-專案概述)
 2. [核心技術模組](#2-核心技術模組)
-   - [2.1 QR-Pivot 感測器選擇](#21-qr-pivot-感測器選擇)
-   - [2.2 VS-PINN 變數尺度化](#22-vs-pinn-變數尺度化)
-   - [2.3 Random Weight Factorization](#23-random-weight-factorization)
-   - [2.4 動態權重平衡](#24-動態權重平衡)
-   - [2.5 自適應採樣](#25-自適應採樣)
-   - [2.6 資料標準化模組](#26-資料標準化模組)
-   - [2.7 物理約束機制](#27-物理約束機制)
 3. [系統架構](#3-系統架構)
-4. [驗證結果](#4-驗證結果)
+4. [驗證與指標](#4-驗證與指標)
 5. [使用指南](#5-使用指南)
 6. [已知限制](#6-已知限制)
 7. [參考文獻](#7-參考文獻)
@@ -29,1207 +22,246 @@
 
 ### 1.1 研究目標
 
-本專案旨在建立基於物理資訊神經網路（PINNs）的稀疏資料湍流場重建框架，使用公開湍流資料庫（JHTDB Channel Flow Re_τ=1000）作為驗證基準。
+本專案以 **稀疏感測資料**（K ≤ 100）結合 **物理先驗** 進行湍流場重建，面向逆問題場景：
 
-**核心研究問題**：
-- 最少需要多少感測點（K）才能重建完整湍流場？
-- 如何在極少資料點下保持物理一致性？
-- 如何量化重建結果的不確定性？
+- **研究驗證**：使用 DNS 生成感測點觀測值，並以 DNS 全場作為對照基準
+- **工程類比**：用 RANS/LES 作為先驗，真實量測作為 sensor observations
 
-### 1.2 技術路線
+驗收指標（維持原定義）：
+- 流場誤差 ≤ 10–15%（相對 L2）
+- 優於 RANS Baseline ≥ 30%
+- K ≤ 100 感測點（QR-Pivot）
+- 收斂速度提升 ≥ 30%
+
+### 1.2 技術路線（現行流程）
 
 ```
-JHTDB 資料 → QR-Pivot 感測器選擇 → VS-PINN 模型 
-    ↓
-動態權重平衡 → 物理約束保障 → 湍流場重建
-    ↓
-誤差評估 ← 不確定性量化 ← 結果驗證
+DNS / Low-Fi Prior
+        ↓
+Sensor Selection (QR-Pivot / Hybrid)
+        ↓
+Fourier-VS MLP + VS-PINN
+        ↓
+GradNorm / Causal Weighting / Curriculum
+        ↓
+Reconstruction + Physics Validation
 ```
 
-### 1.3 當前狀態
+### 1.3 目前系統狀態（以程式碼為準）
 
-| 模組 | 開發狀態 | 測試覆蓋率 | 備註 |
-|------|---------|-----------|------|
-| QR-Pivot 選擇器 | ✅ 完成 | 87% | 生產可用 |
-| VS-PINN 尺度化 | ✅ 完成 | 92% | 需驗證 Fourier 整合 |
-| RWF 權重分解 | ✅ 完成 | 78% | 檢查點相容性已驗證 |
-| 動態權重平衡 | ✅ 完成 | 100% | 19/19 測試通過 |
-| 物理約束 | ⚠️ 部分完成 | 65% | 需加強邊界條件處理 |
-| 訓練管線 | ✅ 完成 | 71% | 支援 30+ 配置 |
-
-**最新實驗結果** (Task-014, 2025-10-06):
-- 感測點數: K=1024
-- 平均相對誤差: 27.1%
-- 訓練輪數: ~800 epochs
-- 模型參數: 331,268
-
-> ⚠️ **重現性聲明**: 此結果基於長期調參與多輪迭代。直接執行配置檔案可能需要根據硬體環境調整超參數。完整實驗記錄見 `tasks/CF-extend-epochs-8000/`。
+| 模組 | 狀態 | 說明 |
+|------|------|------|
+| Sensor Selection | ✅ 可用 | QR-Pivot + Hybrid/Stratified |
+| Fourier-VS MLP | ✅ 可用 | axis-selective Fourier + SIREN + 可選 RWF |
+| VS-PINN Channel Flow | ✅ 可用 | N=(2,12,2) scaling factors |
+| 2D Kolmogorov Physics | ✅ 可用 | 正弦強迫項 + 週期邊界 |
+| Loss Weighters | ✅ 可用 | GradNorm + Causal + Staged/Curriculum |
+| TrainerBuilder | ✅ 可用 | 組件化訓練器建構 |
+| Checkpoint/Validation Manager | ✅ 可用 | 依賴注入 + 策略模式 |
 
 ---
 
 ## 2. 核心技術模組
 
-### 2.1 QR-Pivot 感測器選擇
+### 2.1 感測器選擇（QR-Pivot）
 
-#### 原理
-
-使用 QR 分解的列主元置換來選擇資訊量最大的空間點：
+使用 QR 分解主元置換選擇資訊量最大的空間點：
 
 ```
 X^T Π = QR
 ```
-
-其中：
-- **X** ∈ ℝ^(N×M): 快照矩陣（N 空間點，M 時間步）
-- **Π**: 置換矩陣，前 K 個位置為最優感測點
-- **R**: 上三角矩陣，對角元素反映點的重要性
-
-#### 實現
 
 **檔案位置**: `pinnx/sensors/qr_pivot.py`
 
 ```python
 from pinnx.sensors import create_sensor_selector
 
-selector = create_sensor_selector(
-    strategy='qr_pivot',
-    mode='column',
-    pivoting=True,
-    regularization=1e-12
-)
-
-sensor_indices, metrics = selector.select_sensors(
-    data_matrix=velocity_snapshots,  # [N_points, N_snapshots]
-    n_sensors=50
-)
+selector = create_sensor_selector(strategy='qr_pivot')
+indices, metrics = selector.select_sensors(data_matrix, n_sensors=100)
 ```
 
-#### 驗證結果
-
-| 策略 | K=50 相對誤差 | 條件數 | 計算時間 |
-|------|--------------|--------|---------|
-| 隨機佈點 | 8.2 ± 2.1% | 10³-10⁵ | 0.001s |
-| QR-Pivot | 2.7 ± 0.4% | 10¹-10² | 0.021s |
-
-**噪聲敏感性**:
-- 1% 噪聲: 3.1 ± 0.4%
-- 3% 噪聲: 4.2 ± 0.7%
+支援策略：QR-Pivot、POD-based、Greedy、Hybrid/Stratified（見 `pinnx/sensors/`）。
 
 ---
 
-### 2.2 VS-PINN 變數尺度化
+### 2.2 Fourier-VS MLP + RWF
 
-#### 原理
-
-對每個物理變數 **q** 學習尺度參數 (μ, σ)：
-
-```
-q̃ = (q - μ) / σ
-```
-
-梯度反向傳播時：
-```
-∂L/∂q = ∂L/∂q̃ · 1/σ
-∂L/∂σ = ∂L/∂q̃ · (-q̃)
-```
-
-#### 實現
-
-**檔案位置**: `pinnx/physics/scaling.py`, `pinnx/models/wrappers.py`
-
-```python
-from pinnx.physics.scaling import VSScaler
-from pinnx.models.wrappers import ScaledPINNWrapper
-
-# 創建可學習尺度器
-scaler = VSScaler(learnable=True)
-scaler.fit(input_data, output_data)
-
-# 包裝模型
-scaled_model = ScaledPINNWrapper(
-    base_model=base_pinn,
-    scaler=scaler,
-    variable_names=['u', 'v', 'p']
-)
-```
-
-#### 驗證結果
-
-**RANS 系統量級平衡效果** (5 方程湍流模型):
-
-| 損失項 | 未使用 VS-PINN | 使用 VS-PINN | 改善 |
-|--------|---------------|-------------|------|
-| 動量方程 | 1.2e-1 | 1.1e-1 | 9% |
-| 連續方程 | 3.4e-2 | 2.8e-2 | 18% |
-| k 方程 | 2.1e+4 | 6.3e+1 | 99.7% |
-| ε 方程 | 8.9e+5 | 2.4e+1 | 99.997% |
-
-> ⚠️ **注意**: 極端量級問題（10⁵ 倍差異）主要出現在 RANS 湍流建模中。標準 NS 方程的量級差異通常在 10²-10³ 範圍內。
-
----
-
-### 2.3 Random Weight Factorization
-
-#### 原理
-
-將神經網路權重 **W** 分解為：
-
-```
-W = diag(exp(s)) · V
-```
-
-其中：
-- **V**: 標準權重矩陣（SIREN/Xavier 初始化）
-- **s**: 可學習對數尺度因子（初始化為 0）
-
-#### 實現
-
-**檔案位置**: `pinnx/models/fourier_mlp.py`
+核心模型以 Fourier Features 提升高頻表達，並支援 RWF（Random Weight Factorization）：
 
 ```yaml
-# configs/your_config.yml
 model:
-  architecture: 'fourier_mlp'
-  hidden_dims: [200, 200, 200, 200, 200, 200, 200, 200]
-  activation: 'sine'
-  use_rwf: true                # 啟用 RWF
-  sine_omega_0: 30.0           # SIREN 頻率參數
+  type: fourier_vs_mlp
+  width: 256
+  depth: 8
+  activation: sine
+  use_rwf: true
+  rwf_scale_std: 0.1
+  fourier_features:
+    type: axis_selective
+    fourier_m: 12
+    fourier_sigma: 4.0
 ```
 
-#### 驗證結果
-
-**Channel Flow Re_τ=1000 訓練穩定性**:
-
-| 指標 | 標準 SIREN | RWF-SIREN |
-|------|-----------|-----------|
-| 收斂 epochs | 1200 | 950 |
-| 最終損失 | 0.0283 | 0.0241 |
-| 梯度穩定性（std） | 1.34e-3 | 8.67e-4 |
-| 訓練成功率 | 85% | 100% |
-
-**檢查點相容性**:
-- ✅ 舊→新: 自動轉換（V=W, s=0）
-- ❌ 新→舊: 不支援
+- **axis_selective** 可針對特定軸啟用頻率
+- `fourier_features.type=disabled` 可關閉 Fourier Features
 
 ---
 
-### 2.4 動態權重平衡
+### 2.3 VS-PINN 變數尺度化
 
-#### 原理
+VS-PINN 為剛性方程提供變數尺度化，提升數值穩定性：
 
-**GradNorm 算法**: 平衡不同損失項的梯度範數：
-
+```yaml
+physics:
+  type: vs_pinn_channel_flow
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
 ```
-minimize: Σᵢ |log(||∇L_i||) - log(target_i)|
-```
 
-**優先級管理**:
-```
-Curriculum > Staged Weights > GradNorm
-```
+**檔案位置**: `pinnx/physics/vs_pinn_channel_flow.py`
 
-#### 實現
+---
 
-**檔案位置**: `pinnx/losses/weighting.py` (1103 行)
+### 2.4 動態權重平衡（GradNorm / Causal）
 
-**核心組件**:
-
-| 組件 | 類別 | 用途 |
-|------|------|------|
-| 梯度範數平衡 | `GradNormWeighter` | 自適應損失權重 |
-| 時間因果權重 | `CausalWeighter` | 時序物理損失 |
-| 神經正切核 | `NTKWeighter` | NTK 矩陣分析 |
-| 自適應調度 | `AdaptiveWeightScheduler` | 階段式權重 |
-| 多策略管理 | `MultiWeightManager` | 策略組合 |
-
-**配置範例**:
+GradNorm 以梯度範數自動平衡多損失項：
 
 ```yaml
 losses:
-  data_weight: 100.0
-  pde_weight: 1.0
-  
-  # GradNorm 自適應權重
   adaptive_weighting: true
-  grad_norm_alpha: 0.12
-  weight_update_freq: 100
-  grad_norm_min_weight: 0.1
-  grad_norm_max_weight: 10.0
-  
-  adaptive_loss_terms:
-    - "data"
-    - "momentum_x"
-    - "momentum_y"
-    - "continuity"
+  weight_update_freq: 1000
+  grad_norm_momentum: 0.9
+  grad_norm_alpha: 1.5
+  grad_norm_normalize: true
 ```
 
-#### 驗證結果
-
-**單元測試**: 19/19 通過 (100%)
-
-**整合訓練測試** (10 epochs, K=16):
-
-| 指標 | Epoch 0 | Epoch 9 | 變化 |
-|------|---------|---------|------|
-| Total Loss | 31076.67 | 29978.03 | -3.5% |
-| Data Loss | 3107.66 | 2996.04 | -3.6% |
-| PDE Loss | 0.091 | 3.252 | +3472% (權重調整) |
-
-**收斂效率比較**:
-
-| 策略 | 平均收斂 epochs | 成功率 | 最終損失 |
-|------|----------------|--------|---------|
-| 固定權重 | 650 ± 200 | 60% | 0.456 |
-| GradNorm | 350 ± 80 | 100% | 0.033 |
-
-#### Causal Weighting（因果權重）
-
-**原理**: 基於時間因果性調整 PDE 殘差權重，強制模型優先擬合早期時間步，避免未來時間步的誤差影響過去。
-
-**理論基礎** (Wang et al. 2022):
-
-時間依賴的 PDE 問題具有天然的因果結構：過去的狀態決定未來的演化。傳統 PINNs 訓練中，所有時間點被平等對待，導致：
-1. 後期時間步的大誤差會通過梯度反傳影響早期預測
-2. 模型可能學習到違反因果性的"捷徑"解
-3. 訓練收斂緩慢且不穩定
-
-**因果權重公式**:
-```
-w_k = exp(-ε * Σ_{i<k} mean(L_i))
-```
-其中：
-- **L_i**: 第 i 個時間分塊的平均殘差
-- **ε**: 容差參數（控制權重衰減速度，典型值 1.0-2.0）
-- **w_k**: 第 k 個分塊的權重（滿足 w_0 ≥ w_1 ≥ ... ≥ w_{K-1}）
-- **k**: 時間分塊索引（從早到晚）
-
-**實現策略**:
-
-1. **時間分塊** (Chunking):
-   - 將時間域 [t_min, t_max] 均勻分成 `num_chunks` 個子區間
-   - 每個 chunk 包含大致相同數量的採樣點
-   - 典型設置: num_chunks = 10-20
-
-2. **預計算優化** (v2.0):
-   ```python
-   # 預計算因果矩陣（嚴格下三角）
-   causal_matrix = torch.tril(torch.ones((num_chunks, num_chunks)), diagonal=-1)
-   # M[i,j] = 1 if j < i else 0
-   ```
-   - 避免每次迭代重新計算矩陣乘法
-   - 移動到正確設備（CPU/CUDA/MPS）
-   - 性能提升: 從 ~150ms → ~15ms (N=20000)
-
-3. **權重計算流程**:
-   ```python
-   # 步驟 1: 按時間排序
-   t_sorted, sort_idx = torch.sort(time_coords)
-   loss_sorted = residuals[sort_idx]
-   
-   # 步驟 2: 分塊並計算 chunk 平均損失
-   loss_chunks = loss_sorted.view(num_chunks, chunk_size)
-   chunk_means = torch.mean(loss_chunks, dim=1)  # [num_chunks]
-   
-   # 步驟 3: 矩陣乘法計算累積損失
-   cumulative_loss = causal_matrix @ chunk_means  # [num_chunks]
-   
-   # 步驟 4: 指數衰減權重
-   chunk_weights = torch.exp(-epsilon * cumulative_loss)
-   
-   # 步驟 5: 映射回每個採樣點
-   weights = chunk_weights.repeat_interleave(chunk_size)
-   weights = weights[inverse_sort_idx]  # 還原原始順序
-   ```
-
-**配置範例**:
+Causal Weighting 用於時間依賴問題：
 
 ```yaml
 losses:
-  # 啟用因果權重
   causal_weighting: true
-  causal_eps: 1.5          # 容差參數（越大衰減越快）
-  causal_n_bins: 20        # 時間分塊數
-  
-data:
-  kolmogorov_config:
-    time_range: [15.0, 35.0]  # 時間域範圍（用於分塊）
+  causal_tol: 1.0
+  num_chunks: 16
 ```
-
-**與其他權重器的互動**:
-
-| 組合方式 | 行為 | 使用場景 |
-|---------|------|---------|
-| Causal + GradNorm | 點權重相乘 | 時序問題 + 多損失平衡 |
-| Causal + Curriculum | Curriculum 優先 | 分階段因果訓練 |
-| Causal + Adaptive Sampling | 獨立運作 | 高階優化策略 |
-
-**實現細節**:
-
-- **檔案位置**: 
-  - 核心實現: `pinnx/losses/weighting.py:347-512` (166 行)
-  - 工廠函數: `pinnx/train/weighter_factory.py:119-139`
-  - 單元測試: `tests/test_causal_training_stage1.py`
-  - 整合測試: `tests/test_causal_training_integration.py`
-
-- **接口設計**:
-  ```python
-  from pinnx.losses.weighting import CausalWeighter
-  
-  weighter = CausalWeighter(
-      epsilon=1.5,
-      num_chunks=20,
-      t_min=15.0,
-      t_max=35.0,
-      device='cuda'
-  )
-  
-  # 在 LossManager 中調用
-  context = {'return_pointwise': True}
-  weights = weighter.compute_weights(
-      residuals=pde_losses,    # [N, 1]
-      coords=time_coords,      # [N, 1]
-      context=context
-  )  # 返回 [N, 1] 權重張量
-  ```
-
-**驗證結果**:
-
-**單元測試**: 5/5 通過 ✅
-- ✅ 配置集成測試（參數映射正確性）
-- ✅ 性能測試（N=20000, 平均 ~15ms/iteration, < 50ms 閾值）
-- ✅ 設備切換測試（CPU ↔ CUDA ↔ MPS）
-- ✅ 自動設備匹配（輸入與矩陣設備自動對齊）
-- ✅ 因果性驗證（早期權重 > 後期權重）
-
-**因果性定量驗證** (ε=1.5, num_chunks=20):
-
-| 時間分塊 | 權重值 | 相對變化 |
-|---------|--------|---------|
-| Chunk 0 (最早) | 1.000 | - |
-| Chunk 5 | 0.823 | -17.7% |
-| Chunk 10 | 0.647 | -35.3% |
-| Chunk 15 | 0.485 | -51.5% |
-| Chunk 19 (最晚) | 0.362 | -63.8% |
-
-**收斂效率提升** (Kolmogorov Flow Re=50):
-
-| 配置 | 收斂 epochs | L2 誤差 | 訓練時間 |
-|------|------------|---------|---------|
-| Baseline (無 causal) | 1200 | 12.3% | 4.2h |
-| Causal (ε=1.0) | 950 | 11.8% | 3.6h (-14%) |
-| Causal (ε=1.5) | 850 | 10.9% | 3.2h (-24%) |
-| Causal (ε=2.0) | 880 | 11.2% | 3.4h (-19%) |
-
-**最佳實踐**:
-
-1. **參數調優**:
-   - 對於短時間範圍（T < 10）: ε = 1.0-1.5, num_chunks = 10
-   - 對於長時間範圍（T > 20）: ε = 1.5-2.0, num_chunks = 20-30
-   - 強湍流問題: 適當增大 ε（加快早期收斂）
-
-2. **診斷方法**:
-   ```python
-   # 監控 chunk 權重分布（應呈指數衰減）
-   if epoch % 100 == 0:
-       chunk_weights = weighter._last_chunk_weights  # 記錄最後一次權重
-       print(f"Chunk weights: min={chunk_weights.min():.3f}, "
-             f"max={chunk_weights.max():.3f}, "
-             f"ratio={chunk_weights.max()/chunk_weights.min():.1f}x")
-   ```
-
-3. **常見問題**:
-   - **權重過度衰減** (ratio > 100x): 減小 ε 或增加 num_chunks
-   - **權重過於均勻** (ratio < 2x): 增大 ε 或檢查時間坐標是否正確傳入
-   - **性能退化**: 確認 `causal_matrix` 已預計算且在正確設備上
-
-**相關文獻**:
-- Wang, S., et al. (2022). "Respecting Causality is all you need for training Physics-Informed Neural Networks." *arXiv:2203.07404*
 
 ---
 
-### 2.5 自適應採樣（Adaptive Collocation）
+### 2.5 Adaptive Collocation
 
-#### 原理
-
-**目的**: 根據物理殘差動態調整 PDE 碰撞點（collocation points）位置，將計算資源集中在高誤差區域，提升訓練效率與準確性。
-
-**核心思想**:
-- **初期訓練**: 使用均勻/分層採樣初始化碰撞點
-- **中期優化**: 定期評估 PDE 殘差，識別高誤差區域
-- **漸進替換**: 保留部分舊點（穩定性），替換部分新點（探索性）
-- **QR 優化**: 結合 QR-Pivot 選擇資訊量最大的新點
-
-**觸發策略**:
-- **固定間隔** (Epoch Interval): 每 N epochs 執行一次 (N=500-2000)
-- **混合策略** (Hybrid): 結合 epoch 間隔與殘差閾值觸發
-
-#### 實現
-
-**檔案位置**: `pinnx/train/adaptive_collocation.py` (639 行)
-
-**核心方法**:
-
-```python
-from pinnx.train.adaptive_collocation import AdaptiveCollocationResampler
-
-# 初始化重採樣器
-resampler = AdaptiveCollocationResampler(config)
-
-# 在訓練循環中觸發重採樣
-if resampler.should_trigger(epoch, residual_history):
-    # 評估當前碰撞點殘差
-    residuals = compute_pde_residuals(collocation_points)
-    
-    # 執行重採樣
-    new_points = resampler.resample(
-        current_points=collocation_points,
-        residuals=residuals,
-        physics_model=physics,
-        domain_bounds=domain
-    )
-    
-    # 更新訓練資料
-    collocation_points = new_points
-```
-
-**重採樣流程**:
-
-1. **槓桿分數計算** (Leverage Score):
-   ```python
-   # 計算點的重要性分數（基於 Jacobian 矩陣）
-   leverage_scores = compute_leverage_scores(residuals, jacobian)
-   
-   # 選擇低重要性點移除（保留高重要性點）
-   n_remove = int(n_points * replace_ratio)  # 預設 30%
-   remove_indices = np.argsort(leverage_scores)[:n_remove]
-   ```
-
-2. **候選點生成** (Candidate Pool):
-   ```python
-   # 生成大量候選點（2000-5000 個）
-   candidates = generate_candidate_pool(
-       domain_bounds,
-       pool_size=2000,
-       sampling_strategy='stratified'  # 分層採樣
-   )
-   
-   # 評估候選點殘差
-   candidate_residuals = compute_residuals(candidates)
-   ```
-
-3. **QR-Pivot 選擇** (Residual QR):
-   ```python
-   # 從高殘差候選點中選擇資訊量最大的點
-   high_residual_candidates = candidates[residual > threshold]
-   
-   # 構建快照矩陣（包含速度/壓力場）
-   snapshot_matrix = build_snapshot_matrix(high_residual_candidates)
-   
-   # QR 分解選點
-   new_indices = qr_pivot_select(snapshot_matrix, n_select=n_remove)
-   new_points = high_residual_candidates[new_indices]
-   ```
-
-4. **空間約束** (Spatial Constraints):
-   ```python
-   # 避免新點過於聚集（最小間距約束）
-   filtered_points = apply_min_distance_constraint(
-       new_points,
-       existing_points=keep_points,
-       min_distance=0.02  # 標準化座標系
-   )
-   ```
-
-5. **點集合併** (Merge):
-   ```python
-   # 合併保留點與新點
-   updated_points = np.vstack([keep_points, filtered_points])
-   return updated_points
-   ```
-
-#### 配置示例
-
-**檔案**: `configs/config_template_example.yml`
+依 PDE 殘差重採樣碰撞點：
 
 ```yaml
 training:
   sampling:
-    pde_points: 10000
-    adaptive_sampling: true  # 啟用自適應採樣
-    
     adaptive_collocation:
       enabled: true
-      
-      # 觸發條件
       trigger:
-        method: epoch_interval  # 或 hybrid
-        epoch_interval: 1000    # 每 1000 epochs 重採樣
-      
-      # 重採樣策略
+        method: epoch_interval
+        epoch_interval: 1000
       resampling_strategy: incremental_replace
-      incremental_replace:
-        keep_ratio: 0.7         # 保留 70% 舊點
-        replace_ratio: 0.3      # 替換 30% 新點
-        removal_criterion: leverage_score  # 基於槓桿分數移除
-      
-      # Residual QR 配置
-      residual_qr:
-        enabled: true
-        candidate_pool_size: 2000  # 候選點池大小
-        spatial_constraints:
-          min_distance: 0.02    # 最小點間距（避免聚集）
-      
-      # 歷史記錄
-      track_history: true       # 記錄重採樣歷史
-      save_snapshots: false     # 不保存快照（節省空間）
 ```
 
-#### 修復歷史
-
-**日期**: 2025-12-07  
-**問題**: 發現兩個關鍵 bug 導致自適應採樣失敗  
-
-**Bug 1 - 負步幅數組** (Line 289-291):
-```python
-# ❌ 錯誤：負步幅數組無法轉為 PyTorch tensor
-top_indices = np.argsort(leverage_scores)[-n_select:][::-1]
-
-# ✅ 修復：添加 .copy() 創建連續內存數組
-top_indices = np.argsort(leverage_scores)[-n_select:][::-1].copy()
-```
-
-**Bug 2 - 梯度追蹤錯誤** (Line 522):
-```python
-# ❌ 錯誤：requires_grad=True 的 tensor 不能直接 .numpy()
-distances = torch.cdist(new_points, existing_points).numpy()
-
-# ✅ 修復：先 detach 再轉換
-distances = torch.cdist(new_points, existing_points).detach().cpu().numpy()
-```
-
-**測試覆蓋**:
-- 完整測試套件：`tests/test_adaptive_collocation_fixes.py`
-- 所有測試通過 ✅ (5/5)
-
-**相關文檔**:
-- 詳細修復指南：`docs/ADAPTIVE_SAMPLING_BUG_FIXES.md`
-
-#### 已知限制
-
-⚠️ **當前狀態**: 所有現有配置檔案（30+）均設定 `adaptive_sampling: false`
-
-**原因**:
-1. 需要額外計算開銷（候選點評估 + QR 分解）
-2. 超參數敏感（keep_ratio, min_distance 需調優）
-3. 缺乏性能對比實驗數據
-
-**建議使用場景**:
-- ✅ 長期訓練（≥5000 epochs）
-- ✅ 複雜幾何/邊界條件
-- ✅ 高梯度區域（激波、邊界層）
-- ❌ 快速測試（<1000 epochs）
-- ❌ 均勻流場（低複雜度）
-
-#### 未來工作
-
-1. **性能對比實驗** (優先級: 高)
-   - 對比 adaptive vs. fixed sampling 的收斂速度
-   - 測量計算開銷（時間/內存）
-   - 最佳觸發間隔研究（500 vs. 1000 vs. 2000 epochs）
-
-2. **可視化工具** (優先級: 中)
-   - 重採樣歷史視覺化（點的移動軌跡）
-   - 殘差熱圖隨時間演化
-   - 槓桿分數分佈圖
-
-3. **超參數自動調優** (優先級: 低)
-   - 基於驗證誤差動態調整 keep_ratio
-   - 自適應 min_distance（根據域大小）
+**檔案位置**: `pinnx/train/adaptive_collocation.py`
 
 ---
 
-### 2.6 資料標準化模組
+### 2.6 低保真先驗（Low-Fi Prior）
 
-#### 原理
+支援 RANS/低保真資料作為軟約束：
 
-**目的**: 將訓練資料與模型輸出標準化至相近數值範圍，提升訓練穩定性與收斂速度。
-
-**Z-Score 標準化公式**:
-```
-x_norm = (x - μ) / σ
-
-其中:
-  μ = mean(x)      # 訓練資料均值
-  σ = std(x)       # 訓練資料標準差
-```
-
-**反標準化公式**:
-```
-x = x_norm × σ + μ
-```
-
-#### 設計架構
-
-**檔案位置**: `pinnx/utils/normalization.py` (836 行)
-
-**核心組件**:
-
-| 組件 | 類別 | 功能 |
-|------|------|------|
-| 輸入標準化 | `InputTransform` | 標準化空間坐標 (x, y, z) |
-| 輸出標準化 | `OutputTransform` | 標準化物理變量 (u, v, w, p) |
-| 統一管理器 | `UnifiedNormalizer` | 管理輸入與輸出標準化 |
-| 配置類 | `InputNormConfig`, `OutputNormConfig` | 標準化配置 |
-
-**標準化類型支援**:
-
-| 類型 | 說明 | 使用時機 |
-|------|------|---------|
-| `none` | 不處理 | 已手動預處理資料 |
-| `training_data_norm` | Z-Score 標準化（推薦）| 從訓練資料自動計算統計量 |
-| `friction_velocity` | 摩擦速度縮放 | 壁面湍流專用 |
-| `manual` | 手動指定均值/標準差 | 已知統計量時 |
-
-#### 實現細節
-
-##### 1. 從訓練資料自動計算統計量
-
-**關鍵函數**: `OutputTransform.from_data()` (Line 245-304)
-
-```python
-from pinnx.utils.normalization import OutputTransform
-
-# 訓練資料字典
-training_data = {
-    'u': u_sensors,  # [N, 1] 或 [N,]
-    'v': v_sensors,
-    'p': p_sensors
-}
-
-# 自動計算統計量並創建標準化器
-output_transform = OutputTransform.from_data(
-    data=training_data,
-    norm_type='training_data_norm',
-    variable_order=['u', 'v', 'p']  # 定義變量順序
-)
-```
-
-**統計量計算邏輯**:
-```python
-# 針對每個變量
-for var_name in ['u', 'v', 'w', 'p']:
-    values = training_data[var_name]
-    
-    # ⚠️ 防禦性檢查：跳過空張量（防止 NaN）
-    if values.size == 0:
-        logger.info(f"⏭️  {var_name} 為空張量，跳過標準化統計量計算")
-        continue
-    
-    mean = float(np.mean(values))
-    std = float(np.std(values))
-    
-    # 🛡️ 拒絕 NaN 或 Inf
-    if not np.isfinite(mean) or not np.isfinite(std):
-        logger.warning(f"⚠️  {var_name} 的統計量包含 NaN/Inf，跳過")
-        continue
-    
-    # 🛡️ 處理零標準差（常數場）
-    if abs(std) < 1e-10:
-        logger.warning(f"⚠️  {var_name} 的標準差接近零，設為 1.0")
-        std = 1.0
-    
-    means[var_name] = mean
-    stds[var_name] = std
-```
-
-##### 2. 批次標準化與反標準化
-
-**正向標準化** (用於訓練時比較真實資料):
-```python
-# 模型預測輸出（物理空間）
-predictions = model(coords)  # [N, 3] → (u, v, p)
-
-# 標準化至 Z-Score 空間
-predictions_norm = output_transform.normalize_batch(
-    predictions,
-    var_order=['u', 'v', 'p']
-)
-
-# 與標準化後的真實資料比較
-loss = mse_loss(predictions_norm, targets_norm)
-```
-
-**反向反標準化** (用於將模型輸出轉回物理量):
-```python
-# 模型輸出（標準化空間）
-outputs_norm = model(coords)  # [N, 3]
-
-# 反標準化至物理空間
-outputs_phys = output_transform.denormalize_batch(
-    outputs_norm,
-    var_order=['u', 'v', 'p']
-)
-
-# 現在可以計算物理約束（如壁面速度 = 0）
-wall_loss = torch.mean(outputs_phys[wall_mask, 0]**2)  # u_wall = 0
-```
-
-##### 3. 檢查點保存與載入
-
-**保存標準化元數據** (`pinnx/train/trainer.py` Line 564-567):
-```python
-checkpoint_data = {
-    'epoch': epoch,
-    'model_state_dict': model.state_dict(),
-    'optimizer_state_dict': optimizer.state_dict(),
-    'normalization': data_normalizer.get_metadata(),  # ⭐ 保存標準化統計量
-    'history': history,
-    'config': config
-}
-torch.save(checkpoint_data, checkpoint_path)
-```
-
-**元數據格式**:
-```python
-{
-    'norm_type': 'training_data_norm',
-    'variable_order': ['u', 'v', 'p'],  # 排除空變量（如 2D 時的 w）
-    'means': {
-        'u': 0.885428,
-        'v': -0.014999,
-        'p': 0.001870
-    },
-    'stds': {
-        'u': 0.307123,
-        'v': 0.050832,
-        'p': 0.006513
-    },
-    'params': {'source': 'auto_computed_from_data'}
-}
-```
-
-**從檢查點恢復標準化器**:
-```python
-import torch
-from pinnx.utils.normalization import OutputTransform, OutputNormConfig
-
-# 載入檢查點
-checkpoint = torch.load('checkpoints/experiment/epoch_100.pth')
-
-# 從元數據重建配置
-metadata = checkpoint['normalization']
-config = OutputNormConfig(
-    norm_type=metadata['norm_type'],
-    variable_order=metadata['variable_order'],
-    means=metadata['means'],
-    stds=metadata['stds'],
-    params=metadata.get('params', {})
-)
-
-# 創建標準化器
-normalizer = OutputTransform(config)
-
-# 使用標準化器處理新資料
-normalized_output = normalizer.normalize_batch(predictions, var_order=['u', 'v', 'p'])
-```
-
-#### 配置範例
-
-**YAML 配置** (`configs/templates/2d_quick_baseline.yml`):
 ```yaml
-normalization:
-  type: training_data_norm       # 自動從訓練資料計算統計量
-  variable_order: ['u', 'v', 'p'] # 變量順序（可選，會自動推斷）
-  
-  # 手動模式（不推薦，僅用於已知統計量）
-  # type: manual
-  # params:
-  #   u_mean: 0.885
-  #   u_std: 0.307
-  #   v_mean: -0.015
-  #   v_std: 0.051
-  #   p_mean: 0.002
-  #   p_std: 0.007
+lowfi_prior:
+  enabled: true
+  data_path: ./data/lowfi/channel_rans/rans_k_omega_sst.npz
+  data_type: rans
+  consistency_weight: 0.3
 ```
 
-#### 關鍵設計決策
-
-##### 1. 空張量防護機制
-
-**問題背景**: Phase 5 標準 PINN (2D) 訓練時，`w` 變量為空張量 `[0, 1]`，導致 `np.mean([]) = NaN`，進而造成所有損失變為 NaN。
-
-**解決方案**: 在統計量計算時加入三重防護（Line 383-385, 266-269, 677-686）:
-
-```python
-# 防護 1: 檢測空張量
-if values.size == 0:
-    logger.info(f"⏭️  {var_name} 為空張量，跳過標準化統計量計算")
-    continue
-
-# 防護 2: 驗證有效性
-if not np.isfinite(mean) or not np.isfinite(std):
-    logger.warning(f"⚠️  {var_name} 的統計量包含 NaN/Inf (mean={mean}, std={std})，跳過")
-    continue
-
-# 防護 3: 變量順序過濾（自動排除空變量）
-valid_vars = []
-for var_name in training_data.keys():
-    if var_name in OutputTransform.DEFAULT_VAR_ORDER:
-        val = training_data[var_name]
-        if isinstance(val, torch.Tensor) and val.numel() == 0:
-            continue  # 跳過空張量
-        valid_vars.append(var_name)
-
-variable_order = valid_vars  # ['u', 'v', 'p']，不包含空的 'w'
-```
-
-**驗證結果**:
-- ✅ Phase 5 測試通過 10 epochs 訓練，無 NaN 損失
-- ✅ 檢查點元數據僅包含有效變量 `['u', 'v', 'p']`
-- ✅ 標準化循環重建誤差 < 1e-9
-
-##### 2. 變量順序單一來源原則
-
-**設計原則**: `variable_order` 在整個系統中僅定義一次，避免不一致。
-
-**優先級規則**:
-1. **配置檔案明確指定** → 使用配置值
-2. **訓練資料自動推斷** → 從有效變量推斷
-3. **預設順序** → `['u', 'v', 'w', 'p', 'S']`
-
-```python
-# 優先級 1: 配置檔案
-variable_order = config.get('normalization', {}).get('variable_order')
-
-# 優先級 2: 從訓練資料推斷（過濾空張量）
-if variable_order is None and training_data is not None:
-    variable_order = [
-        k for k in training_data.keys()
-        if k in OutputTransform.DEFAULT_VAR_ORDER
-        and training_data[k].numel() > 0  # 排除空張量
-    ]
-
-# 優先級 3: 預設值
-if variable_order is None:
-    variable_order = OutputTransform.DEFAULT_VAR_ORDER.copy()
-```
-
-#### 驗證結果
-
-**單元測試**: `tests/test_normalization_zscore.py` (100% 通過)
-
-**整合測試**: Phase 5 標準 PINN (10 epochs, K=50)
-
-| 指標 | 數值 | 狀態 |
-|------|------|------|
-| 訓練完成 | 10/10 epochs | ✅ |
-| NaN 損失 | 0 次 | ✅ |
-| 最終損失 | 8.467 | ✅ |
-| 檢查點元數據完整性 | 100% | ✅ |
-| 標準化循環誤差 | 9.31e-10 | ✅ |
-
-**2D vs 3D 相容性測試**:
-
-| 模式 | 輸入維度 | 輸出變量 | 變量順序 | 狀態 |
-|------|---------|---------|---------|------|
-| 2D 標準 PINN | (x, y) | (u, v, p) | `['u', 'v', 'p']` | ✅ |
-| 3D 標準 PINN | (x, y, z) | (u, v, w, p) | `['u', 'v', 'w', 'p']` | ✅ |
-| 2D VS-PINN | (x, y) | (u, v, w, p) | `['u', 'v', 'w', 'p']` | ✅ |
-
-**效能分析**:
-- 統計量計算開銷: < 0.1s (K=1024)
-- 批次標準化開銷: 0.02ms/batch (batch_size=512)
-- 檢查點載入開銷: < 0.05s
-
-#### 使用注意事項
-
-⚠️ **重要提醒**:
-
-1. **變量順序一致性**: 
-   - 標準化與反標準化時必須使用相同的 `var_order`
-   - 建議在配置中明確指定，避免自動推斷不一致
-
-2. **空張量處理**:
-   - 2D 問題中 `w` 可能為空張量，系統會自動跳過
-   - 檢查日誌確認變量順序: `"⏭️  w 為空張量，跳過標準化統計量計算"`
-
-3. **檢查點相容性**:
-   - ✅ 向前相容: 舊檢查點可正常載入（若缺少元數據則使用配置）
-   - ✅ 跨模式相容: 2D/3D 檢查點可互相載入（根據 `variable_order` 自適應）
-
-4. **統計量來源**:
-   - 推薦使用 `training_data_norm`（自動計算）
-   - 避免使用 `manual` 模式，除非有明確物理依據
-
-5. **標準差接近零**:
-   - 若某變量為常數場（如固定壓力），系統自動設定 `std = 1.0`
-   - 日誌會警告: `"⚠️  p 的標準差接近零，設為 1.0"`
-
-#### 完整使用流程
-
-```python
-# ========== 1. 訓練時自動計算統計量 ==========
-from pinnx.utils.normalization import UnifiedNormalizer
-
-# 從配置與訓練資料創建統一標準化器
-normalizer = UnifiedNormalizer.from_config(
-    config=training_config,
-    training_data=training_data_sample,  # {'u': [...], 'v': [...], 'p': [...]}
-    device='cuda'
-)
-
-# ========== 2. 訓練循環中使用 ==========
-# 模型輸出（標準化空間）
-outputs_norm = model(coords)
-
-# 反標準化至物理空間（用於物理約束計算）
-outputs_phys = normalizer.denormalize_batch(
-    outputs_norm,
-    var_order=['u', 'v', 'p']
-)
-
-# 計算物理約束損失（必須在物理空間）
-wall_loss = torch.mean(outputs_phys[wall_mask, 0:2]**2)  # u_wall = v_wall = 0
-
-# 資料損失（在標準化空間比較）
-data_loss = mse_loss(outputs_norm, targets_norm)
-
-# ========== 3. 保存檢查點 ==========
-checkpoint = {
-    'epoch': epoch,
-    'model_state_dict': model.state_dict(),
-    'optimizer_state_dict': optimizer.state_dict(),
-    'normalization': normalizer.get_metadata(),  # ⭐ 保存統計量
-    'config': config
-}
-torch.save(checkpoint, 'checkpoint.pth')
-
-# ========== 4. 從檢查點恢復（推論或繼續訓練） ==========
-checkpoint = torch.load('checkpoint.pth')
-
-# 方法 A: 從元數據恢復（推薦）
-from pinnx.utils.normalization import OutputTransform, OutputNormConfig
-
-config = OutputNormConfig(**checkpoint['normalization'])
-normalizer = OutputTransform(config)
-
-# 方法 B: 使用 Trainer 自動恢復（訓練時）
-trainer = Trainer(model, physics, losses, config, device)
-trainer.load_checkpoint('checkpoint.pth')  # 自動恢復 normalizer
-
-# ========== 5. 推論時使用 ==========
-model.eval()
-with torch.no_grad():
-    outputs_norm = model(test_coords)
-    outputs_phys = normalizer.denormalize_batch(outputs_norm, var_order=['u', 'v', 'p'])
-    
-    # outputs_phys 現在是物理量，可直接與 JHTDB 資料比較
-    u_pred, v_pred, p_pred = outputs_phys[:, 0], outputs_phys[:, 1], outputs_phys[:, 2]
-```
+並支援空間權重（如壁面加權）與插值品質檢查。
 
 ---
 
-### 2.7 物理約束機制
+### 2.7 訓練器架構（TrainerBuilder）
 
-#### 實現層級
+訓練流程透過 **TrainerBuilder** 組件化構建：
 
-**第一層: 網路輸出約束**
-```python
-k = F.softplus(k_raw)    # 確保 k ≥ 0
-ε = F.softplus(ε_raw)    # 確保 ε ≥ 0
-```
+- `TrainerComponents`：封裝 model/physics/optimizer/scheduler 等組件
+- `CheckpointManager`：統一 checkpoint 存取策略
+- `ValidationManager`：策略式驗證（Data/Physics）
 
-**第二層: 損失函數約束**
-```python
-L_continuity = ||∂u/∂x + ∂v/∂y||²
-L_boundary = ||u_wall - 0||² + ||v_wall - 0||²
-```
-
-**第三層: 後處理驗證**
-```python
-violations = {
-    'k_negative': sum(k < 0),
-    'eps_negative': sum(ε < 0),
-    'continuity': sum(|∇·u| > 1e-3)
-}
-```
-
-#### 驗證結果
-
-**500 Epochs 穩定性分析**:
-
-| 約束 | 合規率 | 違反點數 |
-|------|--------|---------|
-| k ≥ 0 | 100.0% | 0/125000 |
-| ε ≥ 0 | 100.0% | 0/125000 |
-| \|∇·u\| < 1e-3 | 99.97% | 37/125000 |
-
-**計算開銷**: 約束檢查佔總訓練時間 4.9%
+入口：`pinnx/train/trainer_builder.py`
 
 ---
 
 ## 3. 系統架構
 
-### 3.1 檔案結構
+### 3.1 檔案結構（核心路徑）
 
 ```
-pinns-mvp/
-├── pinnx/                      # 核心框架
-│   ├── sensors/                # 感測器選擇
-│   │   └── qr_pivot.py
-│   ├── models/                 # 模型架構
-│   │   ├── fourier_mlp.py     # RWF + SIREN
-│   │   └── wrappers.py        # VS-PINN 包裝器
-│   ├── losses/                 # 損失函數
-│   │   └── weighting.py       # 動態權重 (1103 行)
-│   ├── physics/                # 物理模組
-│   │   ├── scaling.py         # VS-PINN 尺度化
-│   │   └── ns_2d.py           # NS 方程
-│   ├── train/                  # 訓練管理
-│   │   ├── trainer.py         # 核心訓練器 (815 行)
-│   │   ├── factory.py         # 模型工廠
-│   │   └── loop.py            # 訓練循環
-│   └── evals/                  # 評估工具
-│       └── metrics.py
-├── scripts/                    # 可執行腳本
-│   ├── train.py               # 主訓練腳本 (1232 行)
-│   ├── evaluate.py            # 評估腳本
-│   └── debug/                 # 診斷工具 (15 個)
-├── configs/                    # 配置檔案 (30+)
-│   └── templates/             # 標準化模板 (4 個)
-└── tests/                      # 單元測試 (30+)
+pinns-sparse-flow/
+├── pinnx/
+│   ├── models/                # Fourier-VS MLP, ResNet/PirateNet
+│   ├── physics/               # VS-PINN, Kolmogorov 2D, NS 2D
+│   ├── sensors/               # QR-Pivot / Hybrid / POD
+│   ├── losses/                # GradNorm / Causal / Priors
+│   ├── train/                 # TrainerBuilder / Trainer / Managers
+│   ├── evals/                 # 指標與視覺化
+│   └── optim/                 # SOAP optimizer
+├── scripts/
+│   ├── train/train.py          # 主訓練入口
+│   ├── train_time_window.py    # Time Window 訓練
+│   ├── evaluate/               # 評估腳本
+│   └── tools/                  # validate_config / add_output_variables
+├── configs/                    # 實驗配置與模板
+└── tests/                      # 單元測試
 ```
 
-### 3.2 訓練流程
+### 3.2 訓練流程（實際路徑）
 
 ```
-1. 配置載入 (train.py)
-   ↓
-2. 資料準備
-   - JHTDB 資料獲取
-   - QR-Pivot 感測器選擇
-   - 資料標準化
-   ↓
-3. 模型初始化
-   - 創建 PINNNet (Fourier-VS MLP, RWF + SIREN)
-   - 包裝 VS-PINN 尺度化
-   - 應用物理約束
-   ↓
-4. 訓練器設定
-   - 創建 Trainer 實例
-   - 初始化 GradNorm Weighter
-   - 配置優化器 (Adam/L-BFGS)
-   ↓
-5. 訓練循環 (trainer.py)
-   - 前向傳播
-   - 計算損失 (data + PDE + BC)
-   - 更新權重 (每 N 步)
-   - 反向傳播
-   - 檢查點保存
-   ↓
-6. 評估
-   - 相對 L2 誤差
-   - 物理約束驗證
-   - 不確定性量化
-```
-
-### 3.3 整合點
-
-**訓練器整合邏輯** (`trainer.py` Line 735-793):
-
-```python
-def step(self, batch_data):
-    # 前向傳播與損失計算
-    losses = self.compute_losses(batch_data)
-    
-    # GradNorm 權重更新
-    gradnorm_weighter = self.weighters.get('gradnorm')
-    if gradnorm_weighter is not None:
-        available_losses = {
-            name: losses[name]
-            for name in gradnorm_weighter.loss_names
-            if name in losses
-        }
-        if len(available_losses) >= 2:
-            if self.step_count % gradnorm_weighter.update_frequency == 0:
-                updated_weights = gradnorm_weighter.update_weights(available_losses)
-                # 應用權重比例
-                for name, ratio in updated_weights.items():
-                    self.loss_weights[name] *= ratio
-    
-    # 反向傳播與參數更新
-    total_loss.backward()
-    self.optimizer.step()
-```
-
-**優先級管理** (`train.py` Line 398-490):
-
-```python
-def create_weighters(config, model, device):
-    weighters = {}
-    
-    # 優先級 1: Curriculum (最高)
-    if config['training']['curriculum']['enable']:
-        weighters['curriculum'] = CurriculumScheduler(...)
-        return weighters  # 禁用其他調度器
-    
-    # 優先級 2: Staged Weights
-    if config['losses']['staged_weights']['enable']:
-        weighters['staged'] = StagedWeightScheduler(...)
-    
-    # 優先級 3: GradNorm (與 Staged 互斥)
-    elif config['losses']['adaptive_weighting']:
-        weighters['gradnorm'] = GradNormWeighter(...)
-    
-    return weighters
+1. Config validation
+   - validate_config_keys.py
+   - validate_config.py
+2. Data preparation
+   - DNS / JHTDB / lowfi_prior
+   - Sensor selection
+3. Model + Physics creation
+   - Registry factories
+4. TrainerBuilder
+   - CheckpointManager + ValidationManager
+5. Training loop
+   - loss → weight → backward → optimizer
+6. Evaluation
+   - relative L2, mass conservation, wall shear
 ```
 
 ---
 
-## 4. 驗證結果
+## 4. 驗證與指標
 
-### 4.1 測試覆蓋率
+### 4.1 驗證層級
 
-| 測試類別 | 通過/總數 | 覆蓋率 | 狀態 |
-|---------|----------|--------|------|
-| 總測試 | 373/467 | 79.9% | ⚠️ (72 失敗, 22 跳過) |
-| 測試檔案 | 45 個 | - | ✅ |
-| 物理驗證 | 部分通過 | - | ⚠️ (需修復核心失敗) |
+- **P0**: Import/單元測試（`tests/`）
+- **P1**: 物理正確性（守恆、邊界條件）
+- **P2**: 端到端訓練與視覺化
 
-### 4.2 實驗結果
+### 4.2 常用指標
 
-**Task-014 課程學習** (2025-10-06):
+- 相對 L2
+- 質量守恆誤差
+- 壁面剪應力 / 速度剖面
+- 能譜 / 壓力梯度（依實驗）
 
-| 變數 | 相對誤差 | 基線誤差 | 改善 |
-|------|---------|---------|------|
-| u-velocity | 5.7% | 63.2% | 91.0% ↓ |
-| v-velocity | 33.2% | 214.6% | 84.5% ↓ |
-| w-velocity | 56.7% | 91.1% | 37.8% ↓ |
-| pressure | 12.6% | 93.2% | 86.5% ↓ |
-| **平均** | **27.1%** | **115.5%** | **88.4% ↓** |
+### 4.3 評估入口
 
-**實驗設定**:
-- 感測點: K=1024
-- 重建網格: 65,536 點
-- 訓練輪數: ~800 epochs
-- 配置檔: `configs/channel_flow_curriculum_4stage_final_fix_2k.yml`
-
-> ⚠️ **限制**: 
-> - v/w 方向誤差仍偏高（>30%）
-> - 需要大量感測點（K=1024）
-> - 訓練時間長（~800 epochs）
-> - 結果對超參數敏感
-
-### 4.3 K-掃描實驗
-
-**最小可行點數分析** (基於 118 實驗):
-
-| K 值 | 相對 L2 誤差 | 成功率 | 備註 |
-|------|-------------|--------|------|
-| K=2 | 12.3 ± 4.2% | 60% | 不穩定 |
-| K=4 | 2.7 ± 0.4% | 100% | 最小可行點數 |
-| K=8 | 1.4 ± 0.2% | 100% | 推薦基線 |
-| K=16 | 0.9 ± 0.1% | 100% | 良好性能 |
+```bash
+python scripts/evaluate/evaluate_checkpoint.py \
+  --checkpoint checkpoints/<exp>/best_model.pth \
+  --config configs/<exp>.yml
+```
 
 ---
 
@@ -1238,195 +270,37 @@ def create_weighters(config, model, device):
 ### 5.1 快速開始
 
 ```bash
-# 1. 安裝依賴
+# 1. 環境設置
 conda env create -f environment.yml
-conda activate pinns-mvp
+conda activate pinns-sparse-flow
 
-# 2. 配置 JHTDB 認證
-cp .env.example .env
-# 編輯 .env，填入 JHTDB_AUTH_TOKEN
+# 2. 配置驗證（必跑）
+python scripts/tools/validate_config_keys.py configs/kolmogorov_re50_kf4_K100.yml
+python scripts/tools/validate_config.py --config configs/kolmogorov_re50_kf4_K100.yml
 
-# 3. 使用標準化模板
-cp configs/templates/2d_quick_baseline.yml configs/my_experiment.yml
-
-# 4. 執行訓練
-python scripts/train/train.py --cfg configs/my_experiment.yml
-
-# 5. 監控進度
-tail -f log/my_experiment/training.log
+# 3. 訓練
+python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 ```
 
-### 5.2 配置模板
+### 5.2 Time Window 訓練
 
-| 模板 | 用途 | 訓練時間 | K 點數 | Epochs |
-|------|------|---------|--------|--------|
-| `2d_quick_baseline.yml` | 快速驗證 | 5-10 min | 50 | 100 |
-| `2d_medium_ablation.yml` | 消融研究 | 15-30 min | 100 | 1000 |
-| `3d_slab_curriculum.yml` | 課程學習 | 30-60 min | 100 | 1000 |
-| `3d_full_production.yml` | 論文級結果 | 2-8 hrs | 500 | 5000 |
-
-### 5.3 參數調優建議
-
-**GradNorm 參數**:
-
-| 參數 | 推薦範圍 | 預設值 | 說明 |
-|------|---------|--------|------|
-| `grad_norm_alpha` | 0.10-0.20 | 0.12 | 平衡速度（越小越保守）|
-| `weight_update_freq` | 50-200 | 100 | 更新頻率 |
-| `grad_norm_min_weight` | 0.01-0.5 | 0.1 | 下界約束 |
-| `grad_norm_max_weight` | 5.0-20.0 | 10.0 | 上界約束 |
-
-**RWF 參數**:
-
-| 參數 | 推薦範圍 | 預設值 | 說明 |
-|------|---------|--------|------|
-| `sine_omega_0` | 1.0-30.0 | 30.0 | SIREN 頻率（與 Fourier 共用時降至 1.0）|
-| `rwf_scale_std` | 0.05-0.2 | 0.1 | 尺度標準差（當前未使用）|
-
-### 5.4 故障排除
-
-| 問題 | 可能原因 | 解決方案 |
-|------|---------|---------|
-| 權重全為 NaN | 梯度計算異常 | 檢查模型初始化、損失可微性 |
-| 權重不更新 | 更新頻率設置錯誤 | 檢查 `update_frequency` 配置 |
-| 訓練發散 | `alpha` 過大 | 降低至 0.08，縮小 `max_weight` |
-| 物理損失被壓制 | `min_weight` 過小 | 提高至 0.5 |
-| PDE 損失爆炸 | 量級失衡 | 啟用 VS-PINN，調整初始權重 |
+```bash
+python scripts/train_time_window.py --cfg configs/experiments/time_window_kolmogorov.yml
+```
 
 ---
 
 ## 6. 已知限制
 
-### 6.1 技術限制
-
-1. **感測點需求**: 
-   - 目前最佳結果需要 K=1024 點
-   - K<16 時穩定性下降
-   - 遠高於理論最小點數（K=4）
-
-2. **收斂效率**:
-   - 需要 800+ epochs 達到良好結果
-   - 對超參數敏感（學習率、權重初始化）
-   - Curriculum 策略需手動調整
-
-3. **物理一致性**:
-   - v/w 方向誤差偏高（>30%）
-   - 邊界條件處理尚不完善
-   - 長時間積分可能發散
-
-4. **可擴展性**:
-   - 3D 完整域計算記憶體需求高
-   - 高 Re 數（>5000）穩定性下降
-   - 未充分測試多 Re 數泛化
-
-### 6.2 實驗限制
-
-1. **資料依賴**:
-   - 僅在 JHTDB Channel Flow 上充分驗證
-   - 其他幾何/流場類型需重新調參
-   - RANS 低保真先驗效果不穩定
-
-2. **重現性挑戰**:
-   - Task-014 結果基於長期迭代
-   - ⚠️ **配置歸檔**: 原始 4 階段課程配置已不在當前版本
-   - ⚠️ **檢查點缺失**: 預訓練模型未公開保存（訓練成本 ~8 小時）
-   - ✅ **替代方案**: 使用 `configs/templates/3d_slab_curriculum.yml` 作為起點
-   - ✅ **優化策略**: 參考第 2-3 節技術模組文檔進行調優
-   - 硬體環境影響訓練穩定性
-
-3. **不確定性量化**:
-   - Ensemble 計算成本高（5-10× 訓練時間）
-   - UQ 指標僅部分驗證
-   - 認知/偶然不確定性分解需改進
-
-### 6.3 工程限制
-
-1. **計算資源**:
-   - 建議配置: RTX 4080 (16GB)
-   - 最小配置: RTX 3060 (12GB)
-   - CPU 訓練不實用（慢 50-100×）
-
-2. **儲存需求**:
-   - 完整訓練記錄: ~5GB
-   - 檢查點檔案: ~500MB/epoch
-   - JHTDB 資料快取: ~10GB
-
-3. **軟體依賴**:
-   - PyTorch ≥ 2.0
-   - CUDA ≥ 11.8
-   - Python 3.9-3.11
+1. **3D 訓練記憶體壓力高**：需調整 `pde_points` 與 batch size
+2. **梯度檢查點**：高階導數下可能觸發不穩定，預設關閉
+3. **Sensor 品質敏感**：感測資料異常時會觸發 Fail Fast
+4. **JHTDB 依賴**：需有效 token + 穩定網路
 
 ---
 
 ## 7. 參考文獻
 
-### 7.1 理論基礎
-
-1. **PINNs**: Raissi et al., "Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations", *Journal of Computational Physics*, 2019.
-
-2. **GradNorm**: Chen et al., "GradNorm: Gradient normalization for adaptive loss balancing in deep multitask networks", *ICML*, 2018.
-
-3. **QR-Pivot**: Drmač & Gugercin, "A new selection operator for the discrete empirical interpolation method", *SIAM Journal on Scientific Computing*, 2016.
-
-### 7.2 資料來源
-
-4. **JHTDB**: Johns Hopkins Turbulence Databases, http://turbulence.pha.jhu.edu/
-   - Channel Flow Dataset: Re_τ=1000
-   - 引用要求: 遵循官方引用準則
-
-### 7.3 相關工作
-
-5. **VS-PINN**: Stiasny et al., "Physics-informed neural networks for non-linear system identification for power system dynamics", *IEEE PES General Meeting*, 2021.
-
-6. **Sensor Placement**: Manohar et al., "Data-driven sparse sensor placement for reconstruction: Demonstrating the benefits of exploiting known patterns", *IEEE Control Systems Magazine*, 2018.
-
----
-
-## 附錄
-
-### A. 模組對照表
-
-| 功能 | 檔案路徑 | 關鍵類別/函數 |
-|------|---------|--------------|
-| QR-Pivot | `pinnx/sensors/qr_pivot.py` | `QRPivotSelector` |
-| VS-PINN | `pinnx/physics/scaling.py` | `VSScaler` |
-| RWF | `pinnx/models/fourier_mlp.py` | `RWFLinear` |
-| GradNorm | `pinnx/losses/weighting.py` | `GradNormWeighter` |
-| 訓練器 | `pinnx/train/trainer.py` | `Trainer` |
-| 主腳本 | `scripts/train/train.py` | `main()` |
-
-### B. 配置檔案位置
-
-- 模板: `configs/templates/*.yml`
-- 完整配置: `configs/*.yml` (30+)
-- 文檔: `configs/README.md`
-
-### C. 測試執行
-
-```bash
-# 單元測試
-pytest tests/test_losses.py -v          # 19/19 通過
-pytest tests/test_models.py -v          # 模型架構測試
-pytest tests/test_physics.py -v         # 物理方程測試
-
-# 整合測試
-pytest tests/test_sensors_integration.py -v
-pytest tests/test_rans_integration.py -v
-
-# 物理驗證
-python scripts/validation/physics_validation.py
-```
-
-### D. 聯絡資訊
-
-- GitHub Issues: 技術問題與 Bug 回報
-- 技術文檔: `docs/TECHNICAL_DOCUMENTATION.md`（本文檔）
-- 開發指引: `AGENTS.md`
-
----
-
-**文檔維護者**: AI Assistant  
-**最後更新**: 2025-10-16  
-**版本歷史**:
-- v2.0 (2025-10-16): 全面改寫，移除樂觀語氣，增加已知限制章節
-- v1.0 (2025-10-03): 初始版本
+- Raissi et al., Physics-Informed Neural Networks (2019)
+- Wang et al., Causality for PINNs (2022)
+- JHTDB (Johns Hopkins Turbulence DB)

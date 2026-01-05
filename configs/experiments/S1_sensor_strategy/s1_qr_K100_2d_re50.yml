@@ -63,7 +63,7 @@ sensors:
     condition_number: 52900.0
     method: qr_pivot_rans
 model:
-  type: standard_mlp
+  type: fourier_vs_mlp
   in_dim: 3
   out_dim: 3
   width: 256
