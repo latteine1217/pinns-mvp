@@ -21,7 +21,7 @@ data:
   dataset: re50_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    data_path: ./data/kolmogorov_dns_npy/re50
     description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
     resolution:
       x: 256
@@ -70,7 +70,7 @@ model:
   width: 256
   depth: 6
   activation: tanh
-  block_type: standard
+  block_type: dense
   fourier_features:
     type: disabled
   initialization:

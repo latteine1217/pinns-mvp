@@ -22,7 +22,7 @@ PINNx: Physics-Informed Neural Networks for Inverse Problems
 """
 
 # 版本資訊
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "PINNx Team"
 __email__ = "contact@pinnx-inverse.org"
 __description__ = "Physics-Informed Neural Networks for Sparse-Data Inverse Problems"

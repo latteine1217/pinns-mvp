@@ -1,70 +1,59 @@
-# ===================================================================
-# 測試配置：Causal Weighting V2 (JAX-PI Aligned)
-# ===================================================================
-# 
-# 此配置用於測試新的分量級因果權重器 (CausalWeighterPerComponent)
-# 對齊 JAX-PI 實現：
-# - 對每個分量 (ru, rv, rc) 獨立計算因果權重
-# - 取所有分量的最小值（最保守策略）
-# - gamma = min(ru_gamma, rv_gamma, rc_gamma)
-# ===================================================================
-
-# ===== 數據配置 =====
 data:
   source: kolmogorov
   dataset: kolmogorov_flow_2d
-  
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov/dns_Re10000_test.h5
+    data_path: ./data/kolmogorov_dns_npy/re50
     resolution: 64
     Re: 10000
-    time_range: [0.0, 10.0]  # 較短時間範圍用於測試
+    time_range:
+    - 0.0
+    - 10.0
     dt: 0.5
     domain:
-      x: [0.0, 6.283185307179586]  # 2π
-      y: [0.0, 6.283185307179586]
-    variables: [u, v, p]
-    
+      x:
+      - 0.0
+      - 6.283185307179586
+      y:
+      - 0.0
+      - 6.283185307179586
+    variables:
+    - u
+    - v
+    - p
   normalize: true
   cache_dir: ./data/kolmogorov/Re10000
-
-# ===== 標準化配置 =====
 normalization:
   type: standard
   params:
-    epsilon: 1.0e-8
-
-# ===== 感測器配置 =====
+    epsilon: 1.0e-08
 sensors:
-  K: 50  # 較少感測點用於快速測試
+  K: 50
   sensor_file: ./data/sensors/random_K50_test.json
   selection_method: random
   spatial_coverage: uniform
-
-# ===== 模型配置 =====
 model:
   type: fourier_vs_mlp
-  in_dim: 3  # (x, y, t)
-  out_dim: 3  # (u, v, p)
-  output_variables: [u, v, p]
-  width: 128  # 較小網路用於快速測試
+  in_dim: 3
+  out_dim: 3
+  output_variables:
+  - u
+  - v
+  - p
+  width: 128
   depth: 3
   activation: tanh
   use_residual: false
   use_layer_norm: false
-  
   fourier_features:
     type: standard
     fourier_m: 64
     fourier_sigma: 2.0
     trainable_fourier: false
     fourier_use_2pi: true
-
-# ===== 物理配置 =====
 physics:
   type: kolmogorov_flow_2d
-  nu: 0.0001  # Re = 10000
+  nu: 0.0001
   rho: 1.0
   forcing:
     amplitude: 2.0
@@ -77,47 +66,37 @@ physics:
   boundary_conditions:
     periodic_x: true
     periodic_y: true
-
-# ===== 損失權重配置 =====
 losses:
   data_weight: 100.0
   prior_weight: 0.1
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0
   continuity_weight: 1.0
-  
-  # 🎯 啟用新版 Causal Weighting (v2)
   causal_weighting: true
-  
   weighting:
     causal:
-      version: 'v2'  # 🌟 使用新版本（對齊 JAX-PI）
-      causal_tol: 1.0  # 因果容差
-      num_chunks: 16  # 時間分塊數
-      # 注意：v2 版本不需要 component_keys 參數
-      # 它會自動從 residual_dict 中提取分量
-
-# ===== 訓練配置 =====
+      version: v2
+      causal_tol: 1.0
+      num_chunks: 16
 training:
-  epochs: 5000  # 較少 epochs 用於快速測試
+  epochs: 5000
   batch_size: 2048
   optimizer:
-    type: adam  # 使用 Adam 用於快速測試（SOAP 需要特殊實現）
+    type: adam
     lr: 0.001
-    betas: [0.9, 0.999]
+    betas:
+    - 0.9
+    - 0.999
     weight_decay: 0.0
     scheduler:
       type: exponential
       decay_steps: 1000
       decay_rate: 0.95
-  
   sampling:
     N_pde: 2048
     N_ic: 128
     N_bc: 128
-  
   use_amp: false
-  
   gradient_clipping:
     enabled: true
     max_norm: 1.0
@@ -125,34 +104,37 @@ training:
     enabled: true
     val_every_steps: 100
     metrics:
-      - relative_l2
-      - mse
-
-# ===== Checkpoint 配置 =====
+    - relative_l2
+    - mse
 checkpointing:
   enabled: true
   checkpoint_dir: ./checkpoints/test_causal_v2
   save_every_steps: 1000
   keep_best: true
   keep_last_n: 2
-
-# ===== 日誌配置 =====
 logging:
   log_every_steps: 100
-  use_wandb: false  # 測試時關閉 wandb
-  
-# ===== 實驗說明 =====
+  use_wandb: false
 experiment:
   name: test_causal_v2
-  description: |
-    測試新版 Causal Weighting (v2) 實現
-    
+  description: '測試新版 Causal Weighting (v2) 實現
+
+
     核心特性：
+
     1. 分量級計算：對 momentum_x, momentum_y, continuity 獨立計算 gamma
+
     2. 最小值策略：gamma = min(ru_gamma, rv_gamma, rc_gamma)
+
     3. 對齊 JAX-PI：使用相同的數學形式和參數
-    
+
+
     預期行為：
+
     - 每個分量的權重獨立計算
+
     - 最終權重取所有分量的最小值
+
     - 更保守的因果權重（相比 v1）
+
+    '

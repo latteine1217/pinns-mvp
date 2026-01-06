@@ -21,7 +21,7 @@ data:
   dataset: re50_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    data_path: ./data/kolmogorov_dns_npy/re50
     description: Kolmogorov flow (Re=50, k_f=4)
     resolution:
       x: 256
@@ -59,7 +59,7 @@ sensors:
   K: 50  # 減少感測器數量
   selection_method: random  # 使用隨機選擇加速
   random_seed: 42
-  sensor_file: ./data/sensors/kolmogorov/sensors_K50_re50_256x256.json
+  sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
 
 model:
   type: fourier_vs_mlp

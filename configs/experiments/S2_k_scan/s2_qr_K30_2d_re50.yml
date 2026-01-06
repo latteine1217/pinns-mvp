@@ -22,7 +22,7 @@ data:
   dataset: re50_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    data_path: ./data/kolmogorov_dns_npy/re50
     description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
     resolution:
       x: 256
@@ -71,9 +71,15 @@ model:
   width: 256
   depth: 6
   activation: tanh
-  block_type: standard
+  block_type: piratenet
+  use_rwf: true
+  rwf_scale_mean: 1.0
+  rwf_scale_std: 0.1
   fourier_features:
-    type: disabled
+    type: standard
+    fourier_m: 64
+    fourier_sigma: 2.0
+    include_input: true
   initialization:
     type: xavier_normal
   output_variables:
@@ -106,17 +112,37 @@ losses:
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0
   continuity_weight: 1.0
-  periodicity_weight: 5.0
+  periodicity_weight: 10.0
   prior_weight: 0.0
   l2_regularization: 1.0e-06
   gradient_penalty: 0.0
   normalize_losses: false
-  adaptive_weighting: false
-  causal_weighting: false
+  adaptive_weighting: true
+  grad_norm_momentum: 0.9
+  weight_update_freq: 1000
+  causal_weighting: true
+  causal_tol: 1.0
+  num_chunks: 16
   merge_momentum: true
+  weighting:
+    scheme: grad_norm
+    init_weights:
+      u_ic: 100.0
+      v_ic: 100.0
+      ru: 1.0
+      rv: 1.0
+      rc: 1.0
+    momentum: 0.9
+    update_every_steps: 1000
+    use_causal: true
+    causal_tol: 1.0
+    num_chunks: 16
+    causal:
+      causal_tol: 1.0
+      num_chunks: 16
 training:
   optimizer:
-    type: adam
+    type: soap
     lr: 0.001
     betas:
     - 0.9
@@ -138,6 +164,8 @@ training:
     adaptive_sampling: false
     boundary_points: 500
   gradient_clip: 5.0
+  num_time_windows: 3
+  time_window_overlap: 0.0
   amp:
     enabled: false
 curriculum:

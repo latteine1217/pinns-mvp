@@ -35,15 +35,15 @@ parameters:
   # DNS 數據路徑（需要預先準備不同 Re 的 DNS 數據）
   data.kolmogorov_config.data_path:
     values:
-      - ./data/kolmogorov_dns/dns_re50_t100.h5
-      - ./data/kolmogorov_dns/dns_re100_t100.h5
-      - ./data/kolmogorov_dns/dns_re200_t100.h5
-      - ./data/kolmogorov_dns/dns_re500_t100.h5
+      - ./data/kolmogorov_dns_npy/re50
+      - ./data/kolmogorov_dns_npy/re100
+      - ./data/kolmogorov_dns_npy/re200
+      - ./data/kolmogorov_dns_npy/re500
 
   # 感測器檔案（需要預先生成不同 Re 的感測器）
   sensors.sensor_file:
     values:
-      - ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
+      - ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
       - ./data/sensors/kolmogorov/sensors_K100_re100_256x256.json
       - ./data/sensors/kolmogorov/sensors_K100_re200_256x256.json
       - ./data/sensors/kolmogorov/sensors_K100_re500_256x256.json

@@ -66,7 +66,7 @@ def create_s1_qr():
     config['sensors'] = {
         'K': 100,
         'selection_method': 'precomputed',
-        'sensor_file': './data/sensors/kolmogorov/sensors_K100_re50_256x256.json',
+        'sensor_file': './data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json',
         'quality_metrics': {
             'condition_number': 5.29e+04,
             'method': 'qr_pivot_rans'
@@ -94,7 +94,7 @@ def create_s2_k_scan():
         
         # 修改感測器數量
         config['sensors']['K'] = K
-        config['sensors']['sensor_file'] = f'./data/sensors/kolmogorov/sensors_K{K}_re50_256x256.json'
+        config['sensors']['sensor_file'] = f'./data/sensors/kolmogorov/sensors_temporal_K{K}_re50_256x256_t15-35.json'
         
         # 輸出目錄
         config['output'] = {

@@ -1,11 +1,11 @@
 """
-RANS 先驗資料載入器
+RANS 先驗資料載入器（NPY 格式）
 """
 
 import logging
 from typing import Dict, Any
+from pathlib import Path
 
-import h5py
 import numpy as np
 import torch
 from scipy.interpolate import RegularGridInterpolator
@@ -16,7 +16,7 @@ def load_rans_prior_data(
     training_data: Dict[str, torch.Tensor],
     device: torch.device
 ) -> Dict[str, torch.Tensor]:
-    """載入 RANS 低保真先驗資料並插值到訓練點
+    """載入 RANS 低保真先驗資料並插值到訓練點（使用 NPY memory-mapped）
     
     Args:
         config: 配置字典
@@ -36,50 +36,65 @@ def load_rans_prior_data(
         logging.warning("⚠️  lowfi_prior.enabled=True 但未指定 data_path")
         return {}
     
-    logging.info(f"📂 載入 Leith 先驗資料: {rans_path}")
+    rans_path = Path(rans_path)
+    logging.info(f"📂 載入 Leith 先驗資料（NPY mmap）: {rans_path}")
     
-    # 讀取 Leith 資料
-    with h5py.File(rans_path, 'r') as f:
-        rans_structure = lowfi_cfg.get('rans_structure', {})
-        group_path = rans_structure.get('group_path', '/mean_field')
-        group = f[group_path]
-        
-        # ========================================================
-        # ✅ FIX #1: 讀取 Leith 1D 座標格式
-        # ========================================================
-        # Leith 模型使用 1D 陣列: x[N], y[N]
-        if 'x' not in group or 'y' not in group:
-            raise KeyError(
-                f"Leith 資料格式錯誤！需要 1D 座標 'x' 和 'y'，但找到: {list(group.keys())}"
-            )
-        
-        x_rans_1d = np.array(group['x'])
-        y_rans_1d = np.array(group['y'])
-        logging.info(f"   ✅ 讀取 Leith 1D 座標: x[{len(x_rans_1d)}], y[{len(y_rans_1d)}]")
-        
-        # 讀取速度場
-        u_rans = np.array(group['u'])  # [N, N]
-        v_rans = np.array(group['v'])
-        
-        # ========================================================
-        # ✅ FIX #2: Leith 無壓力場，設置無效標記
-        # ========================================================
-        # Leith 是診斷模型，不求解壓力場
-        # 建立零壓力陣列（用於插值器，但不用於 loss）
-        p_rans = np.zeros_like(u_rans)
-        p_valid = False
-        logging.warning("   ⚠️  Leith 模型無壓力場，將在 loss 計算中跳過壓力項")
-        
-        # ========================================================
-        # ✅ 讀取 Leith 渦流黏度 (nu_t)
-        # ========================================================
-        if 'nu_t' not in group:
-            raise KeyError(
-                f"Leith 資料缺少 'nu_t' 場！找到: {list(group.keys())}"
-            )
-        
-        nu_t_rans = np.array(group['nu_t'])
-        logging.info(f"   ✅ 讀取 Leith 渦流黏度: nu_t 範圍=[{nu_t_rans.min():.2e}, {nu_t_rans.max():.2e}]")
+    # 讀取 Leith 資料（NPY 格式）
+    rans_structure = lowfi_cfg.get('rans_structure', {})
+    group_path = rans_structure.get('group_path', 'mean_field')
+    
+    # 移除開頭的 '/' (NPY 使用目錄結構，不需要)
+    if group_path.startswith('/'):
+        group_path = group_path[1:]
+    
+    mean_field_dir = rans_path / group_path
+    
+    if not mean_field_dir.exists():
+        raise FileNotFoundError(
+            f"RANS 資料目錄不存在: {mean_field_dir}\n"
+            f"請確認資料已轉換為 NPY 格式"
+        )
+    
+    # ========================================================
+    # ✅ 讀取 Leith 1D 座標格式（memory-mapped）
+    # ========================================================
+    # Leith 模型使用 1D 陣列: x[N], y[N]
+    x_file = mean_field_dir / 'x.npy'
+    y_file = mean_field_dir / 'y.npy'
+    
+    if not x_file.exists() or not y_file.exists():
+        raise FileNotFoundError(
+            f"Leith 資料格式錯誤！需要 1D 座標 'x.npy' 和 'y.npy'，但找到: {list(mean_field_dir.glob('*.npy'))}"
+        )
+    
+    x_rans_1d = np.load(x_file, mmap_mode='r')
+    y_rans_1d = np.load(y_file, mmap_mode='r')
+    logging.info(f"   ✅ 讀取 Leith 1D 座標: x[{len(x_rans_1d)}], y[{len(y_rans_1d)}]")
+    
+    # 讀取速度場（memory-mapped，零拷貝）
+    u_rans = np.load(mean_field_dir / 'u.npy', mmap_mode='r')  # [N, N]
+    v_rans = np.load(mean_field_dir / 'v.npy', mmap_mode='r')
+    
+    # ========================================================
+    # ✅ FIX: Leith 無壓力場，設置無效標記
+    # ========================================================
+    # Leith 是診斷模型，不求解壓力場
+    # 建立零壓力陣列（用於插值器，但不用於 loss）
+    p_rans = np.zeros_like(u_rans)
+    p_valid = False
+    logging.warning("   ⚠️  Leith 模型無壓力場，將在 loss 計算中跳過壓力項")
+    
+    # ========================================================
+    # ✅ 讀取 Leith 渦流黏度 (nu_t)
+    # ========================================================
+    nu_t_file = mean_field_dir / 'nu_t.npy'
+    if not nu_t_file.exists():
+        raise FileNotFoundError(
+            f"Leith 資料缺少 'nu_t.npy' 場！找到: {list(mean_field_dir.glob('*.npy'))}"
+        )
+    
+    nu_t_rans = np.load(nu_t_file, mmap_mode='r')
+    logging.info(f"   ✅ 讀取 Leith 渦流黏度: nu_t 範圍=[{nu_t_rans.min():.2e}, {nu_t_rans.max():.2e}]")
     
     logging.info(f"   Leith 解析度: {u_rans.shape}")
     logging.info(f"   Leith 座標範圍: x=[{x_rans_1d.min():.3f}, {x_rans_1d.max():.3f}], "
@@ -105,7 +120,7 @@ def load_rans_prior_data(
     coords_pde = np.column_stack([x_pde_np, y_pde_np])
     
     # ========================================================
-    # ✅ FIX #3: 外插偵測與警告
+    # ✅ 外插偵測與警告
     # ========================================================
     # 檢查訓練點是否在先驗資料範圍內
     x_min, x_max = x_rans_1d.min(), x_rans_1d.max()
@@ -162,7 +177,7 @@ def load_rans_prior_data(
         'p_sensors': torch.tensor(p_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
         'nu_t_pde': torch.tensor(nu_t_prior_pde, dtype=torch.float32, device=device).unsqueeze(1),
         'nu_t_sensors': torch.tensor(nu_t_prior_sensors, dtype=torch.float32, device=device).unsqueeze(1),
-        # ✅ FIX #4: 添加 metadata 標記壓力無效
+        # ✅ 添加 metadata 標記壓力無效
         'metadata': {
             'pressure_valid': p_valid,
             'model_type': 'leith',
@@ -171,7 +186,7 @@ def load_rans_prior_data(
         }
     }
     
-    logging.info(f"✅ Leith 先驗插值完成:")
+    logging.info(f"✅ Leith 先驗插值完成 (NPY mmap):")
     logging.info(f"   PDE 配點: {len(u_prior_pde)} 個")
     logging.info(f"   感測點: {len(u_prior_sensors)} 個")
     logging.info(f"   u 統計: min={u_prior_pde.min():.4f}, max={u_prior_pde.max():.4f}, mean={u_prior_pde.mean():.4f}")

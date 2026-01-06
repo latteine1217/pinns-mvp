@@ -36,7 +36,7 @@ parameters:
     value: true
 
   lowfi_prior.data_path:
-    value: ./data/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5
+    value: ./data/lowfi_npy/kolmogorov_leith/re50
 
   lowfi_prior.data_type:
     value: leith

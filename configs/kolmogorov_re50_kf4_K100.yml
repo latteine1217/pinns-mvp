@@ -20,7 +20,7 @@ data:
   dataset: re50_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    data_path: ./data/kolmogorov_dns_npy/re50
     description: Kolmogorov flow (Re=50, k_f=4)
     resolution:
       x: 256
@@ -42,7 +42,7 @@ data:
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
   enabled: true
-  data_path: ./data/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5
+  data_path: ./data/lowfi_npy/kolmogorov_leith/re50
   data_type: leith
   rans_structure:
     group_path: /mean_field
@@ -78,7 +78,7 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
+  sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
 model:
   type: fourier_vs_mlp
   in_dim: 3

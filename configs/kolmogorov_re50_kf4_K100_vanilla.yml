@@ -20,7 +20,7 @@ data:
   dataset: re50_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns/dns_re50_t100.h5
+    data_path: ./data/kolmogorov_dns_npy/re50
     description: Kolmogorov flow (Re=50, k_f=4)
     resolution:
       x: 256
@@ -59,7 +59,7 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256.json
+  sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
 model:
   type: fourier_vs_mlp
   in_dim: 3
@@ -111,7 +111,7 @@ losses:
   periodicity_weight: 10.0
   normalize_losses: false
   adaptive_weighting: false
-  causal_weighting: false
+  causal_weighting: true
 training:
   optimizer:
     type: soap
