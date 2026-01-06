@@ -93,7 +93,7 @@ training:
       decay_steps: 1000
       decay_rate: 0.95
   sampling:
-    N_pde: 2048
+    N_pde: 8000
     N_ic: 128
     N_bc: 128
   use_amp: false

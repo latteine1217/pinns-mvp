@@ -193,7 +193,7 @@ training:
     enabled: false
   
   sampling:
-    pde_points: 500  # 極少 PDE 配點
+    pde_points: 8000  # 極少 PDE 配點
     boundary_points: 100  # 極少邊界點
     N_pde: 500  # Kolmogorov 使用的欄位名稱
   

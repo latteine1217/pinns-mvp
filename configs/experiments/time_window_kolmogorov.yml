@@ -110,7 +110,7 @@ training:
       decay_rate: 0.9
       staircase: false
   sampling:
-    N_pde: 4096
+    N_pde: 8000
     N_ic: 256
     N_bc: 256
   causal_weighting:

@@ -169,7 +169,7 @@ training:
     patience: 1000
     min_delta: 1.0e-06
   sampling:
-    N_pde: 10000
+    N_pde: 8000
     adaptive_sampling: false
     boundary_points: 1000
   gradient_clip: 1.0

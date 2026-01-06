@@ -121,7 +121,7 @@ training:
   early_stopping:
     enabled: false
   sampling:
-    pde_points: 1000  # 減少 PDE 配點
+    pde_points: 8000  # 減少 PDE 配點
     boundary_points: 200  # 減少邊界點
     N_pde: 1000  # Kolmogorov 使用的欄位名稱
 
