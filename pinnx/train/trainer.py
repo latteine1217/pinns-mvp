@@ -230,6 +230,7 @@ class Trainer:
         # 7. 訓練狀態初始化
         self.epoch = 0
         self.global_step = 0
+        self.step_offset = components.step_offset  # ✅ Time window 模式：步數偏移
         self.history = {
             'train_loss': [],
             'pde_loss': [],
@@ -575,6 +576,10 @@ class Trainer:
         """
         self.optimizer.zero_grad()
 
+        # 🚀 優化: 批量異步傳輸所有數據到 GPU（Wave 3 優化）
+        # 減少多次 .to(device) 調用，改為一次性批量傳輸
+        data_batch = self._transfer_batch_to_device(data_batch)
+
         # 1. 前向傳播（統一處理 3 類點：PDE, BC, Sensors）
         predictions = self._forward_pass_all_points(data_batch)
 
@@ -613,11 +618,14 @@ class Trainer:
                 'is_vs_pinn': bool
             }
         """
-        # 檢測 VS-PINN 配置
+        # 檢測 Physics 類型與維度
         if 'coords_pde_spatial' not in data_batch:
             raise KeyError("data_batch 缺少必要鍵: coords_pde_spatial")
-        has_3d_coords = data_batch['coords_pde_spatial'].shape[1] >= 3
+        
+        coord_dim = data_batch['coords_pde_spatial'].shape[1]
+        has_3d_coords = coord_dim >= 3
         is_vs_pinn = has_3d_coords and hasattr(self.physics, 'compute_momentum_residuals')
+        is_2d_flow = coord_dim == 2 and hasattr(self.physics, 'residual')
 
         # 處理 3 類點（消除重複！）
         pde_batch = self._process_point_batch(
@@ -633,8 +641,21 @@ class Trainer:
             require_grad=False, context='sensors'
         )
 
-        # VS-PINN 梯度緩存（Wave 2 優化）
-        gradients = self._compute_vs_pinn_gradients(pde_batch['predictions'], pde_batch['coords_physical'], is_vs_pinn)
+        # 梯度緩存（Wave 2 優化）
+        gradients = None
+        if is_vs_pinn:
+            # VS-PINN 3D：使用 3D 梯度快取
+            gradients = self._compute_vs_pinn_gradients(
+                pde_batch['predictions'], 
+                pde_batch['coords_physical'], 
+                is_vs_pinn
+            )
+        elif is_2d_flow:
+            # Kolmogorov Flow 2D：使用 2D 梯度快取
+            gradients = self._compute_2d_gradients(
+                pde_batch['predictions'], 
+                pde_batch['coords_physical']
+            )
 
         return {
             'pde': {
@@ -654,6 +675,37 @@ class Trainer:
             'is_vs_pinn': is_vs_pinn
         }
 
+    def _transfer_batch_to_device(
+        self,
+        data_batch: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        """
+        批量異步傳輸所有數據到 GPU（Wave 3 優化）
+        
+        優勢：
+        1. 一次性處理所有張量，減少函數調用開銷
+        2. 使用 non_blocking=True 允許 CPU 繼續執行
+        3. CUDA 流可以並行處理多個傳輸
+        
+        Args:
+            data_batch: 包含所有訓練數據的字典
+            
+        Returns:
+            傳輸到 GPU 後的 data_batch
+        """
+        # 只對 CUDA 設備使用 non_blocking
+        non_blocking = str(self.device).startswith('cuda')
+        
+        # 批量傳輸所有張量
+        transferred_batch = {}
+        for key, value in data_batch.items():
+            if isinstance(value, torch.Tensor):
+                transferred_batch[key] = value.to(self.device, non_blocking=non_blocking)
+            else:
+                transferred_batch[key] = value
+        
+        return transferred_batch
+    
     def _process_point_batch(
         self,
         spatial_key: str,
@@ -690,15 +742,18 @@ class Trainer:
         if spatial_key not in data_batch:
             raise KeyError(f"data_batch 缺少必要鍵: {spatial_key}")
 
-        # 提取空間座標
-        coords_spatial = data_batch[spatial_key].to(self.device)
+        # 🚀 優化: 數據已在 step() 開頭批量傳輸，這裡直接使用
+        # 不再需要 .to(device) 調用
+        non_blocking = True if str(self.device).startswith('cuda') else False
+        
+        # 提取空間座標（已在 GPU 上）
+        coords_spatial = data_batch[spatial_key]
         if require_grad:
             coords_spatial = coords_spatial.requires_grad_(True)
 
-        # 提取時間座標（如果存在）
+        # 提取時間座標（如果存在，已在 GPU 上）
         t_coords = data_batch.get(time_key)
         if t_coords is not None:
-            t_coords = t_coords.to(self.device)
             if require_grad:
                 t_coords = t_coords.requires_grad_(True)
 
@@ -757,7 +812,7 @@ class Trainer:
             is_vs_pinn: 是否為 VS-PINN
 
         Returns:
-            梯度字典（VS-PINN）或 None
+            梯度字典（VS-PINN 3D）或 None
         """
         if not is_vs_pinn:
             return None
@@ -789,6 +844,48 @@ class Trainer:
             raise ValueError(f"VS-PINN 預測維度錯誤: {n_vars}，期望 3 或 4")
 
         # 計算所有梯度（一次計算，多次使用）
+        return grad_cache.compute_all_gradients(predictions_dict, coords_physical)
+    
+    def _compute_2d_gradients(
+        self,
+        predictions: torch.Tensor,
+        coords_physical: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        """
+        計算 2D 流場梯度緩存（Kolmogorov Flow）
+
+        Args:
+            predictions: 預測值 [N, 3] = [u, v, p]
+            coords_physical: 物理空間座標 [N, 2] 或 [N, 3]
+                - [N, 2]: 純 2D 穩態場景 (x, y)
+                - [N, 3]: Time Window 場景 (x, y, t)
+
+        Returns:
+            梯度字典 (包含 u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy, p_x, p_y)
+            
+        Note:
+            GradientCache2D 會自動處理 2D/3D 座標，始終返回空間梯度 (∂/∂x, ∂/∂y)
+        """
+        from pinnx.physics.gradient_cache_2d import GradientCache2D
+
+        # 建立 2D 梯度緩存
+        grad_cache = GradientCache2D(device=self.device)
+
+        # 構建預測字典
+        n_vars = predictions.shape[1]
+        if n_vars == 3:
+            # [u, v, p]
+            predictions_dict = {
+                'u': predictions[:, 0:1],
+                'v': predictions[:, 1:2],
+                'p': predictions[:, 2:3]
+            }
+        else:
+            raise ValueError(f"2D 流場預測維度錯誤: {n_vars}，期望 3 (u, v, p)")
+
+        # 🚀 直接傳入完整座標，GradientCache2D 會自動處理維度
+        # - 如果 coords_physical 是 [N, 2]，直接計算
+        # - 如果 coords_physical 是 [N, 3]，自動只計算空間導數 (∂/∂x, ∂/∂y)
         return grad_cache.compute_all_gradients(predictions_dict, coords_physical)
 
     def _compute_all_losses(
@@ -878,6 +975,7 @@ class Trainer:
             'momentum_x': losses['momentum_x_loss'],
             'momentum_y': losses['momentum_y_loss'],
             'continuity': losses['continuity_loss'],
+            'divergence': losses['continuity_loss'],  # 🔧 FIX: 別名，用於 combine_losses
         }
 
         # 邊界條件損失項
@@ -890,6 +988,20 @@ class Trainer:
         # VS-PINN 額外的 z 方向動量
         if is_vs_pinn:
             loss_terms['momentum_z'] = losses['momentum_z_loss']
+
+        # 🔧 FIX: 添加先驗一致性損失到 GradNorm（如果存在且非零）
+        if 'prior_consistency_loss' in losses:
+            prior_loss_val = losses['prior_consistency_loss']
+            # 只在先驗損失有效時加入（避免零值影響梯度計算）
+            if isinstance(prior_loss_val, torch.Tensor) and prior_loss_val.item() > 1e-12:
+                loss_terms['prior'] = prior_loss_val
+        
+        # 🔧 FIX: 添加初始條件損失到 GradNorm（如果存在且非零）
+        # 註：目前 loss_manager 可能尚未實現 initial_condition_loss，預留接口
+        if 'initial_condition_loss' in losses:
+            ic_loss_val = losses['initial_condition_loss']
+            if isinstance(ic_loss_val, torch.Tensor) and ic_loss_val.item() > 1e-12:
+                loss_terms['initial_condition'] = ic_loss_val
 
         # GradNorm 動態權重
         gradnorm_weights, gradnorm_ratio = self.loss_manager.apply_gradnorm_weights(loss_terms)
@@ -1057,9 +1169,10 @@ class Trainer:
         # 提取訓練配置
         max_epochs = self.train_cfg.get('epochs', 1000)
         log_freq = self.log_cfg.get('log_freq', 10)
+        wandb_log_freq = self.log_cfg.get('wandb_log_freq', log_freq)  # WandB 預設跟 log_freq，一般設定為 10
         checkpoint_freq = self.train_cfg.get('checkpoint', {}).get('save_every', 100)
         validation_freq = self.train_cfg.get('validation', {}).get('val_freq', 50)
-        loop_helper = TrainingLoopManager(self.config, self.wandb_run)
+        loop_helper = TrainingLoopManager(self.config, self.wandb_run, step_offset=self.step_offset)  # ✅ 傳遞 step_offset
         start_time = time.time()
         start_epoch = self.epoch
 
@@ -1121,16 +1234,18 @@ class Trainer:
 
             # 5. 記錄歷史與 WandB 日誌
             loop_helper.update_history(loss_dict, epoch)
-            if epoch % log_freq == 0:
+            if epoch % wandb_log_freq == 0 and self.use_wandb:
                 loop_helper.log_losses_to_wandb(loss_dict, epoch)
                 loop_helper.log_hyperparameters(self.get_current_lr(), epoch)
                 if self.log_cfg.get('log_nonlinearities', False):
                     loop_helper.log_nonlinearities(self.model, epoch)
+            if epoch % log_freq == 0:
                 self.log_epoch(epoch, loss_dict)
             
             # 6. 記錄梯度與權重統計（降低頻率）
-            if epoch % (log_freq * 2) == 0:
-                loop_helper.log_gradients_and_weights(self.model, epoch)
+            # 註：目前不需要追蹤 layer gradient，已停用以減少 WandB 數據量
+            # if epoch % (log_freq * 2) == 0:
+            #     loop_helper.log_gradients_and_weights(self.model, epoch)
 
             # 7. 更新全局步數
             self.global_step += 1
@@ -1348,6 +1463,31 @@ class Trainer:
     # 檢查點管理
     # ========================================================================
     
+    
+    # ========================================================================
+    # DDP 輔助方法
+    # ========================================================================
+    
+    def _is_main_process(self) -> bool:
+        """
+        判斷是否為主程序（rank 0）
+        
+        Returns:
+            True 如果是主程序或非分散式環境
+        """
+        import torch.distributed as dist
+        
+        # 非分散式環境，視為主程序
+        if not dist.is_available() or not dist.is_initialized():
+            return True
+        
+        # 分散式環境，檢查 rank
+        return dist.get_rank() == 0
+    
+    # ========================================================================
+    # 配置解析輔助方法
+    # ========================================================================
+    
     def _parse_domain_from_config(self) -> Dict[str, float]:
         """
         從配置中解析 domain 參數（Fail Fast，只支援 physics.domain）
@@ -1486,6 +1626,8 @@ class Trainer:
     ) -> Optional[str]:
         """
         保存檢查點（委託給 CheckpointManager）
+        
+        ⚠️  在 DDP 模式下，只有 rank 0 會執行保存
 
         Args:
             epoch: 當前 epoch
@@ -1493,8 +1635,13 @@ class Trainer:
             is_best: 是否為最佳模型
 
         Returns:
-            保存的文件路徑，如果未保存則返回 None
+            保存的文件路徑，如果未保存則返回 None（非 rank 0 或保存失敗）
         """
+        # ========== 🚀 NEW: DDP 檢查 ==========
+        if not self._is_main_process():
+            # 非主程序跳過保存
+            return None
+        
         try:
             # 1. 執行物理驗證（如果配置了 physics）
             physics_metrics = {}
@@ -1524,9 +1671,13 @@ class Trainer:
             # 保存訓練歷史
             extra_data['history'] = self.history
 
+            # ========== 🚀 NEW: 處理 DDP 模型的 state_dict ==========
+            # DDP 包裝後，模型的參數在 module 屬性中
+            model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
+
             # 3. 委託給 CheckpointManager 保存
             filepath = self.checkpoint_manager.save(
-                model=self.model,
+                model=model_to_save,  # 使用處理後的模型
                 optimizer=self.optimizer,
                 epoch=epoch,
                 metrics=metrics or {},

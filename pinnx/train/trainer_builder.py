@@ -33,13 +33,16 @@ Trainer Builder Pattern
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, cast
 from pathlib import Path
 from torch.amp.grad_scaler import GradScaler
 import wandb
 
+import pinnx  # 需要存取 pinnx.Config
 from pinnx.train.trainer import Trainer
 from pinnx.train.trainer_components import TrainerComponents
 from pinnx.utils.normalization.input_transform import InputTransform
@@ -62,16 +65,18 @@ class TrainerBuilder:
     - Never Break Userspace: 保留舊接口（Trainer.__init__ 仍可用）
     """
     
-    def __init__(self, config: Dict[str, Any], device: torch.device):
+    def __init__(self, config: Dict[str, Any], device: torch.device, skip_wandb_init: bool = False):
         """
         初始化 Builder（只需要必需參數）
         
         Args:
             config: 完整訓練配置
             device: 計算設備
+            skip_wandb_init: 是否跳過 WandB 初始化（用於 time window 訓練）
         """
         self.config = config
         self.device = device
+        self.skip_wandb_init = skip_wandb_init
         
         # 必需組件（必須顯式設定）
         self._model: Optional[nn.Module] = None
@@ -83,6 +88,10 @@ class TrainerBuilder:
         self._input_normalizer: Optional[InputTransform] = None
         self._channel_data_cache: Optional[Dict[str, Any]] = None
         self._training_data: Optional[Dict[str, torch.Tensor]] = None
+        
+        # Time window 模式專用（由外層注入）
+        self._wandb_run: Optional[Any] = None
+        self._step_offset: int = 0
     
     def with_model(self, model: nn.Module) -> 'TrainerBuilder':
         """設定模型"""
@@ -118,6 +127,16 @@ class TrainerBuilder:
         """設定訓練資料"""
         self._training_data = data
         return self
+    
+    def with_wandb_run(self, wandb_run: Any) -> 'TrainerBuilder':
+        """設定現有的 WandB run（用於 time window 訓練）"""
+        self._wandb_run = wandb_run
+        return self
+    
+    def with_step_offset(self, step_offset: int) -> 'TrainerBuilder':
+        """設定訓練步數偏移（用於 time window 訓練）"""
+        self._step_offset = step_offset
+        return self
 
     # ========================================================================
     # 組件創建方法（P2-3：從 Trainer._setup_* 遷移）
@@ -134,6 +153,10 @@ class TrainerBuilder:
         """
         from pinnx.train.factories import create_optimizer, create_scheduler
 
+        # 類型檢查（build() 已驗證，此處為靜態類型檢查器）
+        assert self._model is not None, "Model must be set before creating training components"
+        model = cast(nn.Module, self._model)  # 類型斷言
+
         train_cfg = self.config['training']
 
         # 1. 創建優化器
@@ -149,7 +172,7 @@ class TrainerBuilder:
                 'weight_decay': train_cfg.get('weight_decay', 0.0)
             }
 
-        optimizer = create_optimizer(self._model, optimizer_config)
+        optimizer = create_optimizer(model, optimizer_config)
         logging.info(f"✅ Optimizer 創建: {type(optimizer).__name__}")
 
         # 2. 創建學習率調度器
@@ -402,38 +425,50 @@ class TrainerBuilder:
         Returns:
             Dict 包含: timer, memory_tracker, physics_validator, wandb_run
         """
-        from pinnx.utils import Timer, MemoryTracker, PhysicsValidator
+        from pinnx.utils.timer import Timer
+        from pinnx.utils.memory_tracker import MemoryTracker
+        from pinnx.utils.physics_validator import PhysicsValidator
 
-        log_cfg = self.config.get('logging', {})
-        use_wandb = log_cfg.get('wandb', False)
+        # 檢查是否啟用 WandB
+        use_wandb = self.config.get('use_wandb', True)
 
-        # 1. Timer
-        timer = Timer(use_wandb=use_wandb)
+        # 1. Timer（訓練計時）
+        timer = Timer()
 
-        # 2. MemoryTracker
+        # 2. MemoryTracker（內存監控）
         memory_tracker = MemoryTracker(model=self._model, use_wandb=use_wandb)
 
-        # 3. PhysicsValidator
-        physics_cfg = self.config.get('physics', {})
-        physics_type = physics_cfg.get('type', '')
-        is_vs_cfg = physics_type == 'vs_pinn_channel_flow'
-
-        physics_validator_config = {
-            'physics': physics_cfg,
-            'dimension': 3 if is_vs_cfg else 2,
-        }
-        if 'boundary_type' in physics_cfg:
-            physics_validator_config['boundary_type'] = physics_cfg['boundary_type']
-
+        # 3. PhysicsValidator（物理一致性檢查）
+        physics_config = self.config.get('physics', {})
         physics_validator = PhysicsValidator(
-            config=physics_validator_config,
-            use_wandb=use_wandb
+            config=self.config,
+            use_wandb=use_wandb,
+            nu=physics_config.get('nu', 0.01),
+            rho=physics_config.get('rho', 1.0),
+            dimension=physics_config.get('dimension', 2)
         )
 
-        # 4. WandB
+        # 4. WandB（支援跳過初始化，用於 time window 訓練）
         wandb_run = None
-        if use_wandb:
+        if self.skip_wandb_init:
+            # Time window 模式：使用外層傳入的 wandb_run
+            wandb_run = getattr(self, '_wandb_run', None)
+            if wandb_run:
+                logging.info("⏭️  使用外層 WandB run（time window 模式）")
+            else:
+                logging.info("⏭️  跳過 WandB 初始化（time window 模式，將由外層初始化）")
+        elif use_wandb:
             wandb_run = self._init_wandb()
+            logging.info("✅ 指標追蹤工具初始化完成（Timer, MemoryTracker, PhysicsValidator, WandB）")
+        else:
+            logging.info("✅ 指標追蹤工具初始化完成（Timer, MemoryTracker, PhysicsValidator）")
+
+        return {
+            'timer': timer,
+            'memory_tracker': memory_tracker,
+            'physics_validator': physics_validator,
+            'wandb_run': wandb_run
+        }
 
         logging.info("✅ 指標追蹤工具初始化完成（Timer, MemoryTracker, PhysicsValidator）")
 
@@ -568,6 +603,74 @@ class TrainerBuilder:
         )
         
         return applicator
+    
+    # ========================================================================
+    # DDP 輔助方法
+    # ========================================================================
+    
+    def _should_use_ddp(self) -> bool:
+        """
+        判斷是否應該使用 DDP
+        
+        條件：
+        1. pinnx.Config.use_ddp == True（自動偵測結果）
+        2. torch.distributed 已初始化
+        3. 當前在分散式環境中（有 RANK 環境變數）
+        
+        Returns:
+            True 如果應該使用 DDP
+        """
+        # 檢查自動偵測結果
+        if not pinnx.Config.use_ddp:
+            return False
+        
+        # 檢查是否在分散式環境中
+        if not dist.is_available():
+            logging.warning("⚠️  torch.distributed 不可用，跳過 DDP")
+            return False
+        
+        # 檢查是否已初始化
+        if not dist.is_initialized():
+            logging.warning("⚠️  torch.distributed 未初始化，跳過 DDP")
+            return False
+        
+        return True
+    
+    def _get_local_rank(self) -> int:
+        """
+        獲取本地 GPU 排名
+        
+        Returns:
+            本地 GPU rank（預設 0）
+        """
+        return int(os.environ.get('LOCAL_RANK', 0))
+    
+    def _wrap_model_ddp(self, model: nn.Module) -> nn.Module:
+        """
+        包裝模型為 DDP
+        
+        Args:
+            model: 原始模型
+        
+        Returns:
+            DDP 包裝後的模型
+        """
+        local_rank = self._get_local_rank()
+        
+        # 確保模型在正確的設備上
+        if not next(model.parameters()).is_cuda:
+            model = model.to(f'cuda:{local_rank}')
+        
+        # 包裝為 DDP
+        # find_unused_parameters=False 可以提升效能（預設 False）
+        ddp_model = DDP(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=False  # 如果確定所有參數都參與梯度計算
+        )
+        
+        return ddp_model
 
     def build(self) -> Trainer:
         """
@@ -613,6 +716,15 @@ class TrainerBuilder:
         # 5. 創建數據組件
         data = self._create_data_components()
 
+        # ========== 🚀 NEW: DDP 模型包裝 ==========
+        # 在創建 Trainer 之前包裝模型
+        original_model = self._model
+        
+        if self._should_use_ddp():
+            logging.info("🚀 包裝模型為 DistributedDataParallel...")
+            self._model = self._wrap_model_ddp(original_model)
+            logging.info(f"✅ DDP 模型包裝完成（device_ids=[{self._get_local_rank()}]）")
+        
         # 6. 封裝為 TrainerComponents
         components = TrainerComponents(
             # 訓練組件
@@ -648,6 +760,9 @@ class TrainerBuilder:
             
             # 邊界條件組件
             hard_constraint_applicator=data['hard_constraint_applicator'],
+            
+            # Time Window 組件
+            step_offset=self._step_offset,
         )
 
         # 驗證組件完整性

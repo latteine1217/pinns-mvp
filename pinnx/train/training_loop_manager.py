@@ -33,14 +33,16 @@ class TrainingLoopManager:
     - 早停決策（check_early_stopping）
     """
     
-    def __init__(self, config: Dict, wandb_run: Optional[Any]):
+    def __init__(self, config: Dict, wandb_run: Optional[Any], step_offset: int = 0):
         """
         Args:
             config: 訓練配置字典
             wandb_run: WandB Run 實例（若為 None 則不記錄）
+            step_offset: 訓練步數偏移（用於 time window 訓練）
         """
         self.config = config
         self.wandb_run = wandb_run
+        self.step_offset = step_offset
         
         # 訓練歷史記錄
         self.history = {
@@ -75,23 +77,46 @@ class TrainingLoopManager:
         """
         return self.history
     
+    def _is_main_process(self) -> bool:
+        """
+        判斷是否為主程序（rank 0）
+        
+        Returns:
+            True 如果是主程序或非分散式環境
+        """
+        import torch.distributed as dist
+        
+        # 非分散式環境，視為主程序
+        if not dist.is_available() or not dist.is_initialized():
+            return True
+        
+        # 分散式環境，檢查 rank
+        return dist.get_rank() == 0
+    
     # ========================================================================
     # WandB 日誌記錄（分類管理）
     # ========================================================================
     
     def log_losses_to_wandb(self, loss_dict: Dict, epoch: int):
         """
-        記錄所有損失到 WandB
+        記錄所有損失到 WandB（只在 rank 0 執行）
         
         Args:
             loss_dict: 損失字典
-            epoch: 當前 epoch
+            epoch: 當前 epoch（會加上 step_offset）
         """
+        # ========== 🚀 NEW: DDP 檢查 ==========
+        if not self._is_main_process():
+            return  # 非主程序跳過日誌記錄
+        
         if self.wandb_run is None:
             return
         
+        # 對齊 JaxPI: 使用 step_offset 讓各窗口的 step 連續
+        actual_step = epoch + self.step_offset
+        
         # 準備日誌字典
-        log_dict = {'epoch': epoch}
+        log_dict = {'epoch': actual_step}  # 使用調整後的 step
         
         # 1. 總損失與主要分量
         self._add_main_losses(log_dict, loss_dict)
@@ -103,7 +128,8 @@ class TrainingLoopManager:
         self._add_data_losses(log_dict, loss_dict)
         
         # 4. Weighted Loss（分析權重平衡）
-        self._add_weighted_losses(log_dict, loss_dict)
+        # 註：只需要原始 loss 大小，不需要 weighted loss
+        # self._add_weighted_losses(log_dict, loss_dict)
         
         # 5. RANS Prior Loss（低保真先驗）
         self._add_prior_losses(log_dict, loss_dict)
@@ -140,8 +166,6 @@ class TrainingLoopManager:
             log_dict['Loss/PDE/momentum_z'] = loss_dict['momentum_z_loss']
         if 'continuity_loss' in loss_dict:
             log_dict['Loss/PDE/continuity'] = loss_dict['continuity_loss']
-        if 'div_loss' in loss_dict:
-            log_dict['Loss/PDE/divergence'] = loss_dict['div_loss']
     
     def _add_data_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄數據擬合損失（u, v, w, pressure）"""
@@ -160,10 +184,14 @@ class TrainingLoopManager:
             log_dict['Loss/Weighted/data'] = loss_dict['weighted_data_loss']
         if 'weighted_pde_loss' in loss_dict:
             log_dict['Loss/Weighted/pde'] = loss_dict['weighted_pde_loss']
-        if 'weighted_div_loss' in loss_dict:
-            log_dict['Loss/Weighted/continuity'] = loss_dict['weighted_div_loss']
+        if 'weighted_continuity_loss' in loss_dict:
+            log_dict['Loss/Weighted/continuity'] = loss_dict['weighted_continuity_loss']
         if 'weighted_bc_loss' in loss_dict:
             log_dict['Loss/Weighted/boundary'] = loss_dict['weighted_bc_loss']
+        if 'weighted_prior_loss' in loss_dict:
+            log_dict['Loss/Weighted/prior'] = loss_dict['weighted_prior_loss']
+        if 'weighted_ic_loss' in loss_dict:
+            log_dict['Loss/Weighted/ic'] = loss_dict['weighted_ic_loss']
     
     def _add_prior_losses(self, log_dict: Dict, loss_dict: Dict):
         """記錄 RANS prior 損失"""

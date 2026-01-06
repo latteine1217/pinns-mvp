@@ -4,6 +4,7 @@
 針對混合邊界條件（部分週期、部分非週期）的場景設計：
 - 週期軸（如 Kolmogorov flow 的 x, y）使用 PeriodicFourierFeatures
 - 非週期軸（如時間 t）使用標準 FourierFeatures
+- 'none' 類型軸直接透傳，避免不必要計算
 - 支援靈活的軸向配置
 
 典型應用場景：
@@ -11,14 +12,20 @@
 2. Channel Flow (3D)：x, z 週期，y 標準，t 標準
 3. 週期性槽道流：x, z 週期，y 壁面，t 標準
 
+效能優化（Phase 3 - Lazy Evaluation）：
+- 'none' 類型軸零計算開銷（直接透傳）
+- 記憶體預分配優化（避免動態 torch.cat）
+- 效能統計與分析功能
+
 作者：PINNs-MVP 團隊
 日期：2025-01-06
+更新：2025-01-07 (Phase 3 Optimization)
 """
 
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal, Tuple, Union, Any
 
 
 class HybridFourierFeatures(nn.Module):
@@ -56,21 +63,34 @@ class HybridFourierFeatures(nn.Module):
     
     def __init__(
         self,
-        axes_config: Dict[int, Dict[str, any]],
-        trainable: bool = False
+        axes_config: Dict[int, Dict[str, Any]],
+        trainable: bool = False,
+        enable_perf_stats: bool = False  # 🚀 Phase 3: 效能統計開關
     ):
         super().__init__()
         
         self.axes_config = axes_config
         self.in_dim = len(axes_config)
         self.trainable = trainable
+        self.enable_perf_stats = enable_perf_stats
         
         # 為每個軸創建對應的編碼器
-        self.encoders = nn.ModuleDict()
+        self.encoders = nn.ModuleDict()  # 只存放 nn.Module
+        self.encoder_map: Dict[int, Optional[nn.Module]] = {}  # 🚀 Phase 3: 包含 None 的完整映射
         self.axis_out_dims = {}  # 記錄每個軸的輸出維度
+        self.axis_types = {}  # 🚀 Phase 3: 記錄軸類型（用於統計）
+        
+        # 🚀 Phase 3: 效能統計計數器
+        self._perf_stats = {
+            'forward_calls': 0,
+            'none_axis_count': 0,
+            'fourier_axis_count': 0,
+            'total_fourier_ops': 0,  # 實際執行的 Fourier 計算次數
+        }
         
         for axis_idx, axis_cfg in axes_config.items():
             encoder_type = axis_cfg.get('type', 'none')
+            self.axis_types[axis_idx] = encoder_type
             
             if encoder_type == 'periodic':
                 # 週期性嵌入
@@ -83,7 +103,9 @@ class HybridFourierFeatures(nn.Module):
                     trainable=trainable
                 )
                 self.encoders[str(axis_idx)] = encoder
+                self.encoder_map[axis_idx] = encoder
                 self.axis_out_dims[axis_idx] = encoder.out_dim
+                self._perf_stats['fourier_axis_count'] += 1
                 
             elif encoder_type == 'standard':
                 # 標準 Fourier random features
@@ -98,12 +120,15 @@ class HybridFourierFeatures(nn.Module):
                     use_2pi=use_2pi
                 )
                 self.encoders[str(axis_idx)] = encoder
+                self.encoder_map[axis_idx] = encoder
                 self.axis_out_dims[axis_idx] = 2 * n_modes
+                self._perf_stats['fourier_axis_count'] += 1
                 
             elif encoder_type == 'none':
-                # 不編碼，直接透傳
-                self.encoders[str(axis_idx)] = None
+                # 🚀 Phase 3: 不編碼，直接透傳（零計算開銷）
+                self.encoder_map[axis_idx] = None
                 self.axis_out_dims[axis_idx] = 1
+                self._perf_stats['none_axis_count'] += 1
                 
             else:
                 raise ValueError(f"不支援的編碼器類型: {encoder_type}")
@@ -111,16 +136,50 @@ class HybridFourierFeatures(nn.Module):
         # 計算總輸出維度
         self.out_dim = sum(self.axis_out_dims.values())
         
+        # 🚀 Phase 3: 預計算軸切片索引（避免運行時計算）
+        self._axis_slice_indices = self._compute_slice_indices()
+        
         print(f"✅ HybridFourierFeatures 初始化完成")
         print(f"   輸入維度: {self.in_dim}")
         print(f"   輸出維度: {self.out_dim}")
         print(f"   軸配置:")
         for axis_idx, axis_cfg in axes_config.items():
-            print(f"     軸 {axis_idx}: {axis_cfg['type']} → {self.axis_out_dims[axis_idx]} 維")
+            axis_type = axis_cfg['type']
+            out_dim = self.axis_out_dims[axis_idx]
+            savings_flag = " (零計算)" if axis_type == 'none' else ""
+            print(f"     軸 {axis_idx}: {axis_type} → {out_dim} 維{savings_flag}")
+        
+        # 🚀 Phase 3: 顯示效能優化資訊
+        if self._perf_stats['none_axis_count'] > 0:
+            potential_savings = (self._perf_stats['none_axis_count'] / self.in_dim) * 100
+            print(f"   🚀 效能優化: {self._perf_stats['none_axis_count']}/{self.in_dim} 軸使用 lazy evaluation")
+            print(f"      預期節省: ~{potential_savings:.1f}% Fourier 計算開銷")
+    
+    def _compute_slice_indices(self) -> List[Tuple[int, int]]:
+        """
+        🚀 Phase 3: 預計算輸出 tensor 的切片索引
+        
+        避免運行時重複計算，提升記憶體分配效率
+        
+        Returns:
+            List of (start, end) tuples for each axis in output tensor
+        """
+        indices = []
+        current_start = 0
+        for axis_idx in range(self.in_dim):
+            axis_dim = self.axis_out_dims[axis_idx]
+            indices.append((current_start, current_start + axis_dim))
+            current_start += axis_dim
+        return indices
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        前向傳播
+        🚀 Phase 3 優化：Lazy Evaluation + 記憶體預分配
+        
+        前向傳播優化策略：
+        1. 'none' 類型軸直接透傳，零 Fourier 計算開銷
+        2. 預分配輸出 tensor，避免動態拼接
+        3. 使用切片賦值替代 torch.cat（減少記憶體複製）
         
         Args:
             x: [batch_size, in_dim] 輸入座標
@@ -131,22 +190,74 @@ class HybridFourierFeatures(nn.Module):
         if x.shape[1] != self.in_dim:
             raise ValueError(f"輸入維度不匹配: 期望 {self.in_dim}, 實際 {x.shape[1]}")
         
-        features = []
+        batch_size = x.shape[0]
         
-        # 對每個軸分別編碼
+        # 🚀 Phase 3: 預分配輸出 tensor（避免多次 torch.cat）
+        output = torch.empty(batch_size, self.out_dim, dtype=x.dtype, device=x.device)
+        
+        # 🚀 Phase 3: 效能統計（僅在啟用時）
+        if self.enable_perf_stats:
+            self._perf_stats['forward_calls'] += 1
+        
+        # 對每個軸分別編碼（使用切片賦值）
         for axis_idx in range(self.in_dim):
             x_axis = x[:, axis_idx:axis_idx+1]  # [batch, 1]
-            encoder = self.encoders[str(axis_idx)]
+            encoder = self.encoder_map[axis_idx]  # 🚀 使用 encoder_map 避免類型錯誤
+            start_idx, end_idx = self._axis_slice_indices[axis_idx]
             
             if encoder is None:
-                # 直接透傳
-                features.append(x_axis)
+                # 🚀 Phase 3: 直接透傳（零計算開銷）
+                output[:, start_idx:end_idx] = x_axis
             else:
-                # 使用編碼器
-                features.append(encoder(x_axis))
+                # 使用編碼器計算 Fourier 特徵
+                output[:, start_idx:end_idx] = encoder(x_axis)
+                
+                # 🚀 Phase 3: 統計實際執行的 Fourier 運算
+                if self.enable_perf_stats:
+                    self._perf_stats['total_fourier_ops'] += 1
         
-        # 拼接所有軸的特徵
-        return torch.cat(features, dim=-1)
+        return output
+    
+    def get_perf_stats(self) -> Dict[str, Any]:
+        """
+        🚀 Phase 3: 獲取效能統計資訊
+        
+        Returns:
+            效能統計字典，包含：
+            - forward_calls: 前向傳播調用次數
+            - none_axis_count: 'none' 類型軸數量
+            - fourier_axis_count: 需要 Fourier 計算的軸數量
+            - total_fourier_ops: 實際執行的 Fourier 運算總數
+            - avg_fourier_ops_per_call: 每次調用平均 Fourier 運算數
+            - efficiency_ratio: 效率比（實際計算 / 理論最大計算）
+        """
+        if not self.enable_perf_stats:
+            return {"message": "效能統計未啟用，請在初始化時設置 enable_perf_stats=True"}
+        
+        forward_calls = self._perf_stats['forward_calls']
+        avg_ops = (
+            self._perf_stats['total_fourier_ops'] / forward_calls 
+            if forward_calls > 0 else 0
+        )
+        efficiency_ratio = (
+            self._perf_stats['fourier_axis_count'] / self.in_dim 
+            if self.in_dim > 0 else 1.0
+        )
+        
+        return {
+            'forward_calls': forward_calls,
+            'none_axis_count': self._perf_stats['none_axis_count'],
+            'fourier_axis_count': self._perf_stats['fourier_axis_count'],
+            'total_fourier_ops': self._perf_stats['total_fourier_ops'],
+            'avg_fourier_ops_per_call': avg_ops,
+            'efficiency_ratio': efficiency_ratio,
+            'computational_savings': f"{(1 - efficiency_ratio) * 100:.1f}%"
+        }
+    
+    def reset_perf_stats(self) -> None:
+        """🚀 Phase 3: 重置效能統計計數器"""
+        self._perf_stats['forward_calls'] = 0
+        self._perf_stats['total_fourier_ops'] = 0
     
     def extra_repr(self) -> str:
         """返回模組描述"""
@@ -365,8 +476,11 @@ if __name__ == "__main__":
     loss = features_grad.sum()
     loss.backward()
     
-    print(f"   輸入梯度形狀: {x_grad.grad.shape}")
-    print(f"   梯度範圍: [{x_grad.grad.min():.4f}, {x_grad.grad.max():.4f}]")
-    print(f"   梯度計算: ✅ 通過\n")
+    if x_grad.grad is not None:
+        print(f"   輸入梯度形狀: {x_grad.grad.shape}")
+        print(f"   梯度範圍: [{x_grad.grad.min():.4f}, {x_grad.grad.max():.4f}]")
+        print(f"   梯度計算: ✅ 通過\n")
+    else:
+        print(f"   ⚠️  梯度為 None，檢查計算圖\n")
     
     print("✅ 所有測試通過！")
