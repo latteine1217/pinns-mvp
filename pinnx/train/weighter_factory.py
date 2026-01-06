@@ -94,6 +94,8 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
     else:
         weighters['staged'] = None
     
+    weight_cfg = loss_cfg.get('weighting', {})
+
     # GradNorm 權重器（與階段式權重互斥）
     configured_terms = loss_cfg.get('adaptive_loss_terms')
     if configured_terms is not None:
@@ -102,12 +104,26 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         adaptive_terms = default_adaptive_terms
     if loss_cfg.get('adaptive_weighting', False) and weighters['staged'] is None and adaptive_terms:
         initial_weights = {name: base_weight_template.get(name, 1.0) for name in adaptive_terms}
+        if weight_cfg.get('scheme') == 'grad_norm':
+            init_cfg = weight_cfg.get('init_weights', {}) or {}
+            alias_map = {
+                'ru': 'momentum_x',
+                'rv': 'momentum_y',
+                'rc': 'continuity',
+                'u_ic': 'initial_condition',
+                'v_ic': 'initial_condition',
+            }
+            for key, value in init_cfg.items():
+                mapped = alias_map.get(key, key)
+                if mapped in initial_weights:
+                    current = float(initial_weights.get(mapped, 1.0))
+                    initial_weights[mapped] = max(current, float(value))
         weighters['gradnorm'] = GradNormWeighter(
             model=model,
             loss_names=adaptive_terms,
             alpha=loss_cfg.get('grad_norm_alpha', 1.5),          # 對齊 JaxPI 默認值
-            update_frequency=loss_cfg.get('weight_update_freq', 1000),  # 對齊 JaxPI 默認值
-            momentum=loss_cfg.get('grad_norm_momentum', 0.9),    # 新增：EMA 平滑（對齊 JaxPI）
+            update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 1000)),  # 對齊 JaxPI 默認值
+            momentum=weight_cfg.get('momentum', loss_cfg.get('grad_norm_momentum', 0.9)),    # EMA 平滑（對齊 JaxPI）
             normalize_weights=loss_cfg.get('grad_norm_normalize', True),  # 新增：權重正規化開關（True=PINNx, False=JaxPI）
             initial_weights=initial_weights,
             device=str(device),
@@ -121,12 +137,12 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
             logging.info("⚠️  adaptive_weighting disabled (using staged_weights)")
     
     # 因果權重器（對齊 JaxPI 參數）
-    if loss_cfg.get('causal_weighting', False):
+    if loss_cfg.get('causal_weighting', False) or weight_cfg.get('use_causal', False):
         # 獲取配置參數
-        causal_cfg = loss_cfg.get('weighting', {}).get('causal', {})
+        causal_cfg = weight_cfg.get('causal', {})
         causal_version = causal_cfg.get('version', 'v1')  # 默認 v1 保持向後相容
-        causal_tol = causal_cfg.get('causal_tol', loss_cfg.get('causal_tol', 1.0))
-        num_chunks = causal_cfg.get('num_chunks', loss_cfg.get('num_chunks', 32))
+        causal_tol = causal_cfg.get('causal_tol', weight_cfg.get('causal_tol', loss_cfg.get('causal_tol', 1.0)))
+        num_chunks = causal_cfg.get('num_chunks', weight_cfg.get('num_chunks', loss_cfg.get('num_chunks', 32)))
         
         # 獲取時間範圍（用於預計算因果矩陣）
         kol_cfg = config['data'].get('kolmogorov_config', {})

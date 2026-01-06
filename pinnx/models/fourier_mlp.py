@@ -687,13 +687,19 @@ class PINNNet(nn.Module):
         
         # 隱藏層前向傳播
         pirate_u = pirate_v = None
+        start_idx = 0
         if self.block_type == 'piratenet':
             if self._pirate_activation is None:
                 raise RuntimeError("PirateNet activation not initialized.")
+            # Align input width before Pirate gating if a projection layer is present.
+            if self.hidden_layers and isinstance(self.hidden_layers[0], nn.Linear):
+                h = self.hidden_layers[0](h)
+                h = F.silu(h)
+                start_idx = 1
             pirate_u = self._pirate_activation(self.pirate_u(h))
             pirate_v = self._pirate_activation(self.pirate_v(h))
 
-        for layer in self.hidden_layers:
+        for layer in self.hidden_layers[start_idx:]:
             if isinstance(layer, PirateBlock):
                 h = layer(h, pirate_u, pirate_v)
             elif isinstance(layer, ResBlock):

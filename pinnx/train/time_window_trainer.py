@@ -270,13 +270,34 @@ class TimeWindowTrainer:
         """
         if 'kolmogorov_config' in self.config['data'] and self.config['data']['kolmogorov_config'].get('enabled', False):
             kf_cfg = self.config['data']['kolmogorov_config']
+            domain_cfg = kf_cfg.get('domain', {})
             bounds = {
-                'x': kf_cfg['domain'].get('x', [0.0, 2 * np.pi]),
-                'y': kf_cfg['domain'].get('y', [0.0, 2 * np.pi])
+                'x': domain_cfg.get('x', [0.0, 2 * np.pi]),
+                'y': domain_cfg.get('y', [0.0, 2 * np.pi])
             }
             # 檢查是否有 z（3D）
-            if 'z' in kf_cfg['domain']:
-                bounds['z'] = kf_cfg['domain']['z']
+            if 'z' in domain_cfg:
+                bounds['z'] = domain_cfg['z']
+            if domain_cfg:
+                return bounds
+
+            physics_domain = self.config.get('physics', {}).get('domain', {})
+            if physics_domain:
+                bounds = {}
+                if 'x_range' in physics_domain:
+                    bounds['x'] = physics_domain['x_range']
+                elif 'x_min' in physics_domain and 'x_max' in physics_domain:
+                    bounds['x'] = [physics_domain['x_min'], physics_domain['x_max']]
+                if 'y_range' in physics_domain:
+                    bounds['y'] = physics_domain['y_range']
+                elif 'y_min' in physics_domain and 'y_max' in physics_domain:
+                    bounds['y'] = [physics_domain['y_min'], physics_domain['y_max']]
+                if 'z_range' in physics_domain:
+                    bounds['z'] = physics_domain['z_range']
+                elif 'z_min' in physics_domain and 'z_max' in physics_domain:
+                    bounds['z'] = [physics_domain['z_min'], physics_domain['z_max']]
+                if bounds:
+                    return bounds
             return bounds
         
         elif 'jhtdb_config' in self.config['data'] and self.config['data']['jhtdb_config'].get('enabled', False):

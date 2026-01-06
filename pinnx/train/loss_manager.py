@@ -104,7 +104,7 @@ class LossManager:
         if 'momentum' in residuals:
             # 合併模式：momentum 是 [N, 1, 2] 向量
             momentum_vec = residuals['momentum']  # [N, 1, 2]
-            momentum_sq = torch.sum(momentum_vec**2, dim=-1)  # [N, 1]
+            momentum_sq = torch.sum(momentum_vec**2, dim=-1, keepdim=True)  # [N, 1]
             
             if weights is not None:
                 momentum_loss = torch.mean(weights * momentum_sq)
@@ -303,7 +303,10 @@ class LossManager:
                 # 1. 匯總每個點的殘差平方和
                 total_res_sq = torch.zeros_like(t_pde)
                 for r in residuals.values():
-                    total_res_sq += r.detach()**2
+                    r_sq = r.detach()**2
+                    if r_sq.dim() > 1:
+                        r_sq = r_sq.view(r_sq.shape[0], -1).sum(dim=1, keepdim=True)
+                    total_res_sq += r_sq
 
                 # 2. 計算權重 w(t)（使用統一的 PointWeighter 接口）
                 causal_weights = causal_weighter.compute_weights(
@@ -836,8 +839,10 @@ class LossManager:
         # 邊界條件損失
         if hasattr(self.physics, 'compute_periodic_loss'):
             weighted_bc_loss = w_periodic_x * loss_dict['periodic_x_loss'] + w_periodic_y * loss_dict['periodic_y_loss']
+            unweighted_bc_loss = loss_dict['periodic_x_loss'] + loss_dict['periodic_y_loss']
         else:
             weighted_bc_loss = w_bc * loss_dict['wall_loss']
+            unweighted_bc_loss = loss_dict['wall_loss']
         
         # 總損失
         total_loss = (
@@ -849,39 +854,59 @@ class LossManager:
             loss_dict.get('prior_consistency_loss', torch.tensor(0.0, device=self.device))
         )
         
-        # 構建結果字典（字典驅動，消除重複的 .item() 調用）
-        # 基礎損失項（必定存在）
-        base_result_keys = [
-            'data_loss', 'continuity_loss',
-            'momentum_x_loss', 'momentum_y_loss', 'momentum_z_loss',
-            'u_loss', 'v_loss', 'w_loss', 'pressure_loss'
-        ]
-        result = {key: loss_dict[key].item() for key in base_result_keys}
+        # 構建結果字典 - 確保所有 WandB 期望的鍵都存在
+        # 使用 .get() 提供默認值 0.0，避免 KeyError
         
-        # 加權損失項
-        result.update({
+        # === 基礎損失項（必定存在）===
+        result = {
             'total_loss': total_loss.item(),
+            'data_loss': loss_dict['data_loss'].item(),
             'pde_loss': (weighted_momentum_loss + weighted_div_loss).item(),
+            'bc_loss': unweighted_bc_loss.item(),
             'div_loss': loss_dict['continuity_loss'].item(),
+            'continuity_loss': loss_dict['continuity_loss'].item(),
+            'momentum_x_loss': loss_dict['momentum_x_loss'].item(),
+            'momentum_y_loss': loss_dict['momentum_y_loss'].item(),
+            'momentum_z_loss': loss_dict['momentum_z_loss'].item(),
+            'u_loss': loss_dict['u_loss'].item(),
+            'v_loss': loss_dict['v_loss'].item(),
+            'w_loss': loss_dict['w_loss'].item(),
+            'pressure_loss': loss_dict['pressure_loss'].item(),
+        }
+        
+        # === 加權損失項 ===
+        result.update({
             'weighted_data_loss': weighted_data_loss.item(),
             'weighted_pde_loss': weighted_momentum_loss.item(),
             'weighted_div_loss': weighted_div_loss.item(),
             'weighted_bc_loss': weighted_bc_loss.item(),
         })
         
-        # 邊界條件損失細項（條件式添加）
-        bc_keys = ['periodic_x_loss', 'periodic_y_loss'] if hasattr(self.physics, 'compute_periodic_loss') else ['wall_loss']
-        result.update({key: loss_dict[key].item() for key in bc_keys})
+        # === 邊界條件損失細項（所有類型，不存在則為 0.0）===
+        result.update({
+            'periodic_x_loss': loss_dict.get('periodic_x_loss', torch.tensor(0.0, device=self.device)).item(),
+            'periodic_y_loss': loss_dict.get('periodic_y_loss', torch.tensor(0.0, device=self.device)).item(),
+            'wall_loss': loss_dict.get('wall_loss', torch.tensor(0.0, device=self.device)).item(),
+            'inlet_loss': loss_dict.get('inlet_loss', torch.tensor(0.0, device=self.device)).item(),
+            'outlet_loss': loss_dict.get('outlet_loss', torch.tensor(0.0, device=self.device)).item(),
+        })
         
-        # 先驗一致性損失細項（字典驅動）
-        if self.prior_loss_manager is not None:
-            prior_keys = ['prior_consistency_loss', 'prior_loss_u', 'prior_loss_v', 'prior_loss_p']
-            result.update({
-                key: loss_dict.get(key, torch.tensor(0.0, device=self.device)).item()
-                for key in prior_keys
-            })
+        # === 先驗一致性損失（不存在則為 0.0）===
+        result.update({
+            'prior_consistency_loss': loss_dict.get('prior_consistency_loss', torch.tensor(0.0, device=self.device)).item(),
+            'prior_loss_u': loss_dict.get('prior_loss_u', torch.tensor(0.0, device=self.device)).item(),
+            'prior_loss_v': loss_dict.get('prior_loss_v', torch.tensor(0.0, device=self.device)).item(),
+            'prior_loss_p': loss_dict.get('prior_loss_p', torch.tensor(0.0, device=self.device)).item(),
+        })
         
-        # 應用權重字典
+        # === 正則化損失（不存在則為 0.0）===
+        result.update({
+            'regularization_loss': loss_dict.get('regularization_loss', torch.tensor(0.0, device=self.device)).item(),
+            'l2_reg': loss_dict.get('l2_reg', torch.tensor(0.0, device=self.device)).item(),
+            'gradient_penalty': loss_dict.get('gradient_penalty', torch.tensor(0.0, device=self.device)).item(),
+        })
+        
+        # === 應用權重字典 ===
         applied_weights_dict = {
             'data': w_data,
             'momentum_x': w_momentum_x,
