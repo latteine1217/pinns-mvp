@@ -90,12 +90,27 @@ def create_frame(u, v, time, X, Y, vmin_u, vmax_u, vmin_v, vmax_v, vmin_vort, vm
     plt.close(fig)
     return image
 
-def create_animation(data, output_path, Re, fps=10, stride=1):
+def create_animation(data, output_path, Re, fps=10, stride=1, start_time=None, end_time=None):
     """創建動畫"""
     u = data['u']
     v = data['v']
     time = data['time']
     config = data.get('config', {})
+    
+    # 時間範圍篩選
+    if start_time is not None or end_time is not None:
+        start_time = start_time if start_time is not None else time[0]
+        end_time = end_time if end_time is not None else time[-1]
+        
+        idx_start = np.argmin(np.abs(time - start_time))
+        idx_end = np.argmin(np.abs(time - end_time))
+        
+        print(f"⏱️  時間範圍篩選: t={time[idx_start]:.2f} ~ {time[idx_end]:.2f}")
+        print(f"   幀索引: {idx_start} ~ {idx_end} (共 {idx_end - idx_start + 1} 幀)")
+        
+        u = u[idx_start:idx_end+1]
+        v = v[idx_start:idx_end+1]
+        time = time[idx_start:idx_end+1]
     
     N = u.shape[1]
     L = config.get('L', 2 * np.pi)
@@ -156,6 +171,8 @@ def main():
     parser.add_argument('--Re', type=int, default=100, help='Reynolds number (for title)')
     parser.add_argument('--fps', type=int, default=10, help='Frames per second')
     parser.add_argument('--stride', type=int, default=1, help='Frame stride (use every Nth frame)')
+    parser.add_argument('--start-time', type=float, default=None, help='Start time for animation')
+    parser.add_argument('--end-time', type=float, default=None, help='End time for animation')
     
     args = parser.parse_args()
     
@@ -171,7 +188,7 @@ def main():
     print(f"✅ 載入完成: {len(data['time'])} 時間幀")
     
     # 創建動畫
-    create_animation(data, args.output, args.Re, args.fps, args.stride)
+    create_animation(data, args.output, args.Re, args.fps, args.stride, args.start_time, args.end_time)
     
     print("\n" + "=" * 70)
     print("✅ 動畫生成完成！")

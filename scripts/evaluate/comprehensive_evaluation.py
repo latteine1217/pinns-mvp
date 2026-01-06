@@ -442,6 +442,219 @@ def compute_wall_shear_stress_comparison(pred: Dict[str, np.ndarray],
     return metrics
 
 
+def compute_reynolds_stress_profiles(pred: Dict[str, np.ndarray],
+                                     ref: Dict[str, np.ndarray],
+                                     wall_normal_points: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
+    """
+    計算 Reynolds stress profiles (雷諾應力剖面)
+    
+    計算脈動速度的統計量:
+    - u'u'+ : streamwise normal stress
+    - v'v'+ : wall-normal normal stress  
+    - w'w'+ : spanwise normal stress
+    - u'v'+ : Reynolds shear stress
+    
+    其中 u' = u - <u>, <u> 為流向平均速度
+    
+    Args:
+        pred: 預測場數據 {'u': [nx,ny,nz], 'v': [...], 'w': [...]}
+        ref: 參考場數據
+        wall_normal_points: 指定計算的壁面法向位置 y+ (可選)
+        
+    Returns:
+        Reynolds stress 數據字典，包含:
+        - y_plus: 壁面法向無因次距離
+        - uu_plus_pred/ref: u'u'+ profiles
+        - vv_plus_pred/ref: v'v'+ profiles
+        - ww_plus_pred/ref: w'w'+ profiles
+        - uv_plus_pred/ref: u'v'+ profiles
+    """
+    logger.info("📊 Computing Reynolds stress profiles...")
+    
+    # 檢查是否為 3D 數據
+    is_3d = 'w' in pred and 'w' in ref
+    if not is_3d:
+        logger.warning("⚠️  Reynolds stress calculation requires 3D data")
+        return {}
+    
+    # 獲取網格形狀
+    nx, ny, nz = pred['u'].shape[:3]
+    
+    # 計算流向平均 (沿 x 和 z 方向平均)
+    def compute_mean_profile(field):
+        """計算流向平均速度剖面 <u>(y)"""
+        return np.mean(field, axis=(0, 2))  # (ny,)
+    
+    # 平均速度剖面
+    u_mean_pred = compute_mean_profile(pred['u'].squeeze())
+    v_mean_pred = compute_mean_profile(pred['v'].squeeze())
+    w_mean_pred = compute_mean_profile(pred['w'].squeeze())
+    
+    u_mean_ref = compute_mean_profile(ref['u'].squeeze())
+    v_mean_ref = compute_mean_profile(ref['v'].squeeze())
+    w_mean_ref = compute_mean_profile(ref['w'].squeeze())
+    
+    # 計算脈動速度 u' = u - <u>
+    def compute_fluctuations(field, mean_profile):
+        """計算速度脈動"""
+        # Broadcast mean_profile (ny,) to (nx, ny, nz)
+        return field.squeeze() - mean_profile[np.newaxis, :, np.newaxis]
+    
+    u_prime_pred = compute_fluctuations(pred['u'], u_mean_pred)
+    v_prime_pred = compute_fluctuations(pred['v'], v_mean_pred)
+    w_prime_pred = compute_fluctuations(pred['w'], w_mean_pred)
+    
+    u_prime_ref = compute_fluctuations(ref['u'], u_mean_ref)
+    v_prime_ref = compute_fluctuations(ref['v'], v_mean_ref)
+    w_prime_ref = compute_fluctuations(ref['w'], w_mean_ref)
+    
+    # 計算 Reynolds stresses (平均沿 x, z)
+    def compute_reynolds_stress(u_prime, v_prime):
+        """計算 <u'v'>(y)"""
+        return np.mean(u_prime * v_prime, axis=(0, 2))
+    
+    # u'u'+, v'v'+, w'w'+ (normal stresses)
+    uu_pred = compute_reynolds_stress(u_prime_pred, u_prime_pred)
+    vv_pred = compute_reynolds_stress(v_prime_pred, v_prime_pred)
+    ww_pred = compute_reynolds_stress(w_prime_pred, w_prime_pred)
+    
+    uu_ref = compute_reynolds_stress(u_prime_ref, u_prime_ref)
+    vv_ref = compute_reynolds_stress(v_prime_ref, v_prime_ref)
+    ww_ref = compute_reynolds_stress(w_prime_ref, w_prime_ref)
+    
+    # u'v'+ (shear stress)
+    uv_pred = compute_reynolds_stress(u_prime_pred, v_prime_pred)
+    uv_ref = compute_reynolds_stress(u_prime_ref, v_prime_ref)
+    
+    # 計算 y+ (壁面法向無因次距離)
+    # 假設 y 從 0 到 channel height
+    y = pred['y'] if 'y' in pred else np.linspace(0, 1, ny)
+    
+    # 簡化：使用通道中心作為參考，假設 Re_tau ≈ 180-395
+    # 更準確的方法需要摩擦速度 u_tau
+    # 這裡暫時使用網格座標作為 y+
+    y_plus = y if y.ndim == 1 else y[0, :, 0]
+    
+    logger.info(f"✅ Computed Reynolds stresses at {len(y_plus)} wall-normal points")
+    
+    return {
+        'y_plus': y_plus,
+        'uu_plus_pred': uu_pred,
+        'uu_plus_ref': uu_ref,
+        'vv_plus_pred': vv_pred,
+        'vv_plus_ref': vv_ref,
+        'ww_plus_pred': ww_pred,
+        'ww_plus_ref': ww_ref,
+        'uv_plus_pred': uv_pred,
+        'uv_plus_ref': uv_ref,
+    }
+
+
+def compute_vorticity_profiles(pred: Dict[str, np.ndarray],
+                               ref: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """
+    計算 RMS vorticity profiles (渦度 RMS 剖面)
+    
+    計算渦度分量:
+    - ω_x = ∂w/∂y - ∂v/∂z
+    - ω_y = ∂u/∂z - ∂w/∂x
+    - ω_z = ∂v/∂x - ∂u/∂y (streamwise vorticity, 通道流最重要)
+    
+    Args:
+        pred: 預測場數據
+        ref: 參考場數據
+        
+    Returns:
+        Vorticity 數據字典，包含:
+        - y_plus: 壁面法向位置
+        - omega_x_rms_pred/ref: ω_x RMS profiles
+        - omega_y_rms_pred/ref: ω_y RMS profiles
+        - omega_z_rms_pred/ref: ω_z RMS profiles
+    """
+    logger.info("📊 Computing RMS vorticity profiles...")
+    
+    # 檢查是否為 3D 數據
+    is_3d = 'w' in pred and 'w' in ref
+    if not is_3d:
+        logger.warning("⚠️  Vorticity calculation requires 3D data")
+        return {}
+    
+    # 獲取網格形狀和間距
+    nx, ny, nz = pred['u'].shape[:3]
+    
+    # 假設均勻網格
+    x = pred['x'] if 'x' in pred else np.linspace(0, 2*np.pi, nx)
+    y = pred['y'] if 'y' in pred else np.linspace(0, 1, ny)
+    z = pred['z'] if 'z' in pred else np.linspace(0, 2*np.pi, nz)
+    
+    dx = x[1] - x[0] if x.ndim == 1 else x[1, 0, 0] - x[0, 0, 0]
+    dy = y[1] - y[0] if y.ndim == 1 else y[0, 1, 0] - y[0, 0, 0]
+    dz = z[1] - z[0] if z.ndim == 1 else z[0, 0, 1] - z[0, 0, 0]
+    
+    def compute_vorticity_components(u, v, w, dx, dy, dz):
+        """計算渦度三分量"""
+        u_field = u.squeeze()
+        v_field = v.squeeze()
+        w_field = w.squeeze()
+        
+        # ω_x = ∂w/∂y - ∂v/∂z
+        dwdy = np.gradient(w_field, dy, axis=1)
+        dvdz = np.gradient(v_field, dz, axis=2)
+        omega_x = dwdy - dvdz
+        
+        # ω_y = ∂u/∂z - ∂w/∂x
+        dudz = np.gradient(u_field, dz, axis=2)
+        dwdx = np.gradient(w_field, dx, axis=0)
+        omega_y = dudz - dwdx
+        
+        # ω_z = ∂v/∂x - ∂u/∂y (streamwise vorticity)
+        dvdx = np.gradient(v_field, dx, axis=0)
+        dudy = np.gradient(u_field, dy, axis=1)
+        omega_z = dvdx - dudy
+        
+        return omega_x, omega_y, omega_z
+    
+    # 計算預測場渦度
+    omega_x_pred, omega_y_pred, omega_z_pred = compute_vorticity_components(
+        pred['u'], pred['v'], pred['w'], dx, dy, dz
+    )
+    
+    # 計算參考場渦度
+    omega_x_ref, omega_y_ref, omega_z_ref = compute_vorticity_components(
+        ref['u'], ref['v'], ref['w'], dx, dy, dz
+    )
+    
+    # 計算 RMS (沿 x, z 平均後取 RMS)
+    def compute_rms_profile(omega):
+        """計算渦度 RMS 剖面 <ω²>^(1/2)(y)"""
+        omega_squared = omega ** 2
+        mean_omega_squared = np.mean(omega_squared, axis=(0, 2))  # (ny,)
+        return np.sqrt(mean_omega_squared)
+    
+    omega_x_rms_pred = compute_rms_profile(omega_x_pred)
+    omega_y_rms_pred = compute_rms_profile(omega_y_pred)
+    omega_z_rms_pred = compute_rms_profile(omega_z_pred)
+    
+    omega_x_rms_ref = compute_rms_profile(omega_x_ref)
+    omega_y_rms_ref = compute_rms_profile(omega_y_ref)
+    omega_z_rms_ref = compute_rms_profile(omega_z_ref)
+    
+    # y+ 座標
+    y_plus = y if y.ndim == 1 else y[0, :, 0]
+    
+    logger.info(f"✅ Computed vorticity RMS at {len(y_plus)} wall-normal points")
+    
+    return {
+        'y_plus': y_plus,
+        'omega_x_rms_pred': omega_x_rms_pred,
+        'omega_x_rms_ref': omega_x_rms_ref,
+        'omega_y_rms_pred': omega_y_rms_pred,
+        'omega_y_rms_ref': omega_y_rms_ref,
+        'omega_z_rms_pred': omega_z_rms_pred,
+        'omega_z_rms_ref': omega_z_rms_ref,
+    }
+
+
 def compute_energy_spectrum_comparison(pred: Dict[str, np.ndarray],
                                        ref: Dict[str, np.ndarray],
                                        spectrum_type: str = 'streamwise_1d') -> Dict[str, np.ndarray]:
@@ -973,14 +1186,238 @@ def plot_statistics_comparison(stats: Dict, save_dir: Path):
     plt.close()
 
 
+def plot_reynolds_stress_profiles(reynolds_data: Dict, save_dir: Path):
+    """
+    繪製 Reynolds stress profiles (2x2 subplot)
+    
+    (a) u'u'+ vs y+
+    (b) v'v'+ vs y+
+    (c) u'v'+ vs y+
+    (d) w'w'+ vs y+
+    """
+    if not reynolds_data:
+        logger.warning("⚠️  No Reynolds stress data to plot")
+        return
+    
+    logger.info("🎨 Plotting Reynolds stress profiles...")
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    y_plus = reynolds_data['y_plus']
+    
+    # (a) u'u'+
+    ax = axes[0, 0]
+    ax.semilogx(y_plus, reynolds_data['uu_plus_ref'], 'b-', linewidth=2, label='DNS Reference')
+    ax.semilogx(y_plus, reynolds_data['uu_plus_pred'], 'r--', linewidth=2, label='PINN')
+    ax.set_xlabel('$y^+$', fontsize=12)
+    ax.set_ylabel("$\\langle u'u' \\rangle^+$", fontsize=12)
+    ax.set_title('(a) Streamwise Normal Stress', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # (b) v'v'+
+    ax = axes[0, 1]
+    ax.semilogx(y_plus, reynolds_data['vv_plus_ref'], 'b-', linewidth=2, label='DNS Reference')
+    ax.semilogx(y_plus, reynolds_data['vv_plus_pred'], 'r--', linewidth=2, label='PINN')
+    ax.set_xlabel('$y^+$', fontsize=12)
+    ax.set_ylabel("$\\langle v'v' \\rangle^+$", fontsize=12)
+    ax.set_title('(b) Wall-Normal Normal Stress', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # (c) u'v'+ (Reynolds shear stress)
+    ax = axes[1, 0]
+    ax.semilogx(y_plus, reynolds_data['uv_plus_ref'], 'b-', linewidth=2, label='DNS Reference')
+    ax.semilogx(y_plus, reynolds_data['uv_plus_pred'], 'r--', linewidth=2, label='PINN')
+    ax.set_xlabel('$y^+$', fontsize=12)
+    ax.set_ylabel("$\\langle u'v' \\rangle^+$", fontsize=12)
+    ax.set_title('(c) Reynolds Shear Stress', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # (d) w'w'+
+    ax = axes[1, 1]
+    ax.semilogx(y_plus, reynolds_data['ww_plus_ref'], 'b-', linewidth=2, label='DNS Reference')
+    ax.semilogx(y_plus, reynolds_data['ww_plus_pred'], 'r--', linewidth=2, label='PINN')
+    ax.set_xlabel('$y^+$', fontsize=12)
+    ax.set_ylabel("$\\langle w'w' \\rangle^+$", fontsize=12)
+    ax.set_title('(d) Spanwise Normal Stress', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'reynolds_stress_profiles.png', dpi=150, bbox_inches='tight')
+    logger.info(f"✅ Saved Reynolds stress profiles")
+    plt.close()
+
+
+def plot_vorticity_profiles(vorticity_data: Dict, save_dir: Path):
+    """
+    繪製 RMS vorticity profiles (3 subplots)
+    
+    (a) ω_x,rms vs y+
+    (b) ω_y,rms vs y+
+    (c) ω_z,rms vs y+ (streamwise vorticity, 最重要)
+    """
+    if not vorticity_data:
+        logger.warning("⚠️  No vorticity data to plot")
+        return
+    
+    logger.info("🎨 Plotting RMS vorticity profiles...")
+    
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    
+    y_plus = vorticity_data['y_plus']
+    
+    # (a) ω_x,rms
+    ax = axes[0]
+    ax.semilogx(y_plus, vorticity_data['omega_x_rms_ref'], 'b-', linewidth=2, label='DNS Reference')
+    ax.semilogx(y_plus, vorticity_data['omega_x_rms_pred'], 'r--', linewidth=2, label='PINN')
+    ax.set_xlabel('$y^+$', fontsize=12)
+    ax.set_ylabel('$\\omega_{x,rms}$', fontsize=12)
+    ax.set_title('(a) Streamwise Vorticity RMS', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(bottom=0)
+    
+    # (b) ω_y,rms
+    ax = axes[1]
+    ax.semilogx(y_plus, vorticity_data['omega_y_rms_ref'], 'b-', linewidth=2, label='DNS Reference')
+    ax.semilogx(y_plus, vorticity_data['omega_y_rms_pred'], 'r--', linewidth=2, label='PINN')
+    ax.set_xlabel('$y^+$', fontsize=12)
+    ax.set_ylabel('$\\omega_{y,rms}$', fontsize=12)
+    ax.set_title('(b) Wall-Normal Vorticity RMS', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(bottom=0)
+    
+    # (c) ω_z,rms (最重要)
+    ax = axes[2]
+    ax.semilogx(y_plus, vorticity_data['omega_z_rms_ref'], 'b-', linewidth=2, label='DNS Reference')
+    ax.semilogx(y_plus, vorticity_data['omega_z_rms_pred'], 'r--', linewidth=2, label='PINN')
+    ax.set_xlabel('$y^+$', fontsize=12)
+    ax.set_ylabel('$\\omega_{z,rms}$', fontsize=12)
+    ax.set_title('(c) Spanwise Vorticity RMS', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(bottom=0)
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'vorticity_rms_profiles.png', dpi=150, bbox_inches='tight')
+    logger.info(f"✅ Saved vorticity RMS profiles")
+    plt.close()
+
+
+def plot_energy_spectra_at_heights(pred: Dict[str, np.ndarray],
+                                   ref: Dict[str, np.ndarray],
+                                   y_plus_locations: List[float],
+                                   save_dir: Path):
+    """
+    繪製不同壁面高度的能量譜 (類似參考圖)
+    
+    Args:
+        pred: 預測場數據
+        ref: 參考場數據
+        y_plus_locations: 指定的 y+ 位置 (e.g., [15, 100])
+        save_dir: 輸出目錄
+    """
+    logger.info(f"🎨 Plotting energy spectra at y+ = {y_plus_locations}...")
+    
+    nx, ny, nz = pred['u'].shape[:3]
+    
+    # 找到最接近指定 y+ 的索引
+    y = pred['y'] if 'y' in pred else np.linspace(0, 1, ny)
+    y_arr = y if y.ndim == 1 else y[0, :, 0]
+    
+    fig, axes = plt.subplots(len(y_plus_locations), 1, figsize=(10, 5*len(y_plus_locations)))
+    if len(y_plus_locations) == 1:
+        axes = [axes]
+    
+    for idx, y_target in enumerate(y_plus_locations):
+        # 找最接近的 y 索引
+        y_idx = np.argmin(np.abs(y_arr - y_target))
+        
+        ax = axes[idx]
+        
+        # 在該 y 位置提取 x-z 平面數據
+        u_slice_pred = pred['u'][:, y_idx, :].squeeze()
+        v_slice_pred = pred['v'][:, y_idx, :].squeeze()
+        w_slice_pred = pred['w'][:, y_idx, :].squeeze()
+        
+        u_slice_ref = ref['u'][:, y_idx, :].squeeze()
+        v_slice_ref = ref['v'][:, y_idx, :].squeeze()
+        w_slice_ref = ref['w'][:, y_idx, :].squeeze()
+        
+        # 計算 2D FFT (在 x-z 平面)
+        def compute_2d_spectrum(u, v, w):
+            """計算 u, v, w 各分量的能量譜"""
+            fft_u = np.fft.fft2(u)
+            fft_v = np.fft.fft2(v)
+            fft_w = np.fft.fft2(w)
+            
+            E_u = np.abs(fft_u)**2
+            E_v = np.abs(fft_v)**2
+            E_w = np.abs(fft_w)**2
+            
+            # 徑向平均
+            kx = np.fft.fftfreq(u.shape[0])
+            kz = np.fft.fftfreq(u.shape[1])
+            kx_grid, kz_grid = np.meshgrid(kx, kz, indexing='ij')
+            k_mag = np.sqrt(kx_grid**2 + kz_grid**2)
+            
+            k_bins = np.arange(1, min(u.shape)//2)
+            E_k_u = np.zeros(len(k_bins))
+            E_k_v = np.zeros(len(k_bins))
+            E_k_w = np.zeros(len(k_bins))
+            
+            for i, k in enumerate(k_bins):
+                mask = (k_mag >= k) & (k_mag < k+1)
+                E_k_u[i] = np.mean(E_u[mask]) if mask.any() else 0
+                E_k_v[i] = np.mean(E_v[mask]) if mask.any() else 0
+                E_k_w[i] = np.mean(E_w[mask]) if mask.any() else 0
+            
+            return k_bins, E_k_u, E_k_v, E_k_w
+        
+        k, E_u_pred, E_v_pred, E_w_pred = compute_2d_spectrum(u_slice_pred, v_slice_pred, w_slice_pred)
+        _, E_u_ref, E_v_ref, E_w_ref = compute_2d_spectrum(u_slice_ref, v_slice_ref, w_slice_ref)
+        
+        # 繪製
+        ax.loglog(k, E_u_ref, 'b-', linewidth=2, label='u (DNS)', alpha=0.7)
+        ax.loglog(k, E_v_ref, 'g-', linewidth=2, label='v (DNS)', alpha=0.7)
+        ax.loglog(k, E_w_ref, 'r-', linewidth=2, label='w (DNS)', alpha=0.7)
+        
+        ax.loglog(k, E_u_pred, 'b--', linewidth=2, label='u (PINN)', alpha=0.7)
+        ax.loglog(k, E_v_pred, 'g--', linewidth=2, label='v (PINN)', alpha=0.7)
+        ax.loglog(k, E_w_pred, 'r--', linewidth=2, label='w (PINN)', alpha=0.7)
+        
+        ax.set_xlabel('$k$', fontsize=12)
+        ax.set_ylabel('$E(k)$', fontsize=12)
+        ax.set_title(f'Energy Spectrum at $y^+ = {y_arr[y_idx]:.0f}$', fontsize=13, fontweight='bold')
+        ax.legend(fontsize=9, ncol=2)
+        ax.grid(True, alpha=0.3, which='both')
+    
+    plt.tight_layout()
+    plt.savefig(save_dir / 'energy_spectra_at_heights.png', dpi=150, bbox_inches='tight')
+    logger.info(f"✅ Saved energy spectra at different heights")
+    plt.close()
+
+
+
 # ============================================================
 # 報告生成
 # ============================================================
 
 def generate_markdown_report(metrics: Dict, stats: Dict, spectrum_data: Dict, 
                             wall_metrics: Dict, config: Dict, 
-                            checkpoint_path: str, save_path: Path):
-    """生成 Markdown 評估報告"""
+                            checkpoint_path: str, save_path: Path,
+                            reynolds_data: Dict = None,
+                            vorticity_data: Dict = None):
+    """生成 Markdown 評估報告
+    
+    新增參數:
+        reynolds_data: Reynolds stress 統計數據（可選，僅 3D）
+        vorticity_data: 渦度統計數據（可選，僅 3D）
+    """
     logger.info("📝 Generating Markdown report...")
     
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1104,6 +1541,48 @@ def generate_markdown_report(metrics: Dict, stats: Dict, spectrum_data: Dict,
 
 **說明**: 通道流是非均勻的剪切湍流，應使用流向1D能譜而非徑向平均2D能譜。
 
+### Reynolds 應力
+
+{f'''
+**Reynolds 應力剖面** (僅 3D 通道流):
+
+Reynolds 應力描述湍流動量傳輸，由速度脈動相關性定義：
+- u'u'+: 流向法向應力
+- v'v'+: 壁面法向應力
+- w'w'+: 展向法向應力
+- u'v'+: Reynolds 剪應力（最重要，驅動平均流）
+
+**評估指標**:
+- **u'u'+ RMSE**: {reynolds_data.get('uu_rmse', 0):.4f}
+- **v'v'+ RMSE**: {reynolds_data.get('vv_rmse', 0):.4f}
+- **w'w'+ RMSE**: {reynolds_data.get('ww_rmse', 0):.4f}
+- **u'v'+ RMSE**: {reynolds_data.get('uv_rmse', 0):.4f}
+
+**物理意義**:
+- u'v'+ 在 y+=15 附近達到峰值（log-layer turbulence production）
+- 應力分量應符合湍流邊界層理論預測
+''' if reynolds_data else '**未計算** (需要 3D 數據)'}
+
+### 渦度統計
+
+{f'''
+**RMS 渦度剖面** (僅 3D 通道流):
+
+渦度描述流場旋轉，定義為：
+- ω_x,rms: 流向渦度 RMS
+- ω_y,rms: 壁面法向渦度 RMS  
+- ω_z,rms: 展向渦度 RMS（通道流中最強）
+
+**評估指標**:
+- **ω_x,rms RMSE**: {vorticity_data.get('wx_rmse', 0):.4f}
+- **ω_y,rms RMSE**: {vorticity_data.get('wy_rmse', 0):.4f}
+- **ω_z,rms RMSE**: {vorticity_data.get('wz_rmse', 0):.4f}
+
+**物理意義**:
+- 近壁區 (y+ < 30) 渦度最強
+- ω_z,rms 主導通道流湍流結構
+''' if vorticity_data else '**未計算** (需要 3D 數據)'}
+
 ---
 
 ## 📁 輸出文件
@@ -1119,6 +1598,9 @@ def generate_markdown_report(metrics: Dict, stats: Dict, spectrum_data: Dict,
 - `energy_spectrum_comparison.png` - 能量譜比較（線性 & 對數）
 - `wall_shear_stress_comparison.png` - 壁面剪應力比較
 - `statistics_comparison.png` - 統計量比較
+- `reynolds_stress_profiles.png` - **🆕 Reynolds 應力剖面**（僅 3D）
+- `vorticity_rms_profiles.png` - **🆕 渦度 RMS 剖面**（僅 3D）
+- `energy_spectra_at_heights.png` - **🆕 不同高度能量譜**（僅 3D）
 
 ### 數據文件
 
@@ -1147,8 +1629,15 @@ Training: {config.get('training', {})}
 
 
 def save_metrics_json(metrics: Dict, stats: Dict, spectrum_data: Dict, 
-                      wall_metrics: Dict, save_path: Path):
-    """保存指標為 JSON 格式"""
+                      wall_metrics: Dict, save_path: Path,
+                      reynolds_data: Dict = None,
+                      vorticity_data: Dict = None):
+    """保存指標為 JSON 格式
+    
+    新增參數:
+        reynolds_data: Reynolds stress 統計數據（可選）
+        vorticity_data: 渦度統計數據（可選）
+    """
     logger.info("💾 Saving metrics to JSON...")
     
     # 遞迴轉換 numpy 類型為 Python 原生類型
@@ -1181,6 +1670,13 @@ def save_metrics_json(metrics: Dict, stats: Dict, spectrum_data: Dict,
             'passed': bool(metrics.get('overall_l2_error', 1) <= 0.15)
         }
     }
+    
+    # 🆕 添加進階湍流統計（如果可用）
+    if reynolds_data is not None:
+        data['reynolds_stress'] = convert_to_json_serializable(reynolds_data)
+    
+    if vorticity_data is not None:
+        data['vorticity'] = convert_to_json_serializable(vorticity_data)
     
     with open(save_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -1301,6 +1797,18 @@ def main():
     )
     spectrum_data = compute_energy_spectrum_comparison(pred_data, ref_data)
     
+    # 🆕 進階湍流統計（Reynolds stress & Vorticity）
+    if is_3d:
+        logger.info("🌀 Computing Reynolds stress profiles...")
+        reynolds_data = compute_reynolds_stress_profiles(pred_data, ref_data)
+        
+        logger.info("🌪️  Computing vorticity RMS profiles...")
+        vorticity_data = compute_vorticity_profiles(pred_data, ref_data)
+    else:
+        reynolds_data = None
+        vorticity_data = None
+        logger.info("⏭️  Skipping Reynolds stress and vorticity (2D data)")
+    
     # ========== 可視化 ==========
     plot_error_distribution(pred_data, ref_data, output_dir)
     plot_field_comparison(pred_data, ref_data, output_dir)
@@ -1309,15 +1817,32 @@ def main():
     plot_wall_shear_stress(pred_data, ref_data, output_dir)
     plot_statistics_comparison(field_stats, output_dir)
     
+    # 🆕 進階湍流統計可視化
+    if reynolds_data is not None:
+        logger.info("📊 Plotting Reynolds stress profiles...")
+        plot_reynolds_stress_profiles(reynolds_data, output_dir)
+    
+    if vorticity_data is not None:
+        logger.info("📊 Plotting vorticity RMS profiles...")
+        plot_vorticity_profiles(vorticity_data, output_dir)
+    
+    if is_3d:
+        logger.info("📊 Plotting energy spectra at specific heights...")
+        plot_energy_spectra_at_heights(pred_data, ref_data, [15, 100], output_dir)
+    
     # ========== 生成報告 ==========
     generate_markdown_report(
         error_metrics, field_stats, spectrum_data, wall_metrics,
-        config, args.checkpoint, output_dir / 'evaluation_report.md'
+        config, args.checkpoint, output_dir / 'evaluation_report.md',
+        reynolds_data=reynolds_data,
+        vorticity_data=vorticity_data
     )
     
     save_metrics_json(
         error_metrics, field_stats, spectrum_data, wall_metrics,
-        output_dir / 'evaluation_metrics.json'
+        output_dir / 'evaluation_metrics.json',
+        reynolds_data=reynolds_data,
+        vorticity_data=vorticity_data
     )
     
     # ========== 終端輸出摘要 ==========
