@@ -176,7 +176,7 @@ curriculum:
     lowfi_prior:
       consistency_weight: 2.0
     sampling:
-      pde_points: 15000
+      pde_points: 8000
       boundary_points: 1000
   - name: Stage2_PhysicsRamp
     epoch_range:
@@ -192,7 +192,7 @@ curriculum:
     lowfi_prior:
       consistency_weight: 1.0
     sampling:
-      pde_points: 16000
+      pde_points: 8000
       boundary_points: 1000
   - name: Stage3_StrongPhysics
     epoch_range:
@@ -208,7 +208,7 @@ curriculum:
     lowfi_prior:
       consistency_weight: 0.1
     sampling:
-      pde_points: 18000
+      pde_points: 8000
       boundary_points: 1000
 evaluation:
   grid_resolution:

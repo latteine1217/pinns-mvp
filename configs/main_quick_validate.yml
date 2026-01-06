@@ -238,7 +238,7 @@ training:
     patience: 500
     min_delta: 1.0e-06
   sampling:
-    pde_points: 2048
+    pde_points: 8000
     boundary_points: 1024
     wall_clustering: 0.3
   curriculum:
@@ -263,7 +263,7 @@ training:
         periodicity: 10.0
         pressure_gradient: 1.0
       sampling:
-        pde_points: 2048
+        pde_points: 8000
         boundary_points: 1024
         wall_clustering: 0.3
     - name: Stage2_Mid_Re
@@ -285,7 +285,7 @@ training:
         periodicity: 10.0
         pressure_gradient: 1.0
       sampling:
-        pde_points: 2048
+        pde_points: 8000
         boundary_points: 1024
         wall_clustering: 0.4
     - name: Stage3_High_Re_Refinement
@@ -307,7 +307,7 @@ training:
         periodicity: 10.0
         pressure_gradient: 1.0
       sampling:
-        pde_points: 2048
+        pde_points: 8000
         boundary_points: 1024
         wall_clustering: 0.5
   gradient_clip: 1.0
