@@ -228,7 +228,7 @@ training:
     patience: 100
     min_delta: 1.0e-06
   sampling:
-    pde_points: 10000
+    pde_points: 8000
     boundary_points: 2000
     wall_clustering: 0.0
     adaptive_collocation:
