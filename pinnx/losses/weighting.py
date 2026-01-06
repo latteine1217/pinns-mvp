@@ -31,20 +31,35 @@ _EPS = 1e-12
 
 class GradNormWeighter(LossWeighter):
     """
-    GradNorm 動態權重平衡器
+    GradNorm 動態權重平衡器（對齊 JaxPI 實作）
 
     基於梯度範數的自適應權重調整，確保不同損失項對模型參數的影響平衡。
     特別適用於 PINNs 中物理殘差、資料一致性、邊界條件等多項損失的平衡。
-    遵循統一的 LossWeighter 接口。
-
-    參考: GradNorm: Gradient Normalization for Adaptive Loss Balancing (ICML 2018)
+    
+    核心公式（JaxPI 簡化版本）:
+        w_i = Ḡ / (G_i + ε·Ḡ)
+    
+    其中:
+        - Ḡ = mean(G_i): 平均梯度範數
+        - G_i = ||∇_θ L_i||: 第 i 個損失的梯度範數
+        - ε = 1e-5: 數值穩定性參數
+    
+    與論文差異:
+        - 簡化版本: 不使用 alpha 參數和相對損失（alpha=0 假設）
+        - 直接計算: 無需二階梯度，計算效率更高
+        - JaxPI 驗證: 已在多個 PINNs 任務上驗證有效
+    
+    參考:
+        - 論文: Chen et al., "GradNorm" (ICML 2018)
+        - 實作: JaxPI models.py:208-224
+        - 分析: context/technical_reviews/JAXPI_GRADNORM_ANALYSIS_2026-01-06.md
     """
     
     def __init__(self,
                  model: nn.Module,
                  loss_names: List[str],
                  alpha: float = 1.5,
-                 update_frequency: int = 1000,
+                 update_frequency: int = 100,
                  initial_weights: Optional[Dict[str, float]] = None,
                  target_gradient_ratio: float = 1.0,
                  target_ratios: Optional[List[float]] = None,
@@ -52,20 +67,24 @@ class GradNormWeighter(LossWeighter):
                  min_weight: float = 0.1,
                  max_weight: float = 10.0,
                  max_ratio: float = 50.0,
-                 momentum: float = 0.9,
-                 normalize_weights: bool = True):
+                 momentum: float = 0.95,
+                 normalize_weights: bool = False):
         """
         Args:
             model: PINN 模型
             loss_names: 損失項名稱列表 ['data', 'residual', 'boundary', 'prior']
-            alpha: 梯度平衡的更新率 (1.5 為推薦值，配合低頻更新提升響應強度)
-            update_frequency: 權重更新頻率 (每多少步更新一次，JaxPI 默認 1000)
+            alpha: [已棄用] 保留用於向後相容，當前實作不使用（JaxPI alpha=0）
+            update_frequency: 權重更新頻率（每多少步更新一次）
+                            推薦值: 100 (JaxPI 每步更新，但 PINNs 可用低頻減少開銷)
             initial_weights: 初始權重字典
-            target_gradient_ratio: 目標梯度比例
-            target_ratios: 目標比例列表（可選，用於測試相容性）
+            target_gradient_ratio: [已棄用] 保留用於向後相容
+            target_ratios: 目標分佈比例（可選，用於不同損失項的相對重要性）
             device: 計算設備 (None 為自動檢測)
-            momentum: EMA 平滑係數 (0.9 為 JaxPI 默認值，0 表示不使用 EMA)
-            normalize_weights: 是否正規化權重總和 (True=PINNx 穩定模式, False=JaxPI 精確對齊)
+            min_weight: 權重下界（防止權重過小）
+            max_weight: 權重上界（防止權重過大）
+            max_ratio: [已棄用] 當前實作不使用權重歸一化
+            momentum: EMA 平滑係數（推薦值: 0.95，JaxPI 默認值）
+            normalize_weights: [已棄用] JaxPI 不使用權重歸一化（建議設為 False）
         """
         self.model = model
         self.loss_names = loss_names
@@ -127,10 +146,11 @@ class GradNormWeighter(LossWeighter):
         
         self.gradient_history = defaultdict(list)
         self.step_count = 0
-        self.initial_losses = None
         
     def compute_gradients(self, losses: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """計算每個損失項對模型參數的梯度範數
+        """計算每個損失項對模型參數的梯度範數（JaxPI 風格）
+        
+        關鍵：計算**未加權**損失的梯度範數，即 ||∇_θ L_i||，而非 ||∇_θ (w_i × L_i)||
         
         Returns:
             Dict[str, torch.Tensor]: 每個損失項的梯度範數（Tensor 類型）
@@ -145,22 +165,12 @@ class GradNormWeighter(LossWeighter):
                 continue
                 
             try:
-                weight_tensor = self.weights.get(name, None)
-                if isinstance(weight_tensor, torch.Tensor):
-                    weight_tensor = weight_tensor.detach()
-                elif weight_tensor is None:
-                    weight_tensor = torch.tensor(1.0, device=self.device)
-                else:
-                    weight_tensor = torch.tensor(
-                        float(weight_tensor), device=self.device
-                    )
-                
-                weighted_loss = loss * weight_tensor
-                
+                # JaxPI: 計算未加權損失的梯度範數
+                # 論文公式: G_i = ||∇_θ L_i||（不包含權重）
                 grads = torch.autograd.grad(
-                    outputs=weighted_loss,
+                    outputs=loss,  # 使用未加權損失！
                     inputs=list(self.model.parameters()),
-                    grad_outputs=torch.ones_like(weighted_loss),
+                    grad_outputs=torch.ones_like(loss),
                     retain_graph=True,
                     create_graph=False,
                     allow_unused=True
@@ -185,12 +195,22 @@ class GradNormWeighter(LossWeighter):
         context: Dict[str, Any]
     ) -> Dict[str, float]:
         """
-        更新 GradNorm 動態權重
+        更新 GradNorm 動態權重（對齊 JaxPI 實作）
+        
+        核心公式（JaxPI 風格）:
+            w_i = Ḡ / (G_i + ε·Ḡ)
+        
+        其中:
+            - Ḡ = mean(G_i): 平均梯度範數
+            - G_i = ||∇_θ L_i||: 第 i 個損失的梯度範數
+            - ε = 1e-5: 數值穩定性參數
+        
+        參考: JaxPI models.py:208-224
+        論文: Chen et al., "GradNorm" (ICML 2018) - 簡化版本（alpha=0）
 
         Args:
             losses: 損失項字典
             context: 上下文參數，可包含：
-                - total_loss (torch.Tensor): 總損失（可選）
                 - step (int): 當前步數（可選，用於同步）
 
         Returns:
@@ -198,14 +218,11 @@ class GradNormWeighter(LossWeighter):
         """
         self.step_count += 1
         
-        if self.initial_losses is None:
-            self.initial_losses = {name: loss.detach().item() 
-                                 for name, loss in losses.items() 
-                                 if name in self.loss_names}
-        
+        # 低頻更新機制（減少計算開銷）
         if self.step_count % self.update_frequency != 0:
             return self.get_weights()
         
+        # 1. 計算每個損失的梯度範數
         gradients = self.compute_gradients(losses)
         
         usable_gradients = [
@@ -214,70 +231,45 @@ class GradNormWeighter(LossWeighter):
         if len(usable_gradients) < 2:
             return self.get_weights()
         
+        # 2. 計算平均梯度範數
         grad_values = torch.stack(usable_gradients)
-        total_grad = grad_values.sum()
-        avg_grad = grad_values.mean()
+        mean_grad = grad_values.mean()
         
-        relative_losses = {}
-        for name in self.loss_names:
-            if name in losses and name in self.initial_losses:
-                current_loss = losses[name].detach().item()
-                initial_loss = self.initial_losses[name]
-                relative_losses[name] = current_loss / (initial_loss + self.eps)
-        
-        if relative_losses:
-            avg_relative_loss = float(np.mean(list(relative_losses.values())))
-            if not np.isfinite(avg_relative_loss) or avg_relative_loss < self.eps:
-                avg_relative_loss = 1.0
-        else:
-            avg_relative_loss = 1.0
-        
+        # 3. JaxPI 風格權重計算
         for name in self.loss_names:
             if name not in gradients:
                 continue
-                
-            distribution_scale = self.target_distribution.get(name, 1.0)
-            target_grad = avg_grad * distribution_scale * self.target_gradient_ratio
-            target_grad = torch.clamp(target_grad, min=self.eps)
             
-            current_grad = gradients[name]
-            gradient_ratio = current_grad / (target_grad + self.eps)
-            gradient_ratio = torch.clamp(gradient_ratio, min=self.eps)
+            # 當前梯度範數
+            grad_norm = gradients[name]
             
-            if name in relative_losses:
-                loss_ratio = relative_losses[name] / (avg_relative_loss + self.eps)
-                loss_ratio = max(loss_ratio, self.eps)
-                adjustment_factor = gradient_ratio * loss_ratio
-            else:
-                adjustment_factor = gradient_ratio
+            # JaxPI 公式: w_i = mean_grad / (grad_norm + eps * mean_grad)
+            eps_adjusted = self.eps * mean_grad  # 數值穩定項
+            new_weight = mean_grad / (grad_norm + eps_adjusted)
             
-            weight_adjustment = torch.clamp(
-                adjustment_factor.pow(-self.alpha), 0.5, 2.0
-            )
-            new_weight = torch.clamp(
-                self.weights[name] * weight_adjustment,
-                self.min_weight,
-                self.max_weight
-            )
+            # 可選：考慮 target_distribution（保留向後相容性）
+            if hasattr(self, 'target_distribution') and name in self.target_distribution:
+                distribution_scale = self.target_distribution[name]
+                new_weight = new_weight * distribution_scale
             
-            # 應用 EMA 平滑（對齊 JaxPI 的 momentum）
+            # 應用 EMA 平滑（對齊 JaxPI）
             # JaxPI: w_new = w_old * momentum + w_computed * (1 - momentum)
-            if self.momentum > 0:
+            # 注意：第一次更新時 (step_count == update_frequency) 不使用 EMA
+            if self.momentum > 0 and self.step_count > self.update_frequency:
                 old_weight = self.weights[name]
-                smoothed_weight = old_weight * self.momentum + new_weight * (1 - self.momentum)
-                self.weights[name] = smoothed_weight.detach()
-            else:
-                self.weights[name] = new_weight.detach()
+                new_weight = old_weight * self.momentum + new_weight * (1 - self.momentum)
             
-            self.gradient_history[name].append(current_grad.item())
+            # 裁剪權重範圍（防止極端值）
+            self.weights[name] = torch.clamp(
+                new_weight.detach(),
+                min=self.min_weight,
+                max=self.max_weight
+            )
+            
+            # 記錄梯度歷史（用於診斷）
+            self.gradient_history[name].append(grad_norm.item())
             if len(self.gradient_history[name]) > 100:
                 self.gradient_history[name].pop(0)
-        
-        # 根據配置決定是否正規化權重
-        # True: PINNx 穩定模式（保持權重總和恆定）
-        # False: JaxPI 精確對齊（權重反映純梯度比率，總和可能漂移）
-        if self.normalize_weights:
-            self._normalize_weights()
         
         return self.get_weights()
     
@@ -285,6 +277,7 @@ class GradNormWeighter(LossWeighter):
         return {name: weight.item() for name, weight in self.weights.items()}
     
     def reset_weights(self):
+        """重置權重到初始值"""
         for name in self.loss_names:
             self.weights[name] = torch.clamp(
                 torch.tensor(
@@ -295,10 +288,7 @@ class GradNormWeighter(LossWeighter):
                 min=self.min_weight,
                 max=self.max_weight
             )
-        if self.normalize_weights:
-            self._normalize_weights()
         self.step_count = 0
-        self.initial_losses = None
         self.gradient_history.clear()
 
     def _normalize_weights(self) -> None:

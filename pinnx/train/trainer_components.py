@@ -104,6 +104,9 @@ class TrainerComponents:
     validation_data: Optional[Dict[str, torch.Tensor]] = None
     channel_data_cache: Optional[Dict[str, Any]] = None
     weighters: Optional[Dict[str, Any]] = None
+    
+    # ========== 邊界條件組件 ==========
+    hard_constraint_applicator: Optional[Any] = None  # HardConstraintApplicator
 
     def validate_required_components(self) -> None:
         """
@@ -157,7 +160,11 @@ class TrainerComponents:
             'data_normalizer': self.data_normalizer is not None,
             'training_data': self.training_data is not None,
             'validation_data': self.validation_data is not None,
-            'weighters': self.weighters is not None,
+            'channel_data_cache': bool(self.channel_data_cache),
+            'weighters': bool(self.weighters),
+            
+            # 邊界條件組件
+            'hard_constraint_applicator': self.hard_constraint_applicator is not None,
         }
 
     def __str__(self) -> str:

@@ -68,7 +68,7 @@ class CurriculumScheduler(WeightScheduler):
 
             # 顯示採樣配置
             if 'sampling' in s:
-                pde_pts = s['sampling'].get('pde_points', 'N/A')
+                pde_pts = s['sampling'].get('N_pde', 'N/A')
                 bc_pts = s['sampling'].get('boundary_points', 0)
                 logging.info(f"  PDE points: {pde_pts}, BC points: {bc_pts}")
 
@@ -125,7 +125,7 @@ class CurriculumScheduler(WeightScheduler):
 
                     # 顯示採樣配置
                     if 'sampling' in stage:
-                        pde_pts = stage['sampling'].get('pde_points', 'N/A')
+                        pde_pts = stage['sampling'].get('N_pde', 'N/A')
                         bc_pts = stage['sampling'].get('boundary_points', 0)
                         logging.info(f"⚙️  PDE/BC points: {pde_pts}/{bc_pts}")
 

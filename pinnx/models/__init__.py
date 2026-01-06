@@ -22,11 +22,18 @@ Note (2025-10-20):
 from .fourier_mlp import (
     PINNNet,
     FourierFeatures,
+    PeriodicFourierFeatures,
     DenseLayer,
     RWFLinear,
     SineActivation,
     create_pinn_model,
     init_siren_weights
+)
+
+from .hybrid_fourier import (
+    HybridFourierFeatures,
+    create_kolmogorov_2d_hybrid,
+    create_kolmogorov_2d_steady_hybrid
 )
 
 from .wrappers import (
@@ -42,6 +49,8 @@ __all__ = [
     # 核心網路架構
     'PINNNet',
     'FourierFeatures',
+    'PeriodicFourierFeatures',
+    'HybridFourierFeatures',
     'DenseLayer',
     'RWFLinear',
     'SineActivation',
@@ -56,6 +65,8 @@ __all__ = [
     'create_pinn_model',
     'create_scaled_pinn',
     'create_ensemble_pinn',
+    'create_kolmogorov_2d_hybrid',
+    'create_kolmogorov_2d_steady_hybrid',
 
     # 初始化函數
     'init_siren_weights'

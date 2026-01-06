@@ -1,0 +1,348 @@
+# ========================================
+# Quick Test 完整配置
+# 用途：快速驗證所有功能（極小資源）
+# ========================================
+
+experiment:
+  name: quick_test_full_features
+  version: v1.4.0_full_test
+  seed: 42
+  device: auto
+  precision: float32
+  description: "Quick test with ALL features enabled (minimal resources)"
+  group: test
+  tags:
+    - quick_test
+    - full_features
+    - time_window
+    - adaptive_weighting
+    - causal
+  experiment_id: QUICK_TEST_FULL
+
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
+
+# ========================================
+# 資料配置
+# ========================================
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns_npy/re50
+    description: Kolmogorov flow (Re=50, k_f=4)
+    resolution:
+      x: 256
+      y: 256
+    time_range:
+      - 15.0
+      - 25.0  # 縮短時間範圍：10秒（原本20秒）
+    dt: 0.001
+    variables:
+      - u
+      - v
+      - p
+    physics_params:
+      Re: 50.0
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+    # ⭐ Time Window 需要的 domain 配置
+    domain:
+      x: [0.0, 12.566370614359172]
+      y: [0.0, 6.283185307179586]
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+
+# ========================================
+# 低保真先驗（測試用：啟用但使用簡化版）
+# ========================================
+lowfi_prior:
+  enabled: true
+  data_path: ./data/lowfi_npy/kolmogorov_leith/re50
+  data_type: rans
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      nu_t: nu_t
+    coord_mapping:
+      x: x
+      y: y
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+    quality_check: false  # 關閉品質檢查加速測試
+  preprocessing:
+    enabled: false  # 關閉預處理加速
+  consistency_weight: 0.1
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.0  # Leith 無壓力場
+  spatial_weighting:
+    enabled: false
+
+# ========================================
+# 標準化配置
+# ========================================
+normalization:
+  type: training_data_norm
+  variable_order:
+    - u
+    - v
+    - p
+  params: {}
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+
+# ========================================
+# 感測器配置
+# ========================================
+sensors:
+  K: 30  # 極少感測器（原本50+）
+  selection_method: random  # 使用隨機選擇加速
+  random_seed: 42
+  sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
+  spatial_coverage: optimal
+
+# ========================================
+# 模型配置（極簡網絡）
+# ========================================
+model:
+  type: fourier_vs_mlp
+  in_dim: 3  # [t, x, y]
+  out_dim: 3  # [u, v, p]
+  width: 64   # 極小寬度（原本256）
+  depth: 3    # 極小深度（原本8）
+  activation: swish
+  block_type: resnet
+  
+  # ========== Fourier Features 配置 ==========
+  # 方式 1: 標準 Fourier（當前使用）
+  fourier_features:
+    type: standard
+    fourier_m: 4  # 極少 Fourier 特徵（原本32）
+    fourier_sigma: 4.0
+    include_input: true
+    trainable_fourier: false
+  
+  # 方式 2: 週期性 Fourier 嵌入（可選）
+  # fourier_features:
+  #   type: hybrid
+  #   axes:
+  #     0: {type: standard, n_modes: 4, sigma: 4.0, use_2pi: true}
+  #     1: {type: periodic, domain_size: 12.566370614359172, n_modes: 4}
+  #     2: {type: periodic, domain_size: 6.283185307179586, n_modes: 4}
+  #   trainable_fourier: false
+  # ==========================================
+  
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+  output_variables:
+    - u
+    - v
+    - p
+  # 完全關閉 scaling 包裝器（避免維度不匹配）
+  use_gradient_checkpointing: false
+
+# ========================================
+# 物理配置
+# ========================================
+physics:
+  nu: 0.039374
+  domain:
+    x_range: [0.0, 12.566370614359172]
+    y_range: [0.0, 6.283185307179586]
+    periodic_dims:
+      - x
+      - y
+  type: kolmogorov_flow_2d
+  params:
+    nu: 0.039374
+    k_f: 4
+    forcing_amplitude: 1.0
+  num_collocation: 500  # 極少配點（原本10000）
+
+# ========================================
+# 訓練配置
+# ========================================
+training:
+  epochs: 6  # 極少 epoch（3個 time window × 2 epoch/window）
+  lr: 0.001
+  batch_size: 128  # 減小批次
+  optimizer:
+    type: adam
+    lr: 0.001
+  weight_decay: 0.0
+  
+  # ⭐ Time Window 配置
+  num_time_windows: 3  # 啟用 time window！
+  time_window_overlap: 0.1  # 10% 重疊
+  
+  amp:
+    enabled: false
+  
+  lr_scheduler:
+    type: cosine
+    T_max: 6  # 對應總 epochs
+    eta_min: 0.0001
+  
+  checkpoint:
+    enabled: true
+    save_every: 3  # 每個 window 結束保存
+    keep_best: true
+  
+  validation:
+    enabled: true  # 啟用驗證
+    freq: 2
+  
+  early_stopping:
+    enabled: false
+  
+  sampling:
+    N_pde: 500  # 極少 PDE 配點（Kolmogorov 使用的欄位名稱）
+    boundary_points: 100  # 極少邊界點
+  
+  gradient_clip: 1.0
+
+# ========================================
+# 損失配置（啟用所有損失項）
+# ========================================
+losses:
+  # 基礎損失
+  sensor:
+    type: sensor
+    enabled: true
+    weight: 1.0
+  pde:
+    type: pde_residual
+    enabled: true
+    weight: 1.0
+  bc:
+    type: boundary
+    enabled: false  # 週期域不需要 BC
+  
+  # 物理參數
+  prior_weight: 0.1  # 啟用 prior loss
+  nu: 0.039374
+  rho: 1.0
+  
+  # 權重配置（對應標準配置）
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 0.0  # 2D 無 z
+  continuity_weight: 1.0
+  periodicity_weight: 10.0
+  
+  # ⭐ GradNorm 自適應權重
+  adaptive_weighting: true  # 啟用！
+  weight_update_freq: 1  # 每步更新（測試用）
+  grad_norm_momentum: 0.9
+  grad_norm_alpha: 1.5
+  grad_norm_normalize: true
+  adaptive_loss_terms:
+    - data
+    - momentum_x
+    - momentum_y
+    - continuity
+    - periodicity
+  weighting:
+    method: gradnorm  # 使用 GradNorm
+    enabled: true
+    alpha: 1.5
+    update_every: 1
+  
+  # ⭐ 因果權重（Causal Weighting）
+  causal_weighting: true  # 啟用！
+  causal_tol: 1.0
+  num_chunks: 8  # 減少分塊數（測試用）
+
+# ========================================
+# Curriculum 配置
+# ========================================
+curriculum:
+  enable: false  # 不啟用課程訓練（time window 已提供漸進式訓練）
+  is_transition: false
+  stage_name: ''
+  weights: {}
+
+# ========================================
+# 物理驗證配置
+# ========================================
+physics_validation:
+  enabled: true
+  strict_mode: false
+  save_metrics: true
+  thresholds:
+    mass_conservation: 0.01
+    momentum_conservation: 0.1
+    boundary_condition: 0.001
+
+# ========================================
+# Evaluation 配置
+# ========================================
+evaluation:
+  grid_resolution:
+    - 64  # 減小評估網格
+    - 64
+  metrics:
+    - relative_l2
+    - mass_conservation
+  thresholds:
+    l2_error: 0.3
+    mass_conservation_error: 0.001
+
+# ========================================
+# Logging 配置
+# ========================================
+logging:
+  log_dir: ./log
+  log_level: INFO
+  level: INFO
+  log_freq: 1  # 每 epoch 記錄
+  save_predictions: true
+  wandb: false  # 關閉 wandb 加速測試
+  save_loss_history: true
+  save_weight_evolution: true  # 保存權重演化（測試 GradNorm）
+  log_nonlinearities: false
+
+# ========================================
+# Output 配置
+# ========================================
+output:
+  checkpoint_dir: ./checkpoints
+  results_dir: ./results
+  visualization_dir: ./visualizations
+
+# ========================================
+# 測試摘要
+# ========================================
+# 啟用的功能：
+# ✅ Time Window Training (3 windows)
+# ✅ GradNorm Adaptive Weighting
+# ✅ Causal Weighting
+# ✅ Prior Loss (Leith RANS)
+# ✅ Physics Validation
+# ✅ Validation Manager
+# ✅ Checkpoint Manager
+# ✅ Loss History & Weight Evolution
+# ✅ Periodic Boundary Conditions
+# ✅ All Loss Terms (data, pde, continuity, periodicity)
+#
+# 資源配置：
+# - Epochs: 6 (3 windows × 2 epochs)
+# - PDE points: 500
+# - Sensors: 30
+# - Network: 3×64 + Fourier(4)
+# - Time range: 10s (15-25s)
+# - Batch size: 128
+#
+# 預期執行時間：< 30 秒

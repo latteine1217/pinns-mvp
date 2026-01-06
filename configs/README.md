@@ -17,7 +17,7 @@
 | **優化器** | `optimizer.type` | `soap` |
 | **損失權重** | `data_weight`, `wall_constraint_weight` | `10.0` |
 | | `momentum_*`, `continuity_weight` | `1.0` |
-| **採樣點數** | `sampling.pde_points` | `10000` |
+| **採樣點數** | `sampling.N_pde` | `10000` |
 | | `sampling.boundary_points` | `5000` |
 | **學習率** | `lr_scheduler.type` | `step` (每 1000 epochs 衰減 0.9 倍) |
 | **感測器** | `sensors.K` | `500` |

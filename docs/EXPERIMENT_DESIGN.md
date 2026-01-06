@@ -1034,7 +1034,7 @@ training:
   epochs: 5000
   batch_size: 1024
   sampling:
-    pde_points: 10000
+    N_pde: 10000
     boundary_points: 2000
 
 evaluation:

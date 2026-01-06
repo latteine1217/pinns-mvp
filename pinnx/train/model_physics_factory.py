@@ -696,9 +696,9 @@ def create_model(
     if not isinstance(ff_cfg, dict):
         raise KeyError("Model config missing required dict: 'fourier_features'")
     ff_type = ff_cfg.get('type')
-    if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+    if ff_type not in {'standard', 'axis_selective', 'hybrid', 'disabled'}:
         raise ValueError(
-            "model.fourier_features.type must be 'standard' / 'axis_selective' / 'disabled'"
+            "model.fourier_features.type must be 'standard' / 'axis_selective' / 'hybrid' / 'disabled'"
         )
     use_fourier = (ff_type != 'disabled')
     

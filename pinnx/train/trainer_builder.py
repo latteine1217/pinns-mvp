@@ -498,19 +498,76 @@ class TrainerBuilder:
 
     def _create_data_components(self) -> Dict[str, Any]:
         """
-        創建數據組件：data_normalizer
+        創建數據組件：data_normalizer, hard_constraint_applicator
 
         input_normalizer, training_data, validation_data, channel_data_cache, weighters
         已由用戶通過 .with_*() 方法提供
 
         Returns:
-            Dict 包含: data_normalizer
+            Dict 包含: data_normalizer, hard_constraint_applicator
         """
-        # data_normalizer 需要在 Trainer 中創建（依賴 training_data）
-        # 這裡只是佔位
+        # 1. data_normalizer 需要在 Trainer 中創建（依賴 training_data）
+        data_normalizer = None
+        
+        # 2. hard_constraint_applicator（壁面邊界條件）
+        hard_constraint_applicator = self._create_hard_constraint_applicator()
+        
         return {
-            'data_normalizer': None  # 將在 Trainer._init_normalizers 中創建
+            'data_normalizer': data_normalizer,
+            'hard_constraint_applicator': hard_constraint_applicator,
         }
+    
+    def _create_hard_constraint_applicator(self) -> Optional[Any]:
+        """
+        創建 hard constraint applicator（壁面邊界條件）
+        
+        從配置讀取 physics.boundary_conditions.hard_constraint
+        
+        Returns:
+            HardConstraintApplicator 或 None
+        """
+        physics_cfg = self.config.get('physics', {})
+        bc_cfg = physics_cfg.get('boundary_conditions', {})
+        hc_cfg = bc_cfg.get('hard_constraint', {})
+        
+        # 檢查是否啟用
+        if not hc_cfg.get('enabled', False):
+            return None
+        
+        from pinnx.utils.boundary_constraints import create_channel_flow_hard_constraint
+        
+        # 提取配置參數
+        form = hc_cfg.get('form', 'quadratic')
+        y_range_tuple = tuple(hc_cfg.get('y_range', [-1.0, 1.0]))
+        alpha = hc_cfg.get('alpha', 10.0)
+        constrained_vars = hc_cfg.get('constrained_vars', ['u', 'v', 'w'])
+        y_axis_index = hc_cfg.get('y_axis_index', 2)
+        
+        # 從模型配置推斷 variable_order
+        model_cfg = self.config.get('model', {})
+        variable_order = model_cfg.get('output_variables', ['u', 'v', 'w', 'p'])
+        
+        # 創建 applicator
+        applicator = create_channel_flow_hard_constraint(
+            form=form,
+            y_range=y_range_tuple,
+            alpha=alpha,
+            variable_order=variable_order,
+            constrained_vars=constrained_vars,
+            y_axis_index=y_axis_index,
+            device=self.device,
+            verify=True,
+        )
+        
+        logging.info(
+            f"✅ Hard Constraint Applicator 創建成功\n"
+            f"   形式: {form}\n"
+            f"   y 範圍: {y_range_tuple}\n"
+            f"   約束變量: {constrained_vars}\n"
+            f"   y 軸索引: {y_axis_index}"
+        )
+        
+        return applicator
 
     def build(self) -> Trainer:
         """
@@ -588,6 +645,9 @@ class TrainerBuilder:
             validation_data=None,  # 將在 Trainer 中設置
             channel_data_cache=self._channel_data_cache,
             weighters=self._weighters,
+            
+            # 邊界條件組件
+            hard_constraint_applicator=data['hard_constraint_applicator'],
         )
 
         # 驗證組件完整性

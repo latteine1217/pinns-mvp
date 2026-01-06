@@ -292,7 +292,7 @@ python scripts/train_time_window.py --cfg configs/experiments/time_window_kolmog
 
 ## 6. 已知限制
 
-1. **3D 訓練記憶體壓力高**：需調整 `pde_points` 與 batch size
+1. **3D 訓練記憶體壓力高**：需調整 `N_pde` 與 batch size
 2. **梯度檢查點**：高階導數下可能觸發不穩定，預設關閉
 3. **Sensor 品質敏感**：感測資料異常時會觸發 Fail Fast
 4. **JHTDB 依賴**：需有效 token + 穩定網路

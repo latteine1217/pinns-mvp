@@ -96,10 +96,19 @@ model:
   activation: swish
   block_type: resnet
   fourier_features:
-    type: disabled
-    fourier_m: 0
-    fourier_sigma: 0.0
-    include_input: true
+    type: hybrid
+    axes:
+      0:
+        type: none
+      1:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 64
+      2:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 64
+    trainable_fourier: false
   initialization:
     type: siren
     first_omega_0: 30.0

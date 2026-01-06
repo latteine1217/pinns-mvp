@@ -164,12 +164,24 @@ def normalize_config_structure(config: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("缺少必要配置: model.fourier_features（必須是 dict）")
 
     ff_type = ff_cfg.get('type')
-    if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+    if ff_type not in {'standard', 'axis_selective', 'hybrid', 'disabled'}:
         raise ValueError(
-            "model.fourier_features.type 必須是 'standard' / 'axis_selective' / 'disabled'"
+            "model.fourier_features.type 必須是 'standard' / 'axis_selective' / 'hybrid' / 'disabled'"
         )
 
-    if ff_type != 'disabled':
+    if ff_type == 'hybrid':
+        # hybrid 類型需要 axes 配置
+        if 'axes' not in ff_cfg:
+            raise ValueError(
+                "model.fourier_features.type='hybrid' 時必須提供 'axes' 配置"
+            )
+        axes_cfg = ff_cfg['axes']
+        if not isinstance(axes_cfg, dict) or len(axes_cfg) == 0:
+            raise ValueError(
+                "model.fourier_features.axes 必須是非空字典"
+            )
+    elif ff_type != 'disabled':
+        # standard 和 axis_selective 類型需要 fourier_m 和 fourier_sigma
         if 'fourier_m' not in ff_cfg or 'fourier_sigma' not in ff_cfg:
             raise ValueError(
                 "Fourier features 啟用時必須提供 "

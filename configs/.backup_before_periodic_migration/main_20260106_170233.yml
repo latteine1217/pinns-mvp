@@ -1,0 +1,378 @@
+experiment:
+  name: main training (channel flow Re1000)
+  version: v1.0
+  seed: 42
+  device: auto
+  precision: float32
+  description: 主要目標架構
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 2
+data:
+  source: jhtdb
+  dataset: channel
+  jhtdb_config:
+    enabled: true
+    dataset_name: channel
+    description: 通道流 (Re_tau=1000)
+    resolution:
+      x: 2048
+      y: 512
+      z: 1536
+    time_range:
+    - 0.0
+    - 26.0
+    dt: 0.0065
+    variables:
+    - u
+    - v
+    - w
+    - p
+  normalize: true
+  cache_dir: ./data/jhtdb/channel_flow_re1000
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  slice_config:
+    plane: xy
+    z_position: 4.71
+    steady_state: true
+normalization:
+  type: training_data_norm
+  variable_order:
+  - u
+  - v
+  - w
+  - p
+  params: {}
+sensors:
+  K: 100
+  selection_method: qr_pivot
+  sensor_file: sensors_K100_qr_pivot_3d_v5_gradu_eig_large.npz
+  hybrid_config:
+    wall_ratio: 0.4
+    qr_ratio: 0.6
+    wall_thickness: 0.1
+model:
+  type: fourier_vs_mlp
+  in_dim: 4  # [t, x, y, z] for Channel Flow
+  out_dim: 4  # [u, v, w, p]
+  width: 200
+  depth: 8
+  activation: sine
+  use_residual: false
+  use_layer_norm: false
+  dropout: 0.0
+  use_rwf: true
+  rwf_scale_std: 0.1
+  sine_omega_0: 1.0
+  output_ranges:
+    u: auto
+    v: auto
+    w: auto
+    p: auto
+  
+  # ========== Fourier Features 配置 ==========
+  # 方式 1: Axis-selective Fourier（當前使用，舊版格式）
+  fourier_features:
+    type: axis_selective
+    fourier_m: 32
+    fourier_sigma: 5.0
+    axes_config:
+      x:  # 流向（週期）
+      - 1
+      - 2
+      - 4
+      - 8
+      y: []  # 壁法向（非週期）
+      z:  # 展向（週期）
+      - 1
+      - 2
+      - 4
+      - 8
+    domain_lengths:
+      x: 25.13
+      y: 2.0
+      z: 9.42
+    trainable_fourier: false
+  
+  # 方式 2: 週期性 Fourier 嵌入（推薦，新版格式）
+  # 取消下方註釋並註釋上方 "方式 1" 以啟用：
+  # fourier_features:
+  #   type: hybrid
+  #   axes:
+  #     0: {type: standard, n_modes: 24, sigma: 5.0, use_2pi: true}  # 時間 t（非週期）
+  #     1: {type: periodic, domain_size: 25.13, n_modes: 16}  # 流向 x（週期）
+  #     2: {type: standard, n_modes: 20, sigma: 4.0, use_2pi: true}  # 壁法向 y（非週期）
+  #     3: {type: periodic, domain_size: 9.42, n_modes: 16}  # 展向 z（週期）
+  #   trainable_fourier: false
+  # 
+  # 注意：使用 type: hybrid 時，週期性由嵌入自動保證
+  # ==========================================
+  
+  scaling:
+    learnable: true
+    input_norm: channel_flow
+    output_norm: friction_velocity
+    friction_velocity: 1.0
+    channel_half_height: 1.0
+    viscous_length: 0.001
+  output_variables:
+  - u
+  - v
+  - w
+  - p
+fourier_annealing:
+  enabled: true
+  strategy: custom
+  axes_names:
+  - x
+  - y
+  - z
+  stages:
+  - end_ratio: 0.3
+    frequencies:
+    - 1
+    - 2
+    description: 低頻預熱
+  - end_ratio: 0.6
+    frequencies:
+    - 1
+    - 2
+    - 4
+    description: 中頻解鎖
+  - end_ratio: 1.0
+    frequencies:
+    - 1
+    - 2
+    - 4
+    - 8
+    description: 全頻段
+physics:
+  type: vs_pinn_channel_flow
+  nu: 5.0e-05
+  rho: 1.0
+  vs_pinn:
+    scaling_factors:
+      N_x: 2.0
+      N_y: 12.0
+      N_z: 2.0
+  channel_flow:
+    Re_tau: 1000.0
+    Re_bulk: 39998.0
+    u_tau: 0.04997
+    pressure_gradient: 0.0025
+  domain:
+    x_range:
+    - 0
+    - 25.13
+    y_range:
+    - -1.0
+    - 1.0
+    z_range:
+    - 0
+    - 9.42
+  boundary_conditions:
+    wall_velocity:
+    - 0.0
+    - 0.0
+    - 0.0
+    wall_location:
+    - -1.0
+    - 1.0
+    periodic_x: true
+    periodic_z: true
+    pressure_driven: true
+    mean_pressure_gradient: 0.0025
+lowfi_prior:
+  enabled: true
+  data_path: ./data/lowfi/channel_rans/rans_k_omega_sst.npz
+  data_type: rans
+  rans_structure:
+    direct_npz: true
+    field_mapping:
+      u: u
+      v: v
+      w: w
+      p: p
+      k: k
+      nu_t: mu_t
+    coord_mapping:
+      X: x
+      Y: y
+      Z: z
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+    quality_check: true
+  consistency_weight: 0.3
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    w: 1.0
+    p: 0.5
+  spatial_weighting:
+    enabled: true
+    strategy: distance_to_wall
+    wall_region_weight: 2.0
+    wall_thickness: 0.1
+    core_region_weight: 1.0
+  turbulence_model:
+    type: k_omega_sst
+    enabled: true
+    use_nu_t: true
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 1.0
+  wall_constraint_weight: 10.0
+  periodicity_weight: 10.0
+  pressure_gradient_weight: 1.0
+  prior_weight: 0.3
+  source_l1: 1.0e-06
+  gradient_penalty: 0.0001
+  adaptive_weighting: true
+  weight_update_freq: 1000
+  grad_norm_alpha: 1.5
+  causal_weighting: false
+training:
+  optimizer:
+    type: soap
+    lr: 0.001
+    weight_decay: 1.0e-05
+  lr_scheduler:
+    type: step
+    step_size: 1000
+    gamma: 0.9
+  epochs: 5000
+  batch_size: 10000
+  validation_freq: 100
+  checkpoint_freq: 500
+  log_interval: 50
+  early_stopping:
+    enabled: false
+    patience: 500
+    min_delta: 1.0e-06
+  sampling:
+    N_pde: 8000
+    boundary_points: 5000
+    wall_clustering: 0.3
+  curriculum:
+    enable: true
+    stages:
+    - name: Stage1_Low_Re
+      epoch_range:
+      - 0
+      - 1500
+      Re_tau: 500.0
+      nu: 0.0001
+      pressure_gradient: 0.00125
+      lr: 0.001
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
+        wall_constraint: 10.0
+        periodicity: 10.0
+        pressure_gradient: 1.0
+      sampling:
+        N_pde: 8000
+        boundary_points: 5000
+        wall_clustering: 0.3
+    - name: Stage2_Mid_Re
+      epoch_range:
+      - 1500
+      - 3500
+      Re_tau: 750.0
+      nu: 6.67e-05
+      pressure_gradient: 0.001875
+      lr: 0.0009
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
+        wall_constraint: 10.0
+        periodicity: 10.0
+        pressure_gradient: 1.0
+      sampling:
+        N_pde: 8000
+        boundary_points: 5000
+        wall_clustering: 0.4
+    - name: Stage3_High_Re_Refinement
+      epoch_range:
+      - 3500
+      - 5000
+      Re_tau: 1000.0
+      nu: 5.0e-05
+      pressure_gradient: 0.0025
+      lr: 0.000729
+      weights:
+        data: 10.0
+        boundary: 10.0
+        momentum_x: 1.0
+        momentum_y: 1.0
+        momentum_z: 1.0
+        continuity: 1.0
+        wall_constraint: 10.0
+        periodicity: 10.0
+        pressure_gradient: 1.0
+      sampling:
+        N_pde: 8000
+        boundary_points: 5000
+        wall_clustering: 0.5
+  gradient_clip: 1.0
+ensemble:
+  enable: false
+  n_models: 5
+  diversity_weight: 0.1
+  uncertainty_threshold: 0.15
+evaluation:
+  grid_resolution:
+  - 128
+  - 32
+  - 128
+  metrics:
+  - relative_l2
+  - wall_shear_stress
+  - velocity_profile
+  - turbulence_statistics
+  - pressure_drop
+  - mass_conservation
+  - energy_spectrum
+  thresholds:
+    l2_error: 0.15
+    wall_shear_error: 0.08
+    velocity_profile_error: 0.1
+    rmse_improvement: 0.3
+    spectrum_rmse: 0.25
+checkpointing:
+  save_dir: ./checkpoints
+  save_best: true
+  save_latest: true
+  save_interval: 500
+logging:
+  log_nonlinearities: false
+  log_dir: ./log
+  wandb: true
+  log_level: INFO
+task_008_gates:
+  gate_1_stability:
+    no_nan_inf: true
+    stage_transition_loss_change: 0.2
+  gate_2_convergence:
+    relative_l2: 0.15
+    wall_shear_stress_error: 0.08
+  gate_3_efficiency:
+    training_time_hours: 8
+    convergence_speedup: 0.2
+  gate_4_physics:
+    spectrum_rmse: 0.25
+    velocity_profile_log_layer_error: 0.15

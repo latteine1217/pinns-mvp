@@ -82,6 +82,8 @@ REMOVED_KEY_PATHS = {
     ('model', 'fourier_use_2pi'): "model.fourier_features.fourier_use_2pi",
     ('model', 'fourier_multiscale'): "removed (use standard fourier_features only)",
     ('model', 'fourier_features', 'enabled'): "model.fourier_features.type",
+    ('training', 'sampling', 'pde_points'): "N_pde (已統一命名標準)",
+    ('sampling', 'pde_points'): "N_pde (已統一命名標準)",
 }
 
 # =============================================================================
@@ -159,6 +161,21 @@ def check_config_keys(config_path: str) -> Tuple[bool, List[str], List[str]]:
                 f"❌ 使用已移除的舊鍵名 '{dotted_path}'\n"
                 f"   修復: 改為 {replacement}"
             )
+    
+    # 檢查 1.6: Curriculum stages 中的 pde_points
+    if 'curriculum' in config and isinstance(config['curriculum'], dict):
+        if 'stages' in config['curriculum']:
+            stages = config['curriculum']['stages']
+            if isinstance(stages, list):
+                for i, stage in enumerate(stages):
+                    if isinstance(stage, dict):
+                        if 'sampling' in stage and isinstance(stage['sampling'], dict):
+                            if 'pde_points' in stage['sampling']:
+                                errors.append(
+                                    f"❌ Curriculum stage {i+1} 使用已棄用的 'pde_points'\n"
+                                    f"   位置: curriculum.stages[{i}].sampling.pde_points\n"
+                                    f"   修復: 改為 N_pde"
+                                )
     
     # 檢查 2: 檢查 losses 段落內容
     if 'losses' in config:

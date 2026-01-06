@@ -79,41 +79,24 @@ sensors:
   spatial_coverage: optimal
 model:
   type: fourier_vs_mlp
-  in_dim: 3
-  out_dim: 4
+  in_dim: 3  # [x, y, z] or [t, x, y] depending on problem
+  out_dim: 4  # [u, v, w, p] or [u, v, p] for 2D
   width: 256
   depth: 8
   activation: sine
+  
+  # ========== Fourier Features 配置 ==========
+  # 可選配置方式：
+  # 
+  # 方式 1: 標準 Fourier（通用配置）
   fourier_features:
-    type: standard
-    fourier_m: 32
-    fourier_sigma: 5.0
+    type: hybrid
+    axes:
+      0: {type: standard, n_modes: 24, sigma: 12.5, use_2pi: true}
+      1: {type: periodic, domain_size: 25.13, n_modes: 16}
+      2: {type: standard, n_modes: 20, sigma: 5.0, use_2pi: true}
+      3: {type: periodic, domain_size: 9.42, n_modes: 16}
     trainable_fourier: false
-    fourier_use_2pi: true
-    axes_config:
-      x:
-      - 1
-      - 2
-      y: []
-      z:
-      - 1
-      - 2
-    full_axes_config:
-      x:
-      - 1
-      - 2
-      - 4
-      - 8
-      y: []
-      z:
-      - 1
-      - 2
-      - 4
-      - 8
-    domain_lengths:
-      x: 25.13
-      y: 2.0
-      z: 9.42
   output_variables:
   - u
   - v
@@ -168,6 +151,16 @@ physics:
     periodic_z: true
     pressure_driven: true
     mean_pressure_gradient: 0.0025
+    
+    # 🔧 壁面邊界條件：Hard Constraint（距離函數）
+    # 推薦用於 channel flow 等有壁面的流動問題
+    hard_constraint:
+      enabled: false  # 是否啟用 hard constraint（預設關閉，需根據問題類型手動開啟）
+      form: cosh  # 距離函數形式：'quadratic' | 'cosh' | 'sin' [推薦: cosh]
+      y_range: [-1.0, 1.0]  # y 座標範圍（必須與 domain.y_range 一致）
+      constrained_vars: [u, v, w]  # 需要約束的變量（通常為速度分量）
+      y_axis_index: 2  # y 在輸入座標中的索引 [x, y, z] -> 1; [t, x, y, z] -> 2
+      alpha: 10.0  # cosh 形式的陡度參數（僅用於 form='cosh'）[推薦: 10.0]
 losses:
   data_weight: 10.0
   momentum_x_weight: 1.0
@@ -228,7 +221,7 @@ training:
     patience: 100
     min_delta: 1.0e-06
   sampling:
-    pde_points: 8000
+    N_pde: 8000
     boundary_points: 2000
     wall_clustering: 0.0
     adaptive_collocation:

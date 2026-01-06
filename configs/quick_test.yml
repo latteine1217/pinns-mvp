@@ -63,17 +63,22 @@ sensors:
 
 model:
   type: fourier_vs_mlp
-  in_dim: 3
-  out_dim: 3
+  in_dim: 3  # [t, x, y]
+  out_dim: 3  # [u, v, p]
   width: 128  # 減小網絡寬度
   depth: 4    # 減小網絡深度
   activation: swish
   block_type: resnet
+  
+  # ========== Fourier Features 配置 ==========
+  # 方式 1: 標準 Fourier（當前使用）
   fourier_features:
-    type: standard
-    fourier_m: 8  # 減少 Fourier 特徵
-    fourier_sigma: 4.0
-    include_input: true
+    type: hybrid
+    axes:
+      0: {type: standard, n_modes: 12, sigma: 8.0, use_2pi: true}
+      1: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
+      2: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
+    trainable_fourier: false
   initialization:
     type: siren
     first_omega_0: 30.0
@@ -121,9 +126,8 @@ training:
   early_stopping:
     enabled: false
   sampling:
-    pde_points: 8000  # 減少 PDE 配點
+    N_pde: 1000  # 減少 PDE 配點（Kolmogorov 使用的欄位名稱）
     boundary_points: 200  # 減少邊界點
-    N_pde: 1000  # Kolmogorov 使用的欄位名稱
 
 losses:
   sensor:

@@ -304,12 +304,20 @@ class ConfigValidator:
                 )
             else:
                 ff_type = ff_cfg.get('type')
-                if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+                if ff_type not in {'standard', 'axis_selective', 'hybrid', 'disabled'}:
                     self.errors.append(
                         "❌ model.fourier_features.type 必須是 "
-                        "'standard' / 'axis_selective' / 'disabled'"
+                        "'standard' / 'axis_selective' / 'hybrid' / 'disabled'"
                     )
-                if ff_type != 'disabled':
+                
+                if ff_type == 'hybrid':
+                    # hybrid 類型需要 axes 配置
+                    if 'axes' not in ff_cfg:
+                        self.errors.append(
+                            "❌ model.fourier_features.type='hybrid' 時必須提供 'axes' 配置"
+                        )
+                elif ff_type != 'disabled':
+                    # standard 和 axis_selective 需要 fourier_m 和 fourier_sigma
                     if 'fourier_m' not in ff_cfg or 'fourier_sigma' not in ff_cfg:
                         self.errors.append(
                             "❌ Fourier features 啟用時必須提供 "

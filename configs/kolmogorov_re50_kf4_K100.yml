@@ -81,17 +81,24 @@ sensors:
   sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
 model:
   type: fourier_vs_mlp
-  in_dim: 3
-  out_dim: 3
+  in_dim: 3  # [t, x, y]
+  out_dim: 3  # [u, v, p]
   width: 256
   depth: 6
   activation: swish
   block_type: resnet
+  
+  # ========== Fourier Features 配置 ==========
+  # 可選配置方式：
+  # 
+  # 方式 1: 標準 Fourier（當前使用，需要 periodicity_weight 軟約束）
   fourier_features:
-    type: standard
-    fourier_m: 16
-    fourier_sigma: 4.0
-    include_input: true
+    type: hybrid
+    axes:
+      0: {type: standard, n_modes: 12, sigma: 8.0, use_2pi: true}
+      1: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
+      2: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
+    trainable_fourier: false
   initialization:
     type: siren
     first_omega_0: 30.0
@@ -121,13 +128,14 @@ physics:
   boundary_conditions:
     periodic_x: true
     periodic_y: true
+# ========== 損失函數配置 ==========
 losses:
   data_weight: 10.0
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0
   continuity_weight: 2.0
   prior_weight: 10.0
-  periodicity_weight: 10.0
+  periodicity_weight: 10.0  # 使用 type: standard 時需要；使用 type: hybrid 時設為 0
   normalize_losses: false
   adaptive_weighting: false
   causal_weighting: true
@@ -176,7 +184,7 @@ curriculum:
     lowfi_prior:
       consistency_weight: 2.0
     sampling:
-      pde_points: 8000
+      N_pde: 8000
       boundary_points: 1000
   - name: Stage2_PhysicsRamp
     epoch_range:
@@ -192,7 +200,7 @@ curriculum:
     lowfi_prior:
       consistency_weight: 1.0
     sampling:
-      pde_points: 8000
+      N_pde: 8000
       boundary_points: 1000
   - name: Stage3_StrongPhysics
     epoch_range:
@@ -208,7 +216,7 @@ curriculum:
     lowfi_prior:
       consistency_weight: 0.1
     sampling:
-      pde_points: 8000
+      N_pde: 8000
       boundary_points: 1000
 evaluation:
   grid_resolution:

@@ -221,6 +221,11 @@ class Trainer:
         else:
             # 從 config 創建（需要 training_data）
             self._init_normalizers(config, components.training_data)
+        
+        # hard_constraint_applicator（可選）
+        self.hard_constraint_applicator = components.hard_constraint_applicator
+        if self.hard_constraint_applicator is not None:
+            logging.info("✅ Hard constraint applicator 已啟用（壁面邊界條件）")
 
         # 7. 訓練狀態初始化
         self.epoch = 0
@@ -711,6 +716,15 @@ class Trainer:
 
         # 前向傳播
         predictions_norm = self.model(model_coords)
+        
+        # 應用 hard constraint（如果配置）
+        if hasattr(self, 'hard_constraint_applicator') and self.hard_constraint_applicator is not None:
+            # Hard constraint 應該在標準化輸出上應用
+            # 這確保距離函數正確作用於網路原始輸出
+            predictions_norm = self.hard_constraint_applicator.apply(
+                coords_physical,  # 使用物理座標（包含真實的 y）
+                predictions_norm
+            )
 
         # 反標準化
         var_order = self._infer_variable_order(predictions_norm.shape[1], context=context, data_batch=data_batch if context == 'sensors' else None)

@@ -1,0 +1,151 @@
+# ========== Channel Flow 3D+T 週期性嵌入範例配置 ==========
+# 
+# 物理場景：槽道流 (Channel Flow)
+# - x 方向：流向（週期性）
+# - y 方向：壁法向（非週期，有壁面邊界）
+# - z 方向：展向（週期性）
+# - t 方向：時間（非週期）
+# 
+# 編碼策略：
+# - t (軸0): 標準 Fourier (非週期)
+# - x (軸1): 週期性嵌入 (流向週期)
+# - y (軸2): 標準 Fourier (壁法向，非週期)
+# - z (軸3): 週期性嵌入 (展向週期)
+
+experiment:
+  name: channel_flow_periodic_example
+  version: v1.0_hybrid_fourier
+  seed: 42
+  device: auto
+  precision: float32
+  description: |
+    Channel flow with hybrid Fourier embedding:
+    - x (streamwise): periodic embedding
+    - y (wall-normal): standard Fourier (non-periodic, wall BC)
+    - z (spanwise): periodic embedding
+    - t (time): standard Fourier (non-periodic)
+
+# ========== 模型配置：混合 Fourier 嵌入 ==========
+model:
+  type: fourier_vs_mlp
+  in_dim: 4   # [t, x, y, z]
+  out_dim: 4  # [u, v, w, p]
+  width: 256
+  depth: 6
+  activation: swish
+  block_type: resnet
+  
+  # 🔧 混合 Fourier Features 配置
+  fourier_features:
+    type: hybrid  # 使用混合型 Fourier 嵌入
+    
+    # 軸向配置：針對每個物理軸選擇合適的編碼方式
+    axes:
+      # 軸 0：時間 t（標準 Fourier，非週期）
+      0:
+        type: standard
+        n_modes: 12
+        sigma: 4.0
+        use_2pi: true
+      
+      # 軸 1：流向 x（週期性嵌入）
+      1:
+        type: periodic
+        domain_size: 6.283185307179586  # 2π (假設流向週期為 2π)
+        n_modes: 8
+      
+      # 軸 2：壁法向 y（標準 Fourier，非週期，有壁面）
+      2:
+        type: standard
+        n_modes: 10
+        sigma: 3.0
+        use_2pi: true
+      
+      # 軸 3：展向 z（週期性嵌入）
+      3:
+        type: periodic
+        domain_size: 3.141592653589793  # π (假設展向週期為 π)
+        n_modes: 8
+    
+    trainable_fourier: false
+  
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+  
+  output_variables:
+  - u  # 流向速度
+  - v  # 壁法向速度
+  - w  # 展向速度
+  - p  # 壓力
+
+# ========== 物理配置 ==========
+physics:
+  type: navier_stokes_3d
+  nu: 0.0001  # 動黏度 (Re = U*H/nu)
+  rho: 1.0
+  domain:
+    x_range: [0.0, 6.283185307179586]  # 流向（週期）
+    y_range: [-1.0, 1.0]               # 壁法向（非週期，y=-1 和 y=1 有壁面）
+    z_range: [0.0, 3.141592653589793]  # 展向（週期）
+  boundary_conditions:
+    periodic_x: true   # 流向週期
+    periodic_y: false  # 壁法向非週期
+    periodic_z: true   # 展向週期
+    
+    # 🔧 壁面邊界條件：Hard Constraint（距離函數）
+    hard_constraint:
+      enabled: true  # 啟用 hard constraint
+      form: cosh  # 距離函數形式：'quadratic' | 'cosh' | 'sin' [預設: cosh]
+      y_range: [-1.0, 1.0]  # y 座標範圍（必須與 domain.y_range 一致）
+      constrained_vars: [u, v, w]  # 需要約束的變量
+      y_axis_index: 2  # y 在輸入座標中的索引 [t, x, y, z] -> 2
+      alpha: 10.0  # cosh 形式的陡度參數（僅用於 form='cosh'）[預設: 10.0]
+    
+    # ⚠️  保留 soft constraint 作為備用（權重設為 0 以禁用）
+    wall_bc:
+      y_min: {u: 0.0, v: 0.0, w: 0.0}  # 下壁面無滑移
+      y_max: {u: 0.0, v: 0.0, w: 0.0}  # 上壁面無滑移
+
+# ========== 損失函數配置 ==========
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  momentum_z_weight: 1.0
+  continuity_weight: 2.0
+  prior_weight: 5.0
+  # 🔧 週期性由嵌入保證，無需 periodicity_weight
+  normalize_losses: false
+  adaptive_weighting: false
+
+# ========== 訓練配置 ==========
+training:
+  optimizer:
+    type: soap
+    lr: 0.001
+    betas: [0.9, 0.999]
+    weight_decay: 1.0e-05
+  lr_scheduler:
+    type: step
+    gamma: 0.5
+    step_size: 2000
+  epochs: 10000
+  batch_size: 20000
+  validation_freq: 50
+  checkpoint_freq: 100
+  sampling:
+    N_pde: 15000
+    adaptive_sampling: false
+    boundary_points: 2000
+
+# ========== 輸出配置 ==========
+output:
+  checkpoint_dir: ./checkpoints/channel_flow_periodic_example
+  results_dir: ./results/channel_flow_periodic_example
+  visualization_dir: ./results/channel_flow_periodic_example/visualizations
+
+logging:
+  level: info
+  log_freq: 10

@@ -1,17 +1,21 @@
 experiment:
-  name: config_template_example
+  name: default_experiment
   version: v1.0
   seed: 42
   device: auto
   precision: float32
-  description: Example config template
+  description: Standard experiment
+reproducibility:
+  deterministic: true
+  benchmark: false
+  num_workers: 4
 data:
   source: jhtdb
   dataset: channel
   jhtdb_config:
     enabled: true
     dataset_name: channel
-    description: 通道流 (Re_tau=1000)
+    description: Channel flow
     resolution:
       x: 2048
       y: 512
@@ -26,68 +30,78 @@ data:
     - w
     - p
   normalize: true
-  cache_dir: ./data/jhtdb/channel_flow_re1000
-  noise_sigma: 0.02
-  dropout_prob: 0.1
+  cache_dir: ./data/jhtdb/cache
+lowfi_prior:
+  enabled: false
+  data_path: ''
+  data_type: rans
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      w: w
+      k: k
+      nu_t: nu_t
+      epsilon: epsilon
+    coord_mapping:
+      X: X
+      Y: Y
+      Z: Z
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+    quality_check: true
+  preprocessing:
+    enabled: true
+  consistency_weight: 0.1
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    w: 1.0
+    p: 0.5
+  spatial_weighting:
+    enabled: false
+    boundary_penalty: 2.0
+    center_weight: 1.0
 normalization:
   type: training_data_norm
   params: {}
+  noise_sigma: 0.0
+  dropout_prob: 0.0
   slice_config:
     plane: xy
     z_position: 4.71
     steady_state: true
 sensors:
-  K: 500
+  K: 100
   selection_method: qr_pivot
   spatial_coverage: optimal
-  hybrid_config:
-    wall_ratio: 0.4
-    qr_ratio: 0.6
-    wall_thickness: 0.1
 model:
   type: fourier_vs_mlp
-  in_dim: 4
-  out_dim: 4
+  in_dim: 3  # [x, y, z] or [t, x, y] depending on problem
+  out_dim: 4  # [u, v, w, p] or [u, v, p] for 2D
   width: 256
   depth: 8
   activation: sine
-  use_residual: false
-  use_layer_norm: false
-  dropout: 0.0
-  block_type: dense
-  res_block_alpha_init: 0.0
-  use_rwf: false
-  rwf_scale_mean: 1.0
-  rwf_scale_std: 0.1
-  sine_omega_0: 1.0
+  
+  # ========== Fourier Features 配置 ==========
+  # 可選配置方式：
+  # 
+  # 方式 1: 標準 Fourier（通用配置）
   fourier_features:
-    type: axis_selective
-    axes_config:
-      x:
-      - 1
-      - 2
-      y: []
-      z:
-      - 1
-      - 2
-    full_axes_config:
-      x:
-      - 1
-      - 2
-      - 4
-      - 8
-      y: []
-      z:
-      - 1
-      - 2
-      - 4
-      - 8
-    domain_lengths:
-      x: 25.13
-      y: 2.0
-      z: 9.42
-    fourier_m: 32
-    fourier_sigma: 5.0
+    type: hybrid
+    axes:
+      0: {type: standard, n_modes: 24, sigma: 12.5, use_2pi: true}
+      1: {type: periodic, domain_size: 25.13, n_modes: 16}
+      2: {type: standard, n_modes: 20, sigma: 5.0, use_2pi: true}
+      3: {type: periodic, domain_size: 9.42, n_modes: 16}
+    trainable_fourier: false
+  output_variables:
+  - u
+  - v
+  - w
+  - p
   scaling:
     learnable: true
     input_norm: channel_flow
@@ -95,11 +109,7 @@ model:
     friction_velocity: 0.04997
     channel_half_height: 1.0
     viscous_length: 0.001
-  output_variables:
-  - u
-  - v
-  - w
-  - p
+  use_gradient_checkpointing: false
 physics:
   type: vs_pinn_channel_flow
   nu: 5.0e-05
@@ -110,10 +120,9 @@ physics:
       N_y: 12.0
       N_z: 2.0
     loss_config:
-      warmup_epochs: 10
+      warmup_epochs: 0
     boundary_config:
       boundary_band_width: 0.005
-    use_gradient_checkpointing: false
     enable_rans: false
   channel_flow:
     Re_tau: 1000.0
@@ -122,13 +131,13 @@ physics:
     pressure_gradient: 0.0025
   domain:
     x_range:
-    - 0
+    - 0.0
     - 25.13
     y_range:
     - -1.0
     - 1.0
     z_range:
-    - 0
+    - 0.0
     - 9.42
   boundary_conditions:
     wall_velocity:
@@ -151,24 +160,39 @@ losses:
   wall_constraint_weight: 10.0
   periodicity_weight: 10.0
   pressure_gradient_weight: 1.0
+  inlet_weight: 10.0
+  initial_condition_weight: 100.0
+  bulk_velocity_weight: 2.0
+  centerline_dudy_weight: 1.0
+  centerline_v_weight: 1.0
+  pressure_reference_weight: 0.0
   prior_weight: 0.1
   source_l1: 1.0e-06
   gradient_penalty: 0.0001
-  adaptive_weighting: true
-  weight_update_freq: 50
-  grad_norm_alpha: 1.5
+  
+  # GradNorm 自適應權重（對齊 JaxPI）
+  adaptive_weighting: false           # 是否啟用 GradNorm
+  weight_update_freq: 1000            # 權重更新頻率（JaxPI 默認 1000）
+  grad_norm_momentum: 0.9             # EMA 平滑係數（對齊 JaxPI，0 表示不使用）
+  grad_norm_alpha: 1.5                # 權重更新激進程度（非 JaxPI 參數）
+  grad_norm_normalize: true           # 權重正規化開關（true=PINNx 穩定模式, false=JaxPI 精確對齊）
   adaptive_loss_terms:
   - data
   - momentum_x
   - momentum_y
   - momentum_z
-  - divergence
+  - continuity
   - wall_constraint
   - periodicity
-  causal_weighting: false
+  
+  # 因果權重（Causal Weighting）- 適用於時間依賴問題（對齊 JaxPI）
+  causal_weighting: false             # 是否啟用因果權重
+  causal_tol: 1.0                     # JaxPI: causal_tol，控制權重衰減速度
+  num_chunks: 32                      # JaxPI: num_chunks，時間分塊數（Burgers=32, NS=16）
+  
 training:
   optimizer:
-    type: soap
+    type: adam
     lr: 0.001
     weight_decay: 1.0e-05
     precondition_frequency: 2
@@ -177,46 +201,35 @@ training:
     type: step
     step_size: 1000
     gamma: 0.9
-  epochs: 2000
+  epochs: 1000
   batch_size: 1024
-  validation_freq: 100
-  checkpoint_freq: 500
-  log_interval: 50
+  validation_freq: 50
+  checkpoint_freq: 100
+  log_interval: 10
   early_stopping:
-    enabled: true
-    patience: 500
+    enabled: false
+    patience: 100
     min_delta: 1.0e-06
   sampling:
-    pde_points: 8000
-    boundary_points: 5000
-    wall_clustering: 0.3
-    adaptive_sampling: false
+    N_pde: 8000
+    boundary_points: 2000
+    wall_clustering: 0.0
     adaptive_collocation:
       enabled: false
-      trigger:
-        method: epoch_interval
-        epoch_interval: 1000
-      resampling_strategy: incremental_replace
-      incremental_replace:
-        keep_ratio: 0.7
-        replace_ratio: 0.3
-        removal_criterion: leverage_score
-      residual_qr:
-        enabled: true
-        candidate_pool_size: 2000
-        spatial_constraints:
-          min_distance: 0.02
-      track_history: true
-      save_snapshots: false
   gradient_clip: 1.0
+  num_time_windows: 1
+  time_window_overlap: 0.0
   amp:
     enabled: false
+fourier_annealing:
+  enabled: false
 curriculum:
   enable: false
+  is_transition: false
+  stage_name: ''
+  weights: {}
 ensemble:
   enable: false
-  n_models: 5
-  diversity_weight: 0.1
 evaluation:
   grid_resolution:
   - 128
@@ -224,16 +237,16 @@ evaluation:
   - 64
   metrics:
   - relative_l2
-  - wall_shear_stress
   - mass_conservation
+  - wall_shear_stress
   - mean_velocity_profile
   thresholds:
-    l2_error: 0.15
-    mass_conservation_error: 0.01
-    wall_shear_stress_error: 0.08
-    mean_profile_correlation: 0.9
+    l2_error: 0.3
+    mass_conservation_error: 0.001
+    wall_shear_stress_error: 0.3
 physics_validation:
   enabled: true
+  strict_mode: false
   save_metrics: true
   thresholds:
     mass_conservation: 0.01
@@ -241,38 +254,13 @@ physics_validation:
     boundary_condition: 0.001
 logging:
   level: info
-  log_freq: 50
-  save_predictions: true
+  log_freq: 10
+  save_predictions: false
   wandb: true
+  save_loss_history: true
+  save_weight_evolution: false
   log_nonlinearities: false
 output:
-  checkpoint_dir: ./checkpoints/your_experiment_name
-  results_dir: ./results/your_experiment_name
-  visualization_dir: ./results/your_experiment_name/visualizations
-test_acceptance:
-  stability:
-  - no_nan_inf: true
-  - loss_finite: true
-  - gradient_stable: true
-  performance:
-  - u_l2_error_target: 0.15
-  - loss_converged: true
-  - pde_loss_ratio_min: 0.3
-usage_notes: "\U0001F4DD 配置文件使用指南：\n\n1️⃣ 快速開始（複製模板）：\n   cp configs/config_template_example.yml\
-  \ configs/my_experiment.yml\n\n2️⃣ 必須修改的欄位（⚠️ 重要）：\n   - experiment.name：實驗名稱\n\
-  \   - output.checkpoint_dir：檢查點目錄\n   - output.results_dir：結果目錄\n   - sensors.K：感測點數量\n\
-  \n3️⃣ 推薦配置組合：\n\n   \U0001F3C3 快速測試（5-10 分鐘）：\n     - epochs: 100\n     - K: 50\n\
-  \     - width: 128, depth: 4\n     - pde_points: 2048\n     - adaptive_weighting:\
-  \ false\n\n   \U0001F4CA 標準訓練（1-2 小時）：\n     - epochs: 2000\n     - K: 500\n   \
-  \  - width: 256, depth: 8\n     - pde_points: 8000\n     - adaptive_weighting:\
-  \ true\n     - grad_norm_alpha: 1.5\n\n   \U0001F680 生產級（4-8 小時）：\n     - epochs:\
-  \ 5000\n     - K: 1024\n     - width: 512, depth: 10\n     - pde_points: 20000\n\
-  \     - adaptive_weighting: true\n     - grad_norm_alpha: 1.5\n     - enable curriculum\
-  \ learning\n\n4️⃣ 關鍵參數調優順序：\n   1. normalization.type: 'training_data_norm'（必須）\n\
-  \   2. losses.grad_norm_alpha: 1.5-2.0（關鍵）\n   3. losses.wall_constraint_weight:\
-  \ 10.0-15.0（防止壁面剪應力歸零）\n   4. training.sampling.wall_clustering: 0.2-0.4（壁面解析度）\n\
-  \n5️⃣ 常見問題排查：\n   - NaN/Inf：降低學習率、啟用梯度裁剪、檢查標準化\n   - PDE ratio < 10%：增加 grad_norm_alpha（1.5-2.0）\n\
-  \   - 壁面剪應力歸零：增加 wall_constraint_weight（10-15）\n   - 訓練過慢：減少 pde_points、啟用 AMP\n\
-  \n6️⃣ 架構變更（2025-10-20）：\n   ✅ 統一使用：fourier_vs_mlp\n   ✅ 功能保持：所有特徵已整合至 fourier_vs_mlp\n\
-  \n\U0001F4DA 更多資訊請參閱：\n   - 完整文檔：CLAUDE.md\n   - 技術細節：TECHNICAL_DOCUMENTATION.md\n\
-  \   - 模板範例：configs/templates/\n"
+  checkpoint_dir: ./checkpoints
+  results_dir: ./results
+  visualization_dir: ./visualizations

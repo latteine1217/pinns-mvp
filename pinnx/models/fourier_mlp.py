@@ -180,6 +180,68 @@ class FourierFeatures(nn.Module):
                f'multiscale={self.multiscale}, use_2pi={self.use_2pi}, out_dim={self.out_dim}'
 
 
+class PeriodicFourierFeatures(nn.Module):
+    """
+    週期性 Fourier 特徵編碼層 - 針對週期邊界條件優化
+    
+    將週期域上的座標映射為嚴格週期性的 Fourier 特徵，確保邊界條件自動滿足。
+    對於週期域 x ∈ [0, L]，使用整數倍基頻進行編碼：
+        φ(x) = [sin(2πkx/L), cos(2πkx/L)] for k = 1, 2, ..., n_modes
+    
+    優勢：
+    1. 天然滿足週期邊界條件：φ(0) = φ(L)
+    2. 頻率與域週期對齊，避免頻譜洩漏
+    3. 不需要額外的週期性損失函數懲罰
+    4. 適合 Kolmogorov flow、週期性槽道流等週期域問題
+    
+    Args:
+        domain_size: 週期域大小 (例如 2π for Kolmogorov flow)
+        n_modes: 傅立葉模態數量 (k = 1, 2, ..., n_modes)
+        trainable: 是否讓頻率可訓練 (預設 False，保持週期性)
+    
+    Example:
+        >>> # Kolmogorov flow: x, y ∈ [0, 2π]
+        >>> periodic_embed = PeriodicFourierFeatures(domain_size=2*np.pi, n_modes=8)
+        >>> x = torch.tensor([[0.0], [np.pi], [2*np.pi]])
+        >>> features = periodic_embed(x)
+        >>> # features[0] ≈ features[2] (週期性保證)
+    """
+    
+    def __init__(self, 
+                 domain_size: float = 2.0 * np.pi, 
+                 n_modes: int = 8,
+                 trainable: bool = False):
+        super().__init__()
+        self.domain_size = domain_size
+        self.n_modes = n_modes
+        self.out_dim = 2 * n_modes  # [sin, cos] pairs
+        
+        # 生成週期性頻率：k = 1, 2, ..., n_modes
+        # ω_k = 2πk / L
+        frequencies = 2.0 * np.pi * torch.arange(1, n_modes + 1, dtype=torch.float32) / domain_size
+        
+        if trainable:
+            self.frequencies = nn.Parameter(frequencies)
+        else:
+            self.register_buffer('frequencies', frequencies)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [batch_size, 1] 單維座標 (例如 x 或 y)
+        Returns:
+            [batch_size, 2*n_modes] 週期性 Fourier 特徵 [sin(ω₁x), ..., sin(ωₙx), cos(ω₁x), ..., cos(ωₙx)]
+        """
+        # 計算相位：z = [ω₁x, ω₂x, ..., ωₙx]
+        z = x * self.frequencies.unsqueeze(0)  # [batch, n_modes]
+        
+        # 返回 [sin, cos] 組合
+        return torch.cat([torch.sin(z), torch.cos(z)], dim=-1)
+    
+    def extra_repr(self) -> str:
+        return f'domain_size={self.domain_size:.4f}, n_modes={self.n_modes}, out_dim={self.out_dim}'
+
+
 class SineActivation(nn.Module):
     """
     Sine 激活函數 - 適合高頻特徵捕捉
@@ -511,7 +573,8 @@ class PINNNet(nn.Module):
                  fourier_normalize_input: bool = False, # 🔧 是否在 Fourier 前標準化輸入（修復 VS-PINN 縮放問題）
                  input_scale_factors: Optional[torch.Tensor] = None, # 🔧 輸入縮放因子 [N_x, N_y, N_z]（用於 VS-PINN）
                  block_type: str = 'dense', # 🔧 block 型式：dense / resnet / piratenet
-                 res_block_alpha_init: float = 0.0): # 🔧 resnet block 的 alpha 初值（對齊 PirateNet 論文）
+                 res_block_alpha_init: float = 0.0, # 🔧 resnet block 的 alpha 初值（對齊 PirateNet 論文）
+                 hybrid_fourier_config: Optional[Dict[int, Dict[str, Any]]] = None): # 🔧 混合 Fourier 配置（軸向選擇性）
         
         super().__init__()
         
@@ -536,13 +599,23 @@ class PINNNet(nn.Module):
         
         # Fourier 特徵編碼
         if use_fourier:
-            self.fourier = FourierFeatures(
-                in_dim, fourier_m, fourier_sigma, 
-                multiscale=fourier_multiscale,
-                trainable=trainable_fourier,
-                use_2pi=fourier_use_2pi
-            )
-            input_features = self.fourier.out_dim
+            if hybrid_fourier_config is not None:
+                # 🔧 使用混合 Fourier 特徵（軸向選擇性）
+                from .hybrid_fourier import HybridFourierFeatures
+                self.fourier = HybridFourierFeatures(
+                    axes_config=hybrid_fourier_config,
+                    trainable=trainable_fourier
+                )
+                input_features = self.fourier.out_dim
+            else:
+                # 使用標準 Fourier 特徵
+                self.fourier = FourierFeatures(
+                    in_dim, fourier_m, fourier_sigma, 
+                    multiscale=fourier_multiscale,
+                    trainable=trainable_fourier,
+                    use_2pi=fourier_use_2pi
+                )
+                input_features = self.fourier.out_dim
         else:
             self.fourier = None
             input_features = in_dim
@@ -822,8 +895,16 @@ class PINNNet(nn.Module):
                 width = layer.out_features
         
         fourier_features = 0
+        fourier_type = 'none'
         if self.use_fourier and self.fourier is not None:
-            fourier_features = self.fourier.m
+            if hasattr(self.fourier, 'm'):
+                # 標準 FourierFeatures
+                fourier_features = self.fourier.m
+                fourier_type = 'standard'
+            elif hasattr(self.fourier, 'out_dim'):
+                # HybridFourierFeatures 或其他類型
+                fourier_features = self.fourier.out_dim
+                fourier_type = self.fourier.__class__.__name__
         
         use_residual = False
         use_layer_norm = False
@@ -846,6 +927,7 @@ class PINNNet(nn.Module):
             'width': width,
             'total_params': self.get_num_params(),
             'fourier_features': fourier_features,
+            'fourier_type': fourier_type,
             'use_residual': use_residual,
             'use_layer_norm': use_layer_norm,
             'use_rwf': use_rwf,
@@ -942,17 +1024,37 @@ def create_pinn_model(config: dict) -> nn.Module:
             raise ValueError("Model config missing required dict: 'fourier_features'")
 
         ff_type = ff_cfg.get('type')
-        if ff_type not in {'standard', 'axis_selective', 'disabled'}:
+        if ff_type not in {'standard', 'axis_selective', 'hybrid', 'disabled'}:
             raise ValueError(
-                "fourier_features.type must be 'standard' / 'axis_selective' / 'disabled'"
+                "fourier_features.type must be 'standard' / 'axis_selective' / 'hybrid' / 'disabled'"
             )
 
         use_fourier = ff_type != 'disabled'
+        hybrid_fourier_config = None
+        
         if use_fourier:
-            fourier_m = int(ff_cfg.get('fourier_m'))
-            fourier_sigma = float(ff_cfg.get('fourier_sigma'))
-            if fourier_m <= 0:
-                raise ValueError("fourier_features.fourier_m must be > 0 when enabled")
+            if ff_type == 'hybrid':
+                # 🔧 混合 Fourier 配置（軸向選擇性）
+                # 從配置讀取每個軸的設定
+                axes_cfg = ff_cfg.get('axes', {})
+                if not axes_cfg:
+                    raise ValueError("fourier_features.type='hybrid' requires 'axes' configuration")
+                
+                # 構建 HybridFourierFeatures 的配置格式
+                hybrid_fourier_config = {}
+                for axis_idx, axis_cfg in axes_cfg.items():
+                    if isinstance(axis_idx, str):
+                        axis_idx = int(axis_idx)
+                    hybrid_fourier_config[axis_idx] = axis_cfg
+                
+                fourier_m = 0  # 不使用
+                fourier_sigma = 0.0  # 不使用
+            else:
+                # 標準或軸向選擇性 Fourier
+                fourier_m = int(ff_cfg.get('fourier_m'))
+                fourier_sigma = float(ff_cfg.get('fourier_sigma'))
+                if fourier_m <= 0:
+                    raise ValueError("fourier_features.fourier_m must be > 0 when enabled")
         else:
             fourier_m = 0
             fourier_sigma = 0.0
@@ -990,7 +1092,8 @@ def create_pinn_model(config: dict) -> nn.Module:
             fourier_normalize_input=config.get('fourier_normalize_input', False),
             input_scale_factors=input_scale_factors,
             block_type=config.get('block_type', 'dense'),
-            res_block_alpha_init=config.get('res_block_alpha_init', 0.0)  # 對齊 PirateNet 論文
+            res_block_alpha_init=config.get('res_block_alpha_init', 0.0),  # 對齊 PirateNet 論文
+            hybrid_fourier_config=hybrid_fourier_config  # 🔧 混合 Fourier 配置
         )
 
     else:

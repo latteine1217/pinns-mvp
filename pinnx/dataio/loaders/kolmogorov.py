@@ -298,7 +298,7 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     
     # 5. PDE 配點採樣 (隨機時空採樣)
     # 從全域 (x, y, t) 中隨機採樣
-    N_pde = config.get('training', {}).get('sampling', {}).get('N_pde', 10000)
+    N_pde = config.get('training', {}).get('sampling', {}).get('N_pde', 8000)
     
     x_pde = torch.rand(N_pde, 1, device=device) * L
     y_pde = torch.rand(N_pde, 1, device=device) * L
