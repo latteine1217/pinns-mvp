@@ -187,7 +187,7 @@ training:
     patience: 500
     min_delta: 1.0e-06
   sampling:
-    pde_points: 10000
+    pde_points: 8000
     boundary_points: 5000
     wall_clustering: 0.3
     adaptive_sampling: false
@@ -264,7 +264,7 @@ usage_notes: "\U0001F4DD 配置文件使用指南：\n\n1️⃣ 快速開始（�
   \n3️⃣ 推薦配置組合：\n\n   \U0001F3C3 快速測試（5-10 分鐘）：\n     - epochs: 100\n     - K: 50\n\
   \     - width: 128, depth: 4\n     - pde_points: 2048\n     - adaptive_weighting:\
   \ false\n\n   \U0001F4CA 標準訓練（1-2 小時）：\n     - epochs: 2000\n     - K: 500\n   \
-  \  - width: 256, depth: 8\n     - pde_points: 10000\n     - adaptive_weighting:\
+  \  - width: 256, depth: 8\n     - pde_points: 8000\n     - adaptive_weighting:\
   \ true\n     - grad_norm_alpha: 1.5\n\n   \U0001F680 生產級（4-8 小時）：\n     - epochs:\
   \ 5000\n     - K: 1024\n     - width: 512, depth: 10\n     - pde_points: 20000\n\
   \     - adaptive_weighting: true\n     - grad_norm_alpha: 1.5\n     - enable curriculum\
