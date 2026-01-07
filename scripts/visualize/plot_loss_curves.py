@@ -178,8 +178,8 @@ def plot_loss_curves(arrays, output_dir):
         ax.semilogy(epochs, arrays['weighted_data_loss'], label='Weighted Data Loss', linewidth=1.5, alpha=0.8)
     if 'weighted_pde_loss' in arrays:
         ax.semilogy(epochs, arrays['weighted_pde_loss'], label='Weighted PDE Loss', linewidth=1.5, alpha=0.8)
-    if 'weighted_div_loss' in arrays:
-        ax.semilogy(epochs, arrays['weighted_div_loss'], label='Weighted Continuity Loss', linewidth=2, alpha=0.9, color='red')
+    if 'weighted_continuity_loss' in arrays:
+        ax.semilogy(epochs, arrays['weighted_continuity_loss'], label='Weighted Continuity Loss', linewidth=2, alpha=0.9, color='red')
     
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Loss (log scale)', fontsize=12)
