@@ -208,8 +208,37 @@ losses:
 - 支援 Optimizer: `adam`, `adamw`, `soap`, `lbfgs`, `sgd`
 - `soap` 專屬參數：`precondition_frequency`, `shampoo_beta`
 - `lbfgs` 參數會直接傳入 `torch.optim.LBFGS`（如 `max_iter`, `history_size`）
-- Time Window 訓練需設定：`num_time_windows`, `time_window_overlap`
 - 支援 `sampling.adaptive_collocation`（重採樣策略）
+
+#### Time Window 訓練配置
+
+Time Window 模式支援分段訓練時間演化問題（目前僅支援 Kolmogorov Flow）：
+
+```yaml
+training:
+  num_time_windows: 3           # > 1 啟用 Time Window
+  time_window_overlap: 0.1      # 窗口重疊比例（可選，預設 0.0）
+  transfer_learning: true       # 啟用遷移學習（可選）
+
+data:
+  kolmogorov_config:
+    enabled: true               # ✅ 必須啟用
+    time_range: [15.0, 25.0]   # ✅ 必須指定時間範圍
+    domain:                     # ✅ 必須指定空間域
+      x: [0.0, 12.566370614359172]
+      y: [0.0, 6.283185307179586]
+```
+
+**配置驗證規則**:
+1. `num_time_windows > 1` 時自動啟用 Time Window 模式
+2. 必須啟用 `data.kolmogorov_config.enabled = true`
+3. 必須指定 `data.kolmogorov_config.time_range`
+4. 窗口持續時間 = (t_end - t_start) / num_windows，建議 > 0.1s
+
+**常見錯誤**:
+- ❌ 缺少 `time_range`: "Time Window 配置錯誤：缺少時間範圍"
+- ❌ Kolmogorov Flow 未啟用: "Time Window mode requires Kolmogorov Flow enabled"
+- ⚠️ 窗口過短: "窗口持續時間過短：建議減少窗口數量"
 
 ### 5. lowfi_prior（低保真先驗）
 
