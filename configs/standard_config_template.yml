@@ -8,7 +8,10 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 4
+  num_workers: 8  # 推薦: CPU 核心數 / 6 (48 threads / 6 = 8)
+  pin_memory: true  # 啟用 CUDA 記憶體釘選 (P100/GPU 環境)
+  persistent_workers: true  # 保持 worker 持續運行，減少重啟開銷
+  prefetch_factor: 2  # 每個 worker 預先載入的 batch 數量
 data:
   source: jhtdb
   dataset: channel
@@ -185,7 +188,9 @@ losses:
   weight_update_freq: 1000            # 權重更新頻率（JaxPI 默認 1000）
   grad_norm_momentum: 0.9             # EMA 平滑係數（對齊 JaxPI，0 表示不使用）
   grad_norm_alpha: 1.5                # 權重更新激進程度（非 JaxPI 參數）
-  grad_norm_normalize: true           # 權重正規化開關（true=PINNx 穩定模式, false=JaxPI 精確對齊）
+  grad_norm_normalize: false          # [已棄用/無效] JaxPI 不使用權重正規化（設為 true 會觸發警告）
+  grad_norm_min_weight: 0.1           # 相對權重下界比例（10% 下界，v1.1.0+ 相對於 init_weights）
+  grad_norm_max_weight: 10.0          # 相對權重上界比例（1000% 上界，v1.1.0+ 相對於 init_weights）
   adaptive_loss_terms:
   - data
   - momentum_x
@@ -193,7 +198,8 @@ losses:
   - momentum_z
   - continuity
   - wall_constraint
-  - periodicity
+  - periodic_x      # VS-PINN 使用 x 方向週期性
+  - periodic_z      # VS-PINN 使用 z 方向週期性
   
   # 因果權重（Causal Weighting）- 適用於時間依賴問題（對齊 JaxPI）
   causal_weighting: false             # 是否啟用因果權重
@@ -207,10 +213,33 @@ training:
     weight_decay: 1.0e-05
     precondition_frequency: 2
     shampoo_beta: -1
+  # ========================================
+  # 學習率調度器配置
+  # ========================================
+  # 推薦配置（基於 JAXpi 經驗）：
+  #   type: warmup_exponential
+  #   warmup_steps: 2000
+  #   decay_rate: 0.9
+  #   decay_steps: 2000
+  #   min_lr: 1.0e-6
+  #
+  # 其他可用類型：
+  #   - warmup_cosine: Warmup + Cosine Annealing（PyTorch 標準）
+  #   - step: 階梯式衰減（簡單但不夠平滑）
+  #   - exponential: 指數衰減（無 warmup）
+  # ========================================
   lr_scheduler:
-    type: step
-    step_size: 1000
-    gamma: 0.9
+    type: warmup_exponential        # 推薦：Warmup + Exponential Decay（JAXpi 風格）
+    warmup_steps: 2000              # Warmup 步數（0 → base_lr）
+    decay_rate: 0.9                 # 每 decay_steps 乘以此係數
+    decay_steps: 2000               # 衰減週期（步數）
+    min_lr: 1.0e-6                  # 最小學習率（下界）
+    staircase: false                # 平滑衰減（false）或階梯式（true）
+    
+    # 舊配置（step scheduler，已不推薦）
+    # type: step
+    # step_size: 1000
+    # gamma: 0.9
   epochs: 1000
   batch_size: 1024
   validation_freq: 50

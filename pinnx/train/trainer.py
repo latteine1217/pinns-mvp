@@ -975,7 +975,6 @@ class Trainer:
             'momentum_x': losses['momentum_x_loss'],
             'momentum_y': losses['momentum_y_loss'],
             'continuity': losses['continuity_loss'],
-            'divergence': losses['continuity_loss'],  # 🔧 FIX: 別名，用於 combine_losses
         }
 
         # 邊界條件損失項

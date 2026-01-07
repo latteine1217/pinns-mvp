@@ -10,12 +10,13 @@ experiment:
   - quick_test
   - trainer_builder
   experiment_id: QUICK_TEST
-
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 4
-
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
 data:
   source: kolmogorov_dns
   dataset: re50_kf4
@@ -41,12 +42,10 @@ data:
       forcing_amplitude: 1.0
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
-
 lowfi_prior:
-  enabled: false  # 關閉 prior 加速測試
-
+  enabled: false
 normalization:
-  type: none  # 關閉 normalization 簡化測試
+  type: none
   variable_order:
   - u
   - v
@@ -54,30 +53,35 @@ normalization:
   params: {}
   noise_sigma: 0.0
   dropout_prob: 0.0
-
 sensors:
-  K: 50  # 減少感測器數量
-  selection_method: random  # 使用隨機選擇加速
+  K: 50
+  selection_method: random
   random_seed: 42
   sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
-
 model:
   type: fourier_vs_mlp
-  in_dim: 3  # [t, x, y]
-  out_dim: 3  # [u, v, p]
-  width: 128  # 減小網絡寬度
-  depth: 4    # 減小網絡深度
+  in_dim: 3
+  out_dim: 3
+  width: 128
+  depth: 4
   activation: swish
   block_type: resnet
-  
-  # ========== Fourier Features 配置 ==========
-  # 方式 1: 標準 Fourier（當前使用）
   fourier_features:
     type: hybrid
     axes:
-      0: {type: standard, n_modes: 12, sigma: 8.0, use_2pi: true}
-      1: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
-      2: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
+      0:
+        type: standard
+        n_modes: 12
+        sigma: 8.0
+        use_2pi: true
+      1:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 8
+      2:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 8
     trainable_fourier: false
   initialization:
     type: siren
@@ -87,12 +91,15 @@ model:
   - u
   - v
   - p
-
 physics:
   nu: 0.039374
   domain:
-    x_range: [0.0, 12.566370614359172]
-    y_range: [0.0, 6.283185307179586]
+    x_range:
+    - 0.0
+    - 12.566370614359172
+    y_range:
+    - 0.0
+    - 6.283185307179586
     periodic_dims:
     - x
     - y
@@ -101,10 +108,9 @@ physics:
     nu: 0.039374
     k_f: 4
     forcing_amplitude: 1.0
-  num_collocation: 1000  # 減少配點數量
-
+  num_collocation: 1000
 training:
-  epochs: 10  # 僅訓練 10 個 epoch
+  epochs: 10
   lr: 0.001
   batch_size: 256
   optimizer:
@@ -122,13 +128,12 @@ training:
     save_every: 5
     keep_best: true
   validation:
-    enabled: false  # 關閉驗證加速測試
+    enabled: false
   early_stopping:
     enabled: false
   sampling:
-    N_pde: 1000  # 減少 PDE 配點（Kolmogorov 使用的欄位名稱）
-    boundary_points: 200  # 減少邊界點
-
+    N_pde: 1000
+    boundary_points: 200
 losses:
   sensor:
     type: sensor
@@ -140,18 +145,17 @@ losses:
     weight: 1.0
   bc:
     type: boundary
-    enabled: false  # 週期域不需要 BC
-  prior_weight: 0.0  # 關閉 prior 加速測試
-  nu: 0.039374  # 物理黏度
-  rho: 1.0  # 密度
+    enabled: false
+  prior_weight: 0.0
+  nu: 0.039374
+  rho: 1.0
   weighting:
     method: gradnorm
     enabled: true
     alpha: 1.5
     update_every: 1
-
 logging:
   log_dir: ./log
   log_level: INFO
   wandb:
-    enabled: false  # 關閉 wandb 加速測試
+    enabled: false

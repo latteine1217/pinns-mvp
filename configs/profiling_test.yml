@@ -1,24 +1,15 @@
 experiment:
-  name: kolmogorov_re50_kf4_K100_periodic_fourier
-  version: v4.0_periodic_embedding
+  name: profiling_test
+  version: v1.0_profiling
   seed: 42
-  device: auto
+  device: mps
   precision: float32
-  description: 'Re=50 Kolmogorov Flow with Periodic Fourier Embedding (週期性嵌入).
-
-    - 空間軸 (x, y) 使用週期性 Fourier 嵌入 (保證邊界週期性)
-
-    - 時間軸 (t) 使用標準 Fourier random features
-
-    - 移除 periodicity_weight (不再需要軟約束)
-
-    '
-  group: kflow_periodic_embedding
+  description: 效能分析測試配置 (100 epochs)
+  group: profiling
   tags:
-  - kflow_re50
-  - K100
-  - periodic_fourier
-  experiment_id: PERIODIC_EMBEDDING_TEST
+  - profiling
+  - baseline
+  experiment_id: PROFILING_BASELINE
 reproducibility:
   deterministic: true
   benchmark: false
@@ -87,7 +78,7 @@ normalization:
     - 15.0
     - 35.0
 sensors:
-  K: 100
+  K: 30
   selection_method: precomputed
   sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
 model:
@@ -104,7 +95,7 @@ model:
       0:
         type: standard
         n_modes: 12
-        sigma: 4.0
+        sigma: 8.0
         use_2pi: true
       1:
         type: periodic
@@ -150,6 +141,7 @@ losses:
   momentum_y_weight: 1.0
   continuity_weight: 2.0
   prior_weight: 10.0
+  periodicity_weight: 10.0
   normalize_losses: false
   adaptive_weighting: false
   causal_weighting: true
@@ -157,27 +149,30 @@ losses:
   num_chunks: 20
 training:
   optimizer:
-    type: soap
+    type: adam
     lr: 0.001
     betas:
     - 0.9
     - 0.999
     weight_decay: 1.0e-05
   lr_scheduler:
-    type: step
-    gamma: 0.5
-    step_size: 2000
-  epochs: 10000
-  batch_size: 20000
-  validation_freq: 50
-  checkpoint_freq: 100
+    type: warmup_exponential
+    warmup_steps: 2000
+    decay_rate: 0.9
+    decay_steps: 2000
+    min_lr: 1.0e-06
+    staircase: false
+  epochs: 30
+  batch_size: 5000
+  validation_freq: 0
+  checkpoint_freq: 0
   log_interval: 10
   early_stopping:
     enabled: false
   sampling:
-    N_pde: 15000
+    N_pde: 3000
     adaptive_sampling: false
-    boundary_points: 1000
+    boundary_points: 200
   gradient_clip: 1.0
   amp:
     enabled: false
@@ -187,48 +182,19 @@ curriculum:
   - name: Stage1_Warmup_ModeratePrior
     epoch_range:
     - 0
-    - 2000
+    - 30
     weights:
       data: 10.0
       momentum_x: 1.0
       momentum_y: 1.0
       continuity: 2.0
+      periodicity: 10.0
       prior: 2.0
     lowfi_prior:
       consistency_weight: 2.0
     sampling:
-      N_pde: 8000
-      boundary_points: 1000
-  - name: Stage2_PhysicsRamp
-    epoch_range:
-    - 2000
-    - 6000
-    weights:
-      data: 10.0
-      momentum_x: 2.0
-      momentum_y: 2.0
-      continuity: 5.0
-      prior: 1.0
-    lowfi_prior:
-      consistency_weight: 1.0
-    sampling:
-      N_pde: 8000
-      boundary_points: 1000
-  - name: Stage3_StrongPhysics
-    epoch_range:
-    - 6000
-    - 10000
-    weights:
-      data: 10.0
-      momentum_x: 5.0
-      momentum_y: 5.0
-      continuity: 10.0
-      prior: 0.1
-    lowfi_prior:
-      consistency_weight: 0.1
-    sampling:
-      N_pde: 8000
-      boundary_points: 1000
+      N_pde: 3000
+      boundary_points: 200
 evaluation:
   grid_resolution:
   - 512
@@ -247,9 +213,9 @@ logging:
   level: info
   log_freq: 10
   save_predictions: true
-  wandb: true
+  wandb: false
   save_stage_checkpoints: true
 output:
-  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_periodic_fourier
-  results_dir: ./results/kolmogorov_re50_kf4_K100_periodic_fourier
-  visualization_dir: ./results/kolmogorov_re50_kf4_K100_periodic_fourier/visualizations
+  checkpoint_dir: ./checkpoints/profiling_test
+  results_dir: ./results/profiling_test
+  visualization_dir: ./results/profiling_test/visualizations

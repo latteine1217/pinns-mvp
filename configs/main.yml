@@ -8,7 +8,10 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 2
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
 data:
   source: jhtdb
   dataset: channel
@@ -55,8 +58,8 @@ sensors:
     wall_thickness: 0.1
 model:
   type: fourier_vs_mlp
-  in_dim: 4  # [t, x, y, z] for Channel Flow
-  out_dim: 4  # [u, v, w, p]
+  in_dim: 4
+  out_dim: 4
   width: 200
   depth: 8
   activation: sine
@@ -71,16 +74,27 @@ model:
     v: auto
     w: auto
     p: auto
-  
-  # ========== Fourier Features 配置 ==========
-  # 方式 1: Axis-selective Fourier（當前使用，舊版格式）
   fourier_features:
     type: hybrid
     axes:
-      0: {type: standard, n_modes: 24, sigma: 12.5, use_2pi: true}
-      1: {type: periodic, domain_size: 25.13, n_modes: 16}
-      2: {type: standard, n_modes: 20, sigma: 5.0, use_2pi: true}
-      3: {type: periodic, domain_size: 9.42, n_modes: 16}
+      0:
+        type: standard
+        n_modes: 24
+        sigma: 12.5
+        use_2pi: true
+      1:
+        type: periodic
+        domain_size: 25.13
+        n_modes: 16
+      2:
+        type: standard
+        n_modes: 20
+        sigma: 5.0
+        use_2pi: true
+      3:
+        type: periodic
+        domain_size: 9.42
+        n_modes: 16
     trainable_fourier: false
   scaling:
     learnable: true

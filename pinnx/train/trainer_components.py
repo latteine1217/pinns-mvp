@@ -107,6 +107,9 @@ class TrainerComponents:
     
     # ========== 邊界條件組件 ==========
     hard_constraint_applicator: Optional[Any] = None  # HardConstraintApplicator
+    
+    # ========== Time Window 組件 ==========
+    step_offset: int = 0  # 訓練步數偏移（用於 time window 訓練，讓各窗口的 step 連續）
 
     def validate_required_components(self) -> None:
         """

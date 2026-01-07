@@ -2,6 +2,11 @@
 """
 PINNs 逆重建主訓練腳本
 負責協調資料載入、模型建立、訓練迴圈與評估輸出
+
+支援功能：
+- 單 GPU 訓練
+- 多 GPU DDP 訓練（自動偵測）
+- 混合精度訓練 (AMP)
 """
 
 import argparse
@@ -14,9 +19,14 @@ from typing import Dict, Any, Optional, Tuple, List
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 # 添加專案根目錄到 Python 路徑
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# 導入 pinnx 以觸發 GPU 環境偵測
+import pinnx
 
 from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
 from pinnx.losses.priors import PriorLossManager
@@ -72,6 +82,81 @@ from pinnx.train.loss_factory import create_loss_functions
 from pinnx.train.weighter_factory import create_weighters
 
 from pinnx.utils.config_snapshot import ConfigSnapshot  # 🆕 配置快照追蹤
+
+
+# ============================================================================
+# 🚀 DDP 初始化與環境設定
+# ============================================================================
+def init_distributed_mode():
+    """
+    初始化分散式訓練環境
+    
+    Returns:
+        dict: 分散式訓練配置
+            - is_distributed: 是否啟用分散式訓練
+            - rank: 全局排名
+            - local_rank: 本地排名
+            - world_size: 總程序數
+            - device: 當前程序使用的裝置
+    """
+    # 從 pinnx.Config 讀取自動偵測的環境資訊
+    use_ddp = pinnx.Config.use_ddp
+    
+    if not use_ddp:
+        return {
+            'is_distributed': False,
+            'rank': 0,
+            'local_rank': 0,
+            'world_size': 1,
+            'device': torch.device(pinnx.Config.default_device)
+        }
+    
+    # 初始化 DDP
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        # 由 torchrun 或 torch.distributed.launch 啟動
+        rank = int(os.environ['RANK'])
+        world_size = int(os.environ['WORLD_SIZE'])
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    else:
+        # 手動啟動多 GPU 訓練
+        rank = 0
+        world_size = pinnx.Config.world_size
+        local_rank = 0
+        
+        # 設定環境變數
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        os.environ['RANK'] = str(rank)
+        os.environ['WORLD_SIZE'] = str(world_size)
+        os.environ['LOCAL_RANK'] = str(local_rank)
+    
+    # 設定當前程序的裝置
+    torch.cuda.set_device(local_rank)
+    device = torch.device('cuda', local_rank)
+    
+    # 初始化程序組
+    backend = pinnx.Config.ddp_backend or 'nccl'
+    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+    
+    if rank == 0:
+        logging.info(f"🚀 DDP 初始化完成:")
+        logging.info(f"   Backend: {backend}")
+        logging.info(f"   World Size: {world_size}")
+        logging.info(f"   Devices: {list(range(world_size))}")
+    
+    return {
+        'is_distributed': True,
+        'rank': rank,
+        'local_rank': local_rank,
+        'world_size': world_size,
+        'device': device
+    }
+
+
+def cleanup_distributed():
+    """清理分散式訓練環境"""
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 # ============================================================================
@@ -1107,6 +1192,11 @@ def main():
     
     args = parser.parse_args()
     
+    # 🚀 初始化分散式訓練環境（自動偵測多 GPU）
+    ddp_config = init_distributed_mode()
+    is_main_process = (ddp_config['rank'] == 0)
+    device = ddp_config['device']
+    
     # 載入配置
     config = load_config(args.cfg)
     
@@ -1155,6 +1245,33 @@ def main():
     
     # 設置設備
     device = get_device(config['experiment']['device'])
+    
+    # ========================================
+    # ⚡ Fail Fast: 提前驗證 Time Window 配置
+    # ========================================
+    num_windows = config['training'].get('num_time_windows', 1)
+    if num_windows is not None and num_windows > 1:
+        kolmogorov_enabled = config.get('data', {}).get('kolmogorov_config', {}).get('enabled', False)
+        if not kolmogorov_enabled:
+            msg = (f"❌ Time Window 配置錯誤：num_time_windows={num_windows} 但 Kolmogorov Flow 未啟用。"
+                   f"請設置 data.kolmogorov_config.enabled = true")
+            logger.error(msg)
+            raise ValueError("Time Window mode requires Kolmogorov Flow enabled")
+        
+        time_range = config['data']['kolmogorov_config'].get('time_range')
+        if time_range is None:
+            msg = "❌ Time Window 配置錯誤：缺少 time_range。請添加 data.kolmogorov_config.time_range: [t_start, t_end]"
+            logger.error(msg)
+            raise ValueError("Time Window mode requires time_range in kolmogorov_config")
+        
+        t_start, t_end = time_range
+        window_duration = (t_end - t_start) / num_windows
+        if window_duration < 0.1:
+            logger.warning(f"⚠️  窗口持續時間過短: {window_duration:.4f}s (時間範圍: [{t_start}, {t_end}], 窗口數: {num_windows})")
+        
+        logger.info(f"✅ Time Window 配置驗證通過")
+        logger.info(f"   窗口數: {num_windows}, 時間範圍: [{t_start:.2f}, {t_end:.2f}], 窗口持續時間: {window_duration:.2f}s")
+    
     
     # 提前準備資料以提取統計資訊（用於自動輸出範圍）
     logger.info("Preparing training data to extract statistics...")
@@ -1241,11 +1358,49 @@ def main():
         logger.info("Running single model training...")
         weighters = create_weighters(config, model, device, physics=physics)
         
-        # 🆕 檢查是否啟用時間窗口訓練
+        # 🆕 檢查是否啟用時間窗口訓練（改進判斷邏輯）
         num_windows = config['training'].get('num_time_windows', 1)
         
-        if num_windows > 1:
+        # 驗證 time window 配置完整性
+        use_time_window = False
+        if num_windows is not None and num_windows > 1:
+            # 檢查 Kolmogorov 配置是否啟用（time window 僅支援 Kolmogorov Flow）
+            kolmogorov_enabled = config.get('data', {}).get('kolmogorov_config', {}).get('enabled', False)
+            
+            if not kolmogorov_enabled:
+                logger.error(
+                    f"❌ Time Window 配置錯誤：\n"
+                    f"   num_time_windows={num_windows} (>1) 但 Kolmogorov Flow 未啟用\n"
+                    f"   Time Window 模式僅支援 Kolmogorov Flow 資料源\n"
+                    f"   請檢查配置：data.kolmogorov_config.enabled 應為 true"
+                )
+                raise ValueError("Time Window mode requires Kolmogorov Flow enabled")
+            
+            # 檢查時間範圍是否足夠劃分
+            time_range = config['data']['kolmogorov_config'].get('time_range')
+            if time_range is None:
+                logger.error(
+                    f"❌ Time Window 配置錯誤：缺少時間範圍\n"
+                    f"   請在 data.kolmogorov_config.time_range 中指定時間範圍"
+                )
+                raise ValueError("Time Window mode requires time_range in kolmogorov_config")
+            
+            t_start, t_end = time_range
+            window_duration = (t_end - t_start) / num_windows
+            
+            if window_duration < 0.1:
+                logger.warning(
+                    f"⚠️  窗口持續時間過短: {window_duration:.4f}s\n"
+                    f"   時間範圍: [{t_start}, {t_end}], 窗口數: {num_windows}\n"
+                    f"   建議減少窗口數量或增加時間範圍"
+                )
+            
+            use_time_window = True
             logger.info(f"🪟 Time Window Training enabled: {num_windows} windows")
+            logger.info(f"   時間範圍: [{t_start:.2f}, {t_end:.2f}]")
+            logger.info(f"   窗口持續時間: {window_duration:.2f}s")
+        
+        if use_time_window:
             from pinnx.train.time_window_trainer import TimeWindowTrainer
             
             # 設置輸出標準化（若配置要求）

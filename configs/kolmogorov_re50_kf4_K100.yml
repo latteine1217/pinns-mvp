@@ -14,7 +14,10 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 4
+  num_workers: 8  # 推薦: CPU 核心數 / 6 (48 threads / 6 = 8)
+  pin_memory: true  # 啟用 CUDA 記憶體釘選 (P100/GPU 環境)
+  persistent_workers: true  # 保持 worker 持續運行，減少重啟開銷
+  prefetch_factor: 2  # 每個 worker 預先載入的 batch 數量
 data:
   source: kolmogorov_dns
   dataset: re50_kf4
@@ -150,9 +153,12 @@ training:
     - 0.999
     weight_decay: 1.0e-05
   lr_scheduler:
-    type: step
-    gamma: 0.5
-    step_size: 2000
+    type: warmup_exponential  # JAXpi 風格（推薦）
+    warmup_steps: 2000        # Warmup 步數
+    decay_rate: 0.9           # 每 decay_steps 乘以此係數
+    decay_steps: 2000         # 衰減週期
+    min_lr: 1.0e-6            # 最小學習率
+    staircase: false          # 平滑衰減
   epochs: 10000
   batch_size: 20000
   validation_freq: 50

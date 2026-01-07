@@ -8,7 +8,10 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 4
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
 data:
   source: jhtdb
   dataset: channel
@@ -79,23 +82,32 @@ sensors:
   spatial_coverage: optimal
 model:
   type: fourier_vs_mlp
-  in_dim: 3  # [x, y, z] or [t, x, y] depending on problem
-  out_dim: 4  # [u, v, w, p] or [u, v, p] for 2D
+  in_dim: 3
+  out_dim: 4
   width: 256
   depth: 8
   activation: sine
-  
-  # ========== Fourier Features 配置 ==========
-  # 可選配置方式：
-  # 
-  # 方式 1: 標準 Fourier（通用配置）
   fourier_features:
     type: hybrid
     axes:
-      0: {type: standard, n_modes: 24, sigma: 12.5, use_2pi: true}
-      1: {type: periodic, domain_size: 25.13, n_modes: 16}
-      2: {type: standard, n_modes: 20, sigma: 5.0, use_2pi: true}
-      3: {type: periodic, domain_size: 9.42, n_modes: 16}
+      0:
+        type: standard
+        n_modes: 24
+        sigma: 12.5
+        use_2pi: true
+      1:
+        type: periodic
+        domain_size: 25.13
+        n_modes: 16
+      2:
+        type: standard
+        n_modes: 20
+        sigma: 5.0
+        use_2pi: true
+      3:
+        type: periodic
+        domain_size: 9.42
+        n_modes: 16
     trainable_fourier: false
   output_variables:
   - u
@@ -169,13 +181,13 @@ losses:
   prior_weight: 0.1
   source_l1: 1.0e-06
   gradient_penalty: 0.0001
-  
-  # GradNorm 自適應權重（對齊 JaxPI）
-  adaptive_weighting: false           # 是否啟用 GradNorm
-  weight_update_freq: 1000            # 權重更新頻率（JaxPI 默認 1000）
-  grad_norm_momentum: 0.9             # EMA 平滑係數（對齊 JaxPI，0 表示不使用）
-  grad_norm_alpha: 1.5                # 權重更新激進程度（非 JaxPI 參數）
-  grad_norm_normalize: true           # 權重正規化開關（true=PINNx 穩定模式, false=JaxPI 精確對齊）
+  adaptive_weighting: false
+  weight_update_freq: 1000
+  grad_norm_momentum: 0.9
+  grad_norm_alpha: 1.5
+  grad_norm_normalize: false
+  grad_norm_min_weight: 0.1
+  grad_norm_max_weight: 10.0
   adaptive_loss_terms:
   - data
   - momentum_x
@@ -183,13 +195,11 @@ losses:
   - momentum_z
   - continuity
   - wall_constraint
-  - periodicity
-  
-  # 因果權重（Causal Weighting）- 適用於時間依賴問題（對齊 JaxPI）
-  causal_weighting: false             # 是否啟用因果權重
-  causal_tol: 1.0                     # JaxPI: causal_tol，控制權重衰減速度
-  num_chunks: 32                      # JaxPI: num_chunks，時間分塊數（Burgers=32, NS=16）
-  
+  - periodic_x
+  - periodic_z
+  causal_weighting: false
+  causal_tol: 1.0
+  num_chunks: 32
 training:
   optimizer:
     type: adam

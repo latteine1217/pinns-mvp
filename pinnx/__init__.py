@@ -159,9 +159,10 @@ try:
     
     # 工具模組
     from .utils import (
-        setup_logging,
-        set_random_seed,
-        get_device as utils_get_device
+        InputTransform,
+        OutputTransform,
+        Timer,
+        MemoryTracker
     )
     
     logger.info("Successfully imported all available PINNx modules")
@@ -170,19 +171,83 @@ except ImportError as e:
     logger.warning(f"Some modules not available: {e}")
     logger.warning("This is normal if modules are not yet implemented")
 
+# GPU 環境偵測與 DDP 配置
+def detect_gpu_environment():
+    """
+    偵測 GPU 環境並配置分散式訓練
+    
+    Returns:
+        dict: GPU 環境資訊
+            - device: 預設計算裝置 ('cuda', 'mps', 'cpu')
+            - num_gpus: 可用 GPU 數量
+            - use_ddp: 是否啟用 DistributedDataParallel
+            - world_size: DDP 世界大小（總程序數）
+            - local_rank: 本地 GPU 排名
+    """
+    import torch
+    import os
+    
+    env_info = {
+        'device': 'cpu',
+        'num_gpus': 0,
+        'use_ddp': False,
+        'world_size': 1,
+        'local_rank': 0,
+        'backend': None
+    }
+    
+    # CUDA 環境偵測
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        env_info['device'] = 'cuda'
+        env_info['num_gpus'] = num_gpus
+        
+        # 多 GPU 自動啟用 DDP
+        if num_gpus > 1:
+            env_info['use_ddp'] = True
+            env_info['backend'] = 'nccl'
+            env_info['world_size'] = num_gpus
+            
+            # 檢查是否已經在 DDP 環境中（由啟動腳本設定）
+            if 'LOCAL_RANK' in os.environ:
+                env_info['local_rank'] = int(os.environ['LOCAL_RANK'])
+                logger.info(f"🚀 DDP 環境偵測: LOCAL_RANK={env_info['local_rank']}")
+            
+            logger.info(f"🎯 偵測到 {num_gpus} 張 GPU，自動啟用 DDP 訓練")
+            logger.info(f"   Backend: {env_info['backend']}")
+            logger.info(f"   World Size: {env_info['world_size']}")
+        else:
+            logger.info(f"✅ 偵測到單張 GPU，使用標準訓練模式")
+    
+    # macOS MPS 環境
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        env_info['device'] = 'mps'
+        logger.info("✅ 偵測到 Apple Silicon GPU (MPS)")
+    
+    # CPU 環境
+    else:
+        logger.info("⚠️  未偵測到 GPU，使用 CPU 訓練")
+    
+    return env_info
+
+
 # 全域設定
 class Config:
     """全域配置類別"""
     
-    # 預設設定 - 優先選擇GPU加速器
+    # GPU 環境自動偵測
     import torch
-    if torch.cuda.is_available():
-        default_device = "cuda"
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        default_device = "mps" 
-    else:
-        default_device = "cpu"
-    default_dtype = __import__('torch').float32
+    _gpu_env = detect_gpu_environment()
+    
+    # 預設設定 - 根據環境自動選擇
+    default_device = _gpu_env['device']
+    num_gpus = _gpu_env['num_gpus']
+    use_ddp = _gpu_env['use_ddp']
+    ddp_backend = _gpu_env['backend']
+    world_size = _gpu_env['world_size']
+    local_rank = _gpu_env['local_rank']
+    
+    default_dtype = torch.float32
     
     # 數值精度設定
     epsilon = 1e-12  # 數值穩定性參數
@@ -321,7 +386,7 @@ __all__ = [
     'metrics', 'visualizer',
     
     # 工具模組
-    'setup_logging', 'set_random_seed', 'utils_get_device',
+    'InputTransform', 'OutputTransform', 'Timer', 'MemoryTracker',
 ]
 
 # 套件初始化完成

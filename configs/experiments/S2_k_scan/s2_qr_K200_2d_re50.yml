@@ -158,12 +158,12 @@ training:
     - 0.999
     weight_decay: 1.0e-05
   lr_scheduler:
-    type: reduce_on_plateau
-    params:
-      mode: min
-      factor: 0.5
-      patience: 500
-      min_lr: 1.0e-06
+    type: warmup_exponential
+    warmup_steps: 2000
+    decay_rate: 0.9
+    decay_steps: 2000
+    min_lr: 1.0e-06
+    staircase: false
   epochs: 10000
   batch_size: 10000
   validation_freq: 100
@@ -245,15 +245,33 @@ test_acceptance:
   baseline:
   - training_converged: true
   - no_feature_engineering: true
-usage_notes: "⚠️ 高風險實驗配置 ⚠️\n\n\U0001F52C 實驗目的：\n  - 測試極高感測器數量 (K=200) 的行為\n  - 驗證\
-  \ condition number = 1.32e8 是否可訓練\n  - 探索數值穩定性的極限\n\n⚠️ 風險警告：\n  - Condition number\
-  \ 1.32×10⁸ 極高（接近 float32 極限）\n  - 預期會出現數值不穩定（NaN/Inf）\n  - 可能無法收斂或結果無意義\n  - 不建議用於生產環境\n\
-  \n\U0001F6E1️ 穩定性措施：\n  - 降低學習率：1e-3 → 5e-4\n  - 加強梯度裁剪：5.0 → 1.0\n  - 啟用權重衰減：1e-5\n\
-  \  - 使用 ReduceLROnPlateau 動態降低學習率\n  - 增加 L2 正則化\n\n\U0001F680 執行指令：\n  python scripts/train/train.py\
-  \ --cfg configs/experiments/S2_k_scan/s2_qr_K200_2d_re50.yml --device cuda\n\n\U0001F4CA\
-  \ 預期結果：\n  - 訓練時間：10-20 小時（可能提前失敗）\n  - 成功率：< 30%（極可能失敗）\n  - 如果成功：性能可能不如 K=50/K=100\n\
-  \  - 如果失敗：驗證了 K=200 不可行\n\n\U0001F50D 監控重點：\n  - 前 100 epochs：梯度是否爆炸/消失\n  - Loss\
-  \ 曲線：是否震盪或發散\n  - NaN/Inf 出現頻率\n  - Checkpoint 品質\n\n\U0001F4C8 對比基準：\n  - K=50\
-  \ (cond=3.45e6)：穩定基準\n  - K=100 (cond=2.93e7)：邊界值\n  - K=200 (cond=1.32e8)：超出邊界\n\
-  \n\U0001F4A1 建議：\n  - 僅用於研究目的\n  - 如果前 1000 epochs 出現 NaN → 立即中止\n  - 優先使用 K=50\
-  \ 作為生產配置\n  - 此實驗主要用於驗證理論分析正確性\n"
+usage_notes: "\u26A0\uFE0F \u9AD8\u98A8\u96AA\u5BE6\u9A57\u914D\u7F6E \u26A0\uFE0F\
+  \n\n\U0001F52C \u5BE6\u9A57\u76EE\u7684\uFF1A\n  - \u6E2C\u8A66\u6975\u9AD8\u611F\
+  \u6E2C\u5668\u6578\u91CF (K=200) \u7684\u884C\u70BA\n  - \u9A57\u8B49 condition\
+  \ number = 1.32e8 \u662F\u5426\u53EF\u8A13\u7DF4\n  - \u63A2\u7D22\u6578\u503C\u7A69\
+  \u5B9A\u6027\u7684\u6975\u9650\n\n\u26A0\uFE0F \u98A8\u96AA\u8B66\u544A\uFF1A\n\
+  \  - Condition number 1.32\xD710\u2078 \u6975\u9AD8\uFF08\u63A5\u8FD1 float32 \u6975\
+  \u9650\uFF09\n  - \u9810\u671F\u6703\u51FA\u73FE\u6578\u503C\u4E0D\u7A69\u5B9A\uFF08\
+  NaN/Inf\uFF09\n  - \u53EF\u80FD\u7121\u6CD5\u6536\u6582\u6216\u7D50\u679C\u7121\u610F\
+  \u7FA9\n  - \u4E0D\u5EFA\u8B70\u7528\u65BC\u751F\u7522\u74B0\u5883\n\n\U0001F6E1\
+  \uFE0F \u7A69\u5B9A\u6027\u63AA\u65BD\uFF1A\n  - \u964D\u4F4E\u5B78\u7FD2\u7387\uFF1A\
+  1e-3 \u2192 5e-4\n  - \u52A0\u5F37\u68AF\u5EA6\u88C1\u526A\uFF1A5.0 \u2192 1.0\n\
+  \  - \u555F\u7528\u6B0A\u91CD\u8870\u6E1B\uFF1A1e-5\n  - \u4F7F\u7528 ReduceLROnPlateau\
+  \ \u52D5\u614B\u964D\u4F4E\u5B78\u7FD2\u7387\n  - \u589E\u52A0 L2 \u6B63\u5247\u5316\
+  \n\n\U0001F680 \u57F7\u884C\u6307\u4EE4\uFF1A\n  python scripts/train/train.py --cfg\
+  \ configs/experiments/S2_k_scan/s2_qr_K200_2d_re50.yml --device cuda\n\n\U0001F4CA\
+  \ \u9810\u671F\u7D50\u679C\uFF1A\n  - \u8A13\u7DF4\u6642\u9593\uFF1A10-20 \u5C0F\
+  \u6642\uFF08\u53EF\u80FD\u63D0\u524D\u5931\u6557\uFF09\n  - \u6210\u529F\u7387\uFF1A\
+  < 30%\uFF08\u6975\u53EF\u80FD\u5931\u6557\uFF09\n  - \u5982\u679C\u6210\u529F\uFF1A\
+  \u6027\u80FD\u53EF\u80FD\u4E0D\u5982 K=50/K=100\n  - \u5982\u679C\u5931\u6557\uFF1A\
+  \u9A57\u8B49\u4E86 K=200 \u4E0D\u53EF\u884C\n\n\U0001F50D \u76E3\u63A7\u91CD\u9EDE\
+  \uFF1A\n  - \u524D 100 epochs\uFF1A\u68AF\u5EA6\u662F\u5426\u7206\u70B8/\u6D88\u5931\
+  \n  - Loss \u66F2\u7DDA\uFF1A\u662F\u5426\u9707\u76EA\u6216\u767C\u6563\n  - NaN/Inf\
+  \ \u51FA\u73FE\u983B\u7387\n  - Checkpoint \u54C1\u8CEA\n\n\U0001F4C8 \u5C0D\u6BD4\
+  \u57FA\u6E96\uFF1A\n  - K=50 (cond=3.45e6)\uFF1A\u7A69\u5B9A\u57FA\u6E96\n  - K=100\
+  \ (cond=2.93e7)\uFF1A\u908A\u754C\u503C\n  - K=200 (cond=1.32e8)\uFF1A\u8D85\u51FA\
+  \u908A\u754C\n\n\U0001F4A1 \u5EFA\u8B70\uFF1A\n  - \u50C5\u7528\u65BC\u7814\u7A76\
+  \u76EE\u7684\n  - \u5982\u679C\u524D 1000 epochs \u51FA\u73FE NaN \u2192 \u7ACB\u5373\
+  \u4E2D\u6B62\n  - \u512A\u5148\u4F7F\u7528 K=50 \u4F5C\u70BA\u751F\u7522\u914D\u7F6E\
+  \n  - \u6B64\u5BE6\u9A57\u4E3B\u8981\u7528\u65BC\u9A57\u8B49\u7406\u8AD6\u5206\u6790\
+  \u6B63\u78BA\u6027\n"

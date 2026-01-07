@@ -104,7 +104,7 @@ class LossManager:
         if 'momentum' in residuals:
             # 合併模式：momentum 是 [N, 1, 2] 向量
             momentum_vec = residuals['momentum']  # [N, 1, 2]
-            momentum_sq = torch.sum(momentum_vec**2, dim=-1, keepdim=True)  # [N, 1]
+            momentum_sq = torch.sum(momentum_vec.pow(2), dim=-1, keepdim=True)  # [N, 1]
             
             if weights is not None:
                 momentum_loss = torch.mean(weights * momentum_sq)
@@ -115,8 +115,8 @@ class LossManager:
             momentum_y_loss = torch.tensor(0.0, device=self.device)
         else:
             # 標準模式：分開的 momentum_x 和 momentum_y
-            momentum_x_sq = residuals['momentum_x']**2
-            momentum_y_sq = residuals['momentum_y']**2
+            momentum_x_sq = residuals['momentum_x'].pow(2)
+            momentum_y_sq = residuals['momentum_y'].pow(2)
             
             if weights is not None:
                 momentum_x_loss = torch.mean(weights * momentum_x_sq)
@@ -127,13 +127,13 @@ class LossManager:
         
         # z 動量（僅 3D VS-PINN）
         if is_vs_pinn and 'momentum_z' in residuals:
-            momentum_z_sq = residuals['momentum_z']**2
+            momentum_z_sq = residuals['momentum_z'].pow(2)
             momentum_z_loss = torch.mean(weights * momentum_z_sq) if weights is not None else torch.mean(momentum_z_sq)
         else:
             momentum_z_loss = torch.tensor(0.0, device=self.device)
         
         # 連續方程
-        continuity_sq = residuals['continuity']**2
+        continuity_sq = residuals['continuity'].pow(2)
         continuity_loss = torch.mean(weights * continuity_sq) if weights is not None else torch.mean(continuity_sq)
         
         return momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss
@@ -286,6 +286,11 @@ class LossManager:
                                 nu_t_pde = nu_t_raw
                     kwargs['nu_t'] = nu_t_pde
                 
+                # 🚀 梯度快取：如果 residual_fn 支援 gradients 參數，則傳入
+                sig = inspect.signature(residual_fn)
+                if 'gradients' in sig.parameters and gradients is not None:
+                    kwargs['gradients'] = gradients
+                
                 residuals = residual_fn(
                     coords=coords_pde_physical,
                     predictions=u_pred_pde_physical,
@@ -303,7 +308,7 @@ class LossManager:
                 # 1. 匯總每個點的殘差平方和
                 total_res_sq = torch.zeros_like(t_pde)
                 for r in residuals.values():
-                    r_sq = r.detach()**2
+                    r_sq = r.detach().pow(2)
                     if r_sq.dim() > 1:
                         r_sq = r_sq.view(r_sq.shape[0], -1).sum(dim=1, keepdim=True)
                     total_res_sq += r_sq
@@ -379,7 +384,7 @@ class LossManager:
             if wall_mask.sum() > 0:
                 u_wall = u_bc_pred_phys[wall_mask, 0]  # u 分量
                 v_wall = u_bc_pred_phys[wall_mask, 1]  # v 分量
-                wall_loss = torch.mean(u_wall**2 + v_wall**2)
+                wall_loss = torch.mean(u_wall.pow(2) + v_wall.pow(2))
             else:
                 if epoch == 0:
                     if y_bc.numel() > 0:
@@ -451,8 +456,8 @@ class LossManager:
         p_true = data_batch['p_sensors']
         
         # 計算各分量 MSE
-        u_loss = torch.mean((u_sensors_pred_phys[:, 0:1] - u_true)**2)
-        v_loss = torch.mean((u_sensors_pred_phys[:, 1:2] - v_true)**2)
+        u_loss = torch.mean((u_sensors_pred_phys[:, 0:1] - u_true).pow(2))
+        v_loss = torch.mean((u_sensors_pred_phys[:, 1:2] - v_true).pow(2))
         
         # 根據資料與模型維度動態選擇損失計算
         has_w_data = w_true is not None and w_true.numel() > 0
@@ -460,18 +465,18 @@ class LossManager:
         
         if has_w_data and model_has_w:
             # 完整 3D 模式
-            w_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - w_true) ** 2) if w_true is not None else torch.tensor(0.0, device=self.device)
-            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true)**2)
+            w_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - w_true).pow(2)) if w_true is not None else torch.tensor(0.0, device=self.device)
+            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true).pow(2))
             velocity_loss = u_loss + v_loss + w_loss
         elif model_has_w and not has_w_data:
             # 混合模式：模型輸出 4D 但資料僅有 3D
             w_loss = torch.tensor(0.0, device=u_loss.device)
-            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true)**2)
+            pressure_loss = torch.mean((u_sensors_pred_phys[:, 3:4] - p_true).pow(2))
             velocity_loss = u_loss + v_loss
         else:
             # 標準 2D 模式
             w_loss = torch.tensor(0.0, device=u_loss.device)
-            pressure_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - p_true)**2)
+            pressure_loss = torch.mean((u_sensors_pred_phys[:, 2:3] - p_true).pow(2))
             velocity_loss = u_loss + v_loss
         
         data_loss = velocity_loss + pressure_loss
@@ -791,7 +796,7 @@ class LossManager:
         w_momentum_x = scaled_weight('momentum_x', loss_cfg.get('momentum_x_weight', base_pde_weight))
         w_momentum_y = scaled_weight('momentum_y', loss_cfg.get('momentum_y_weight', base_pde_weight))
         w_momentum_z = scaled_weight('momentum_z', loss_cfg.get('momentum_z_weight', base_pde_weight)) if is_vs_pinn else 0.0
-        w_div = scaled_weight('divergence', loss_cfg.get('continuity_weight', base_pde_weight))
+        w_continuity = scaled_weight('continuity', loss_cfg.get('continuity_weight', base_pde_weight))
         
         # 邊界條件權重
         if hasattr(self.physics, 'compute_periodic_loss'):
@@ -808,6 +813,14 @@ class LossManager:
             w_periodic_y = 0.0
             w_bc = scaled_weight('wall_constraint', loss_cfg.get('wall_constraint_weight', base_bc_weight))
         
+        # 🔧 FIX: 先驗一致性損失權重（應用 GradNorm）
+        base_prior_weight = loss_cfg.get('prior_weight', 1.0)
+        w_prior = scaled_weight('prior', base_prior_weight)
+        
+        # 🔧 FIX: 初始條件損失權重（應用 GradNorm）
+        base_ic_weight = loss_cfg.get('initial_condition_weight', 10.0)
+        w_ic = scaled_weight('initial_condition', base_ic_weight)
+        
         # 診斷日誌
         if epoch == 0 and not self._weights_logged:
             logging.info("=" * 60)
@@ -818,12 +831,15 @@ class LossManager:
             logging.info(f"  Momentum Y:       {w_momentum_y:.2e}")
             if is_vs_pinn:
                 logging.info(f"  Momentum Z:       {w_momentum_z:.2e}")
-            logging.info(f"  Divergence:       {w_div:.2e}")
+            logging.info(f"  Continuity:       {w_continuity:.2e}")
             if hasattr(self.physics, 'compute_periodic_loss'):
                 logging.info(f"  Periodic X:       {w_periodic_x:.2e}")
                 logging.info(f"  Periodic Y:       {w_periodic_y:.2e}")
             else:
                 logging.info(f"  Wall Constraint:  {w_bc:.2e}")
+            # 🔧 FIX: 顯示 prior 和 IC 權重
+            logging.info(f"  Prior Loss:       {w_prior:.2e}")
+            logging.info(f"  Initial Cond:     {w_ic:.2e}")
             logging.info("=" * 60)
             self._weights_logged = True
         
@@ -833,7 +849,7 @@ class LossManager:
             w_momentum_y * loss_dict['momentum_y_loss'] +
             w_momentum_z * loss_dict['momentum_z_loss']
         )
-        weighted_div_loss = w_div * loss_dict['continuity_loss']
+        weighted_continuity_loss = w_continuity * loss_dict['continuity_loss']
         weighted_data_loss = w_data * loss_dict['data_loss']
         
         # 邊界條件損失
@@ -844,14 +860,19 @@ class LossManager:
             weighted_bc_loss = w_bc * loss_dict['wall_loss']
             unweighted_bc_loss = loss_dict['wall_loss']
         
+        # 🔧 FIX: 應用 GradNorm 權重到 prior 和 IC 損失
+        weighted_prior_loss = w_prior * loss_dict.get('prior_consistency_loss', torch.tensor(0.0, device=self.device))
+        weighted_ic_loss = w_ic * loss_dict.get('initial_condition_loss', torch.tensor(0.0, device=self.device))
+        
         # 總損失
         total_loss = (
             weighted_data_loss +
             weighted_momentum_loss +
-            weighted_div_loss +
+            weighted_continuity_loss +
             weighted_bc_loss +
-            loss_dict.get('mean_constraint_loss', torch.tensor(0.0, device=self.device)) +
-            loss_dict.get('prior_consistency_loss', torch.tensor(0.0, device=self.device))
+            weighted_prior_loss +
+            weighted_ic_loss +
+            loss_dict.get('mean_constraint_loss', torch.tensor(0.0, device=self.device))
         )
         
         # 構建結果字典 - 確保所有 WandB 期望的鍵都存在
@@ -861,9 +882,8 @@ class LossManager:
         result = {
             'total_loss': total_loss.item(),
             'data_loss': loss_dict['data_loss'].item(),
-            'pde_loss': (weighted_momentum_loss + weighted_div_loss).item(),
+            'pde_loss': (weighted_momentum_loss + weighted_continuity_loss).item(),
             'bc_loss': unweighted_bc_loss.item(),
-            'div_loss': loss_dict['continuity_loss'].item(),
             'continuity_loss': loss_dict['continuity_loss'].item(),
             'momentum_x_loss': loss_dict['momentum_x_loss'].item(),
             'momentum_y_loss': loss_dict['momentum_y_loss'].item(),
@@ -878,8 +898,10 @@ class LossManager:
         result.update({
             'weighted_data_loss': weighted_data_loss.item(),
             'weighted_pde_loss': weighted_momentum_loss.item(),
-            'weighted_div_loss': weighted_div_loss.item(),
+            'weighted_continuity_loss': weighted_continuity_loss.item(),
             'weighted_bc_loss': weighted_bc_loss.item(),
+            'weighted_prior_loss': weighted_prior_loss.item(),  # 🔧 FIX: 加權先驗損失
+            'weighted_ic_loss': weighted_ic_loss.item(),        # 🔧 FIX: 加權初始條件損失
         })
         
         # === 邊界條件損失細項（所有類型，不存在則為 0.0）===
@@ -912,7 +934,9 @@ class LossManager:
             'momentum_x': w_momentum_x,
             'momentum_y': w_momentum_y,
             'momentum_z': w_momentum_z,
-            'divergence': w_div,
+            'continuity': w_continuity,          # 統一使用 continuity（與配置和物理模組一致）
+            'prior': w_prior,                    # 🔧 FIX: 先驗權重
+            'initial_condition': w_ic,           # 🔧 FIX: 初始條件權重
         }
         if hasattr(self.physics, 'compute_periodic_loss'):
             applied_weights_dict['periodic_x'] = w_periodic_x

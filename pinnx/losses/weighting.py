@@ -80,11 +80,17 @@ class GradNormWeighter(LossWeighter):
             target_gradient_ratio: [已棄用] 保留用於向後相容
             target_ratios: 目標分佈比例（可選，用於不同損失項的相對重要性）
             device: 計算設備 (None 為自動檢測)
-            min_weight: 權重下界（防止權重過小）
-            max_weight: 權重上界（防止權重過大）
+            min_weight: 權重下界比例（相對於 initial_weights，默認 0.1 = 10%）
+            max_weight: 權重上界比例（相對於 initial_weights，默認 10.0 = 1000%）
             max_ratio: [已棄用] 當前實作不使用權重歸一化
             momentum: EMA 平滑係數（推薦值: 0.95，JaxPI 默認值）
             normalize_weights: [已棄用] JaxPI 不使用權重歸一化（建議設為 False）
+        
+        Note:
+            權重裁剪使用**相對範圍**（v1.1.0+ 修復）:
+            - 絕對範圍: [initial_weight * min_weight, initial_weight * max_weight]
+            - 例如: initial_weight=100, min=0.1, max=10 → 裁剪範圍 [10, 1000]
+            - 修復前: 使用絕對範圍 [0.1, 10.0]，導致大初始權重被過度裁剪
         """
         self.model = model
         self.loss_names = loss_names
@@ -92,12 +98,25 @@ class GradNormWeighter(LossWeighter):
         self.update_frequency = update_frequency
         self.target_gradient_ratio = target_gradient_ratio
         self.target_ratios = target_ratios
-        self.min_weight = float(min_weight)
-        self.max_weight = float(max_weight)
+        # 🔧 FIX: 使用相對裁剪比例（v1.1.0+）
+        self.min_weight_ratio = float(min_weight)  # 權重下界比例（相對於 initial_weight）
+        self.max_weight_ratio = float(max_weight)  # 權重上界比例（相對於 initial_weight）
+        # 向後相容：保留舊屬性名
+        self.min_weight = self.min_weight_ratio
+        self.max_weight = self.max_weight_ratio
         self.max_ratio = float(max(1.0, max_ratio))
         self.momentum = float(momentum)  # EMA 平滑係數 (對齊 JaxPI)
         self.normalize_weights = bool(normalize_weights)  # 控制是否正規化權重總和
         self.eps = _EPS
+        
+        # 🚨 警告：normalize_weights 已棄用（對齊 JaxPI）
+        if normalize_weights:
+            import logging
+            logging.warning(
+                "⚠️  normalize_weights=True is deprecated and has no effect. "
+                "JaxPI-style GradNorm does not normalize weight sums. "
+                "Please set grad_norm_normalize=false in your config to suppress this warning."
+            )
         
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -116,6 +135,15 @@ class GradNormWeighter(LossWeighter):
             name: float(initial_weights.get(name, 1.0)) for name in loss_names
         }
         self.initial_weight_sum = float(sum(self.initial_weight_values.values()))
+        
+        # 🔧 FIX: 為每個損失項計算絕對裁剪邊界（相對於 initial_weight）
+        self.min_weight_abs = {}
+        self.max_weight_abs = {}
+        for name in loss_names:
+            initial = self.initial_weight_values[name]
+            self.min_weight_abs[name] = initial * self.min_weight_ratio
+            self.max_weight_abs[name] = initial * self.max_weight_ratio
+        
         self.weights = {}
         for name in loss_names:
             base_weight = torch.tensor(
@@ -124,7 +152,12 @@ class GradNormWeighter(LossWeighter):
                 dtype=torch.float32,
                 requires_grad=False
             )
-            clamped_weight = torch.clamp(base_weight, self.min_weight, self.max_weight)
+            # 使用相對裁剪範圍
+            clamped_weight = torch.clamp(
+                base_weight,
+                min=self.min_weight_abs[name],
+                max=self.max_weight_abs[name]
+            )
             self.weights[name] = clamped_weight
         
         if target_ratios is not None:
@@ -148,45 +181,63 @@ class GradNormWeighter(LossWeighter):
         self.step_count = 0
         
     def compute_gradients(self, losses: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """計算每個損失項對模型參數的梯度範數（JaxPI 風格）
+        """計算每個損失項對模型參數的梯度範數（JaxPI 風格）- 批次化版本
         
         關鍵：計算**未加權**損失的梯度範數，即 ||∇_θ L_i||，而非 ||∇_θ (w_i × L_i)||
+        
+        優化：使用單次參數遍歷 + 分別backward，相比原方法減少重複的參數列表創建
         
         Returns:
             Dict[str, torch.Tensor]: 每個損失項的梯度範數（Tensor 類型）
         """
         gradients = {}
+        
+        # Step 1: 分離有效損失和無效損失
+        valid_losses = {}
         for name, loss in losses.items():
             if name not in self.loss_names:
                 continue
             
             if not loss.requires_grad or abs(float(loss.detach())) < self.eps:
                 gradients[name] = torch.tensor(self.eps, device=self.device)
-                continue
-                
+            else:
+                valid_losses[name] = loss
+        
+        # Step 2: 如果沒有有效損失，直接返回
+        if len(valid_losses) == 0:
+            return gradients
+        
+        # Step 3: 獲取模型參數列表（只獲取一次，避免重複）
+        params = list(self.model.parameters())
+        
+        # Step 4: 對每個損失分別計算梯度（但優化了參數訪問）
+        # 注意：PyTorch 的 autograd.grad 設計不支持真正的批次計算
+        # 但我們可以優化其他部分（如參數緩存、減少 detach 調用）
+        for name, loss in valid_losses.items():
             try:
-                # JaxPI: 計算未加權損失的梯度範數
-                # 論文公式: G_i = ||∇_θ L_i||（不包含權重）
+                # 計算單個損失的梯度
                 grads = torch.autograd.grad(
-                    outputs=loss,  # 使用未加權損失！
-                    inputs=list(self.model.parameters()),
+                    outputs=loss,
+                    inputs=params,  # 使用緩存的參數列表
                     grad_outputs=torch.ones_like(loss),
                     retain_graph=True,
                     create_graph=False,
                     allow_unused=True
                 )
                 
-                grad_norm = torch.tensor(0.0, device=self.device)
+                # 計算梯度範數（優化版）
+                grad_norm_sq = torch.tensor(0.0, device=self.device)
                 for grad in grads:
                     if grad is not None:
-                        grad_norm += (grad.detach() ** 2).sum()
+                        # 使用 .pow(2) 替代 ** 2，並合並 detach + sum
+                        grad_norm_sq += grad.detach().pow(2).sum()
                 
-                gradients[name] = torch.sqrt(grad_norm + self.eps)
+                gradients[name] = torch.sqrt(grad_norm_sq + self.eps)
                 
             except Exception as e:
                 gradients[name] = torch.tensor(self.eps, device=self.device)
                 print(f"Warning: Gradient computation failed for {name}: {e}")
-            
+        
         return gradients
     
     def update_weights(
@@ -260,10 +311,11 @@ class GradNormWeighter(LossWeighter):
                 new_weight = old_weight * self.momentum + new_weight * (1 - self.momentum)
             
             # 裁剪權重範圍（防止極端值）
+            # 🔧 FIX: 使用相對裁剪範圍（針對每個損失項）
             self.weights[name] = torch.clamp(
                 new_weight.detach(),
-                min=self.min_weight,
-                max=self.max_weight
+                min=self.min_weight_abs[name],
+                max=self.max_weight_abs[name]
             )
             
             # 記錄梯度歷史（用於診斷）
@@ -279,81 +331,23 @@ class GradNormWeighter(LossWeighter):
     def reset_weights(self):
         """重置權重到初始值"""
         for name in self.loss_names:
+            # 🔧 FIX: 使用相對裁剪範圍
             self.weights[name] = torch.clamp(
                 torch.tensor(
                     self.initial_weight_values.get(name, 1.0),
                     device=self.device,
                     dtype=torch.float32
                 ),
-                min=self.min_weight,
-                max=self.max_weight
+                min=self.min_weight_abs[name],
+                max=self.max_weight_abs[name]
             )
         self.step_count = 0
         self.gradient_history.clear()
-
-    def _normalize_weights(self) -> None:
-        if not self.loss_names:
-            return
-        
-        target_sum = torch.tensor(
-            max(self.initial_weight_sum, self.eps),
-            device=self.device,
-            dtype=torch.float32
-        )
-        
-        for _ in range(3):
-            weights_tensor = torch.stack([self.weights[name] for name in self.loss_names])
-            total = weights_tensor.sum()
-            if not torch.isfinite(total) or total.abs() <= self.eps:
-                break
-            scale = target_sum / total
-            updated = []
-            for name in self.loss_names:
-                scaled = self.weights[name] * scale
-                updated_weight = torch.clamp(scaled, self.min_weight, self.max_weight)
-                self.weights[name] = updated_weight
-                updated.append(updated_weight)
-            new_total = torch.stack(updated).sum()
-            if torch.abs(new_total - target_sum) / target_sum < 1e-6:
-                break
-        
-        weights_tensor = torch.stack([self.weights[name] for name in self.loss_names])
-        max_w = torch.max(weights_tensor)
-        min_w = torch.clamp(torch.min(weights_tensor), min=self.min_weight)
-        ratio = max_w / (min_w + self.eps)
-        if ratio > self.max_ratio:
-            geometric_mean = torch.exp(torch.log(weights_tensor + self.eps).mean())
-            span = math.sqrt(self.max_ratio)
-            # 轉換為 float 以避免 Tensor/float 比較問題
-            geometric_mean_val = float(geometric_mean.item()) if torch.is_tensor(geometric_mean) else float(geometric_mean)
-            lower = torch.tensor(
-                max(self.min_weight, geometric_mean_val / span),
-                device=self.device,
-                dtype=torch.float32
-            )
-            upper = torch.tensor(
-                min(self.max_weight, geometric_mean_val * span),
-                device=self.device,
-                dtype=torch.float32
-            )
-            for name in self.loss_names:
-                self.weights[name] = torch.clamp(self.weights[name], lower, upper)
-            
-            for _ in range(3):
-                weights_tensor = torch.stack([self.weights[name] for name in self.loss_names])
-                total = weights_tensor.sum()
-                if not torch.isfinite(total) or total.abs() <= self.eps:
-                    break
-                scale = target_sum / total
-                updated = []
-                for name in self.loss_names:
-                    scaled = self.weights[name] * scale
-                    updated_weight = torch.clamp(scaled, self.min_weight, self.max_weight)
-                    self.weights[name] = updated_weight
-                    updated.append(updated_weight)
-                new_total = torch.stack(updated).sum()
-                if torch.abs(new_total - target_sum) / target_sum < 1e-6:
-                    break
+    
+    # 🗑️ _normalize_weights() 方法已移除（已棄用，從未被調用）
+    # 原因：JaxPI-style GradNorm 不使用權重正規化
+    # 歷史：該方法定義於早期版本但從未在 update_weights() 中調用
+    # 如需權重正規化功能，請參考 Git 歷史或聯繫開發團隊
 
 
 class CausalWeighter(PointWeighter):

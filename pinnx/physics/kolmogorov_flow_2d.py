@@ -217,6 +217,7 @@ class KolmogorovFlow2D(NavierStokesBase):
         coords: torch.Tensor,
         predictions: torch.Tensor,
         time: Optional[torch.Tensor] = None,
+        gradients: Optional[Dict[str, torch.Tensor]] = None,
         **kwargs
     ) -> Dict[str, torch.Tensor]:
         """
@@ -226,6 +227,10 @@ class KolmogorovFlow2D(NavierStokesBase):
             coords: [batch, 2] = [x, y] 物理坐標
             predictions: [batch, 3] = [u, v, p] 預測值
             time: [batch, 1] 時間坐標（可選）
+            gradients: 預計算的梯度快取（可選，Wave 2 優化）
+                      若提供，應包含鍵: 'u_x', 'u_y', 'u_xx', 'u_yy',
+                                        'v_x', 'v_y', 'v_xx', 'v_yy',
+                                        'p_x', 'p_y'
 
         Returns:
             殘差字典 {'momentum_x', 'momentum_y', 'continuity'}
@@ -234,21 +239,49 @@ class KolmogorovFlow2D(NavierStokesBase):
         u, v, p = self.parse_velocity_pressure(predictions)
 
         # === 計算連續方程殘差 ===
-        continuity = self.compute_continuity_residual(coords, [u, v])
+        if gradients is not None:
+            # 🚀 Wave 2 優化：使用快取的梯度
+            u_x = gradients['u_x']
+            v_y = gradients['v_y']
+            continuity = u_x + v_y
+        else:
+            # 🐌 Wave 1 相容：自動計算
+            continuity = self.compute_continuity_residual(coords, [u, v])
 
         # === 計算對流項 ===
-        conv_u = self.compute_advection_term(coords, u, [u, v])
-        conv_v = self.compute_advection_term(coords, v, [u, v])
+        if gradients is not None:
+            # 🚀 Wave 2 優化：使用快取的梯度
+            # u 的對流項: u * ∂u/∂x + v * ∂u/∂y
+            conv_u = u * gradients['u_x'] + v * gradients['u_y']
+            # v 的對流項: u * ∂v/∂x + v * ∂v/∂y
+            conv_v = u * gradients['v_x'] + v * gradients['v_y']
+        else:
+            # 🐌 Wave 1 相容：自動計算
+            conv_u = self.compute_advection_term(coords, u, [u, v])
+            conv_v = self.compute_advection_term(coords, v, [u, v])
 
         # === 計算壓力梯度項 ===
-        p_x = self.compute_gradient(p, coords, component=0)
-        p_y = self.compute_gradient(p, coords, component=1)
+        if gradients is not None:
+            # 🚀 Wave 2 優化：使用快取的梯度
+            p_x = gradients['p_x']
+            p_y = gradients['p_y']
+        else:
+            # 🐌 Wave 1 相容：自動計算
+            p_x = self.compute_gradient(p, coords, component=0)
+            p_y = self.compute_gradient(p, coords, component=1)
         pressure_x = p_x / self.rho
         pressure_y = p_y / self.rho
 
         # === 計算黏性項 ===
-        viscous_u = self.compute_viscous_term(coords, u)
-        viscous_v = self.compute_viscous_term(coords, v)
+        if gradients is not None:
+            # 🚀 Wave 2 優化：使用快取的梯度
+            # ν∇²u = ν(∂²u/∂x² + ∂²u/∂y²)
+            viscous_u = self.nu * (gradients['u_xx'] + gradients['u_yy'])
+            viscous_v = self.nu * (gradients['v_xx'] + gradients['v_yy'])
+        else:
+            # 🐌 Wave 1 相容：自動計算
+            viscous_u = self.compute_viscous_term(coords, u)
+            viscous_v = self.compute_viscous_term(coords, v)
 
         # === 計算強迫項（Kolmogorov 特有） ===
         forcing_u = self.compute_forcing_term(coords)

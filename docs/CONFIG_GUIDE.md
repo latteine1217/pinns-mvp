@@ -130,12 +130,67 @@ physics:
 ```yaml
 losses:
   adaptive_weighting: true
-  weight_update_freq: 1000
-  grad_norm_momentum: 0.9
-  grad_norm_alpha: 1.5
-  grad_norm_normalize: true
+  adaptive:
+    scheme: grad_norm
+    init_weights:         # 可選：指定損失項的相對重要性（默認所有為 1.0）
+      u_ic: 100.0         # 初始條件比 PDE 重要 100 倍
+      v_ic: 100.0
+      ru: 1.0             # PDE 基準
+      rv: 1.0
+      rc: 1.0
+    momentum: 0.9         # EMA 平滑係數（對齊 grad_norm_momentum）
+    update_every_steps: 1000  # 更新頻率（對齊 weight_update_freq）
+  weight_update_freq: 1000    # 向後相容（優先使用 adaptive.update_every_steps）
+  grad_norm_momentum: 0.9     # 向後相容（優先使用 adaptive.momentum）
+  grad_norm_alpha: 1.5        # [已棄用] JaxPI 簡化版本不使用
+  grad_norm_normalize: false  # [已棄用/無效] JaxPI 不使用權重正規化（設為 true 會觸發警告）
   adaptive_loss_terms: [data, momentum_x, momentum_y, continuity]
 ```
+
+**⚠️ `grad_norm_normalize` 警告**（v1.1.0+ 修復）:
+- **狀態**: 已棄用且無效（對齊 JaxPI 行為）
+- **原因**: JaxPI-style GradNorm 不使用權重總和正規化
+- **默認值**: `false`（v1.1.0+ 從 `true` 改為 `false`）
+- **行為**: 設為 `true` 會觸發警告，但不執行正規化
+- **建議**: 明確設為 `false` 或從配置中移除
+
+**`init_weights` 語義說明**（v1.1.0+ 修復）:
+- **作用**: 指定不同損失項的**相對重要性**（而非絕對權重）
+- **默認**: 所有損失項初始權重為 `1.0`
+- **示例**: `u_ic: 100.0` 表示初始條件比 PDE 重要 100 倍
+- **動態範圍**: GradNorm 會在此基礎上動態調整（因子範圍 `[0.1, 10.0]`）
+- **最終權重**: `applied_weight = base_weight × gradnorm_factor`
+  - `base_weight`: 來自 `losses.data_weight`, `losses.pde_weight` 等
+  - `gradnorm_factor`: GradNorm 動態計算的相對因子
+- **別名映射**:
+  - `ru` → `momentum_x`
+  - `rv` → `momentum_y`
+  - `rc` → `continuity` / `divergence`
+  - `u_ic`, `v_ic` → `initial_condition`
+
+**⚠️ GradNorm 相對權重裁剪**（v1.1.0+ 修復）:
+- **裁剪語義**: `min_weight` 和 `max_weight` 是**相對比例**（非絕對值）
+- **默認範圍**: `[0.1, 10.0]`（允許權重在初始值的 10% ~ 1000% 範圍內變化）
+- **絕對邊界計算**: 
+  ```python
+  min_abs = init_weight * min_weight  # 例: 100.0 * 0.1 = 10.0
+  max_abs = init_weight * max_weight  # 例: 100.0 * 10.0 = 1000.0
+  ```
+- **示例**: 
+  - 若 `u_ic: 100.0`, `min_weight: 0.1`, `max_weight: 10.0`
+  - 則 `u_ic` 的實際裁剪範圍為 `[10.0, 1000.0]`（相對範圍 100x）
+  - 而 `ru: 1.0` 的裁剪範圍為 `[0.1, 10.0]`（相對範圍 100x）
+- **配置方式**（可選，使用默認值即可）:
+  ```yaml
+  losses:
+    adaptive:
+      grad_norm_min_weight: 0.1   # 相對比例（10% 下界）
+      grad_norm_max_weight: 10.0  # 相對比例（1000% 上界）
+  ```
+- **修復前行為**（v1.0.x bug）:
+  - 使用絕對裁剪範圍 `[0.1, 10.0]`
+  - 導致 `init_weight=100` 的項被過度裁剪（實際範圍僅 0.1x）
+  - 觀測現象: WandB 權重圖在 step 1k 後出現階躍，權重卡在邊界不再動態調整
 
 - 因果權重（Causal Weighting，對齊 JAX-PI 命名）：
 

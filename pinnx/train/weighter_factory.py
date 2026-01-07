@@ -103,28 +103,39 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
     else:
         adaptive_terms = default_adaptive_terms
     if loss_cfg.get('adaptive_weighting', False) and weighters['staged'] is None and adaptive_terms:
-        initial_weights = {name: base_weight_template.get(name, 1.0) for name in adaptive_terms}
+        # 🔧 FIX: GradNorm 初始權重統一設為 1.0（學習相對比例，而非絕對值）
+        # 原因：如果使用 base_weight_template (例如 data=100.0, pde=1.0)，
+        #       會導致 gradnorm_ratio 始終接近 1.0，applied_weight 無法動態調整
+        # 
+        # 設計：
+        #   - 默認所有損失項初始權重為 1.0
+        #   - 允許通過 init_weights 指定特定損失的相對重要性（例如 u_ic: 100.0 表示 IC 比 PDE 重要 100 倍）
+        #   - GradNorm 會在此基礎上動態調整，輸出範圍 [0.1, 10.0]（相對於初始值）
+        initial_weights = {name: 1.0 for name in adaptive_terms}
         if weight_cfg.get('scheme') == 'grad_norm':
             init_cfg = weight_cfg.get('init_weights', {}) or {}
             alias_map = {
                 'ru': 'momentum_x',
                 'rv': 'momentum_y',
                 'rc': 'continuity',
+                'divergence': 'divergence',
                 'u_ic': 'initial_condition',
                 'v_ic': 'initial_condition',
+                'data': 'data',
+                'prior': 'prior',
             }
             for key, value in init_cfg.items():
                 mapped = alias_map.get(key, key)
                 if mapped in initial_weights:
-                    current = float(initial_weights.get(mapped, 1.0))
-                    initial_weights[mapped] = max(current, float(value))
+                    # 直接使用配置值（表示相對重要性）
+                    initial_weights[mapped] = float(value)
         weighters['gradnorm'] = GradNormWeighter(
             model=model,
             loss_names=adaptive_terms,
             alpha=loss_cfg.get('grad_norm_alpha', 1.5),          # 對齊 JaxPI 默認值
             update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 1000)),  # 對齊 JaxPI 默認值
             momentum=weight_cfg.get('momentum', loss_cfg.get('grad_norm_momentum', 0.9)),    # EMA 平滑（對齊 JaxPI）
-            normalize_weights=loss_cfg.get('grad_norm_normalize', True),  # 新增：權重正規化開關（True=PINNx, False=JaxPI）
+            normalize_weights=loss_cfg.get('grad_norm_normalize', False),  # 🔧 FIX: 默認改為 False（對齊 JaxPI）
             initial_weights=initial_weights,
             device=str(device),
             min_weight=loss_cfg.get('grad_norm_min_weight', 0.1),

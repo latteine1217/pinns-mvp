@@ -417,6 +417,59 @@ class TimeWindowTrainer:
         
         return ic_data
     
+    def _init_wandb_once(self):
+        """
+        在外層初始化 WandB（對齊 JaxPI 實現）
+        
+        JaxPI 做法（Line 108-135）：
+        - 在 train_and_evaluate 最外層調用 wandb.init()
+        - 每個 time window 共享同一個 run
+        - 使用 step_offset 讓各窗口的 step 連續
+        
+        Returns:
+            wandb_run: WandB run 實例
+        """
+        import wandb
+        from pathlib import Path
+        
+        # 載入 WandB 配置
+        wandb_config_path = Path('.wandb_config')
+        wandb_api_key = None
+        wandb_project = 'pinns-sparse-turbulence'
+        
+        if wandb_config_path.exists():
+            with open(wandb_config_path, 'r') as f:
+                for line in f:
+                    if line.startswith('WANDB_API_KEY='):
+                        wandb_api_key = line.split('=')[1].strip()
+                    elif line.startswith('WANDB_PROJECT='):
+                        project_value = line.split('=')[1].strip()
+                        if project_value:
+                            wandb_project = project_value
+        
+        if wandb_api_key:
+            os.environ['WANDB_API_KEY'] = wandb_api_key
+        
+        # 從 config 提取實驗配置
+        exp_config = self.config.get('experiment', {})
+        
+        # 初始化 WandB（只調用一次）
+        wandb_run = wandb.init(
+            project=wandb_project,
+            name=exp_config.get('name', 'time_window_training'),
+            group=exp_config.get('group', None),
+            tags=exp_config.get('tags', []) + ['time_window'],  # 添加 time_window 標籤
+            config=self.config,
+            reinit=True
+        )
+        
+        logger.info(f"✅ WandB 初始化完成（Time Window 模式）")
+        logger.info(f"   Project: {wandb_project}")
+        logger.info(f"   Run: {exp_config.get('name')}")
+        logger.info(f"   All {self.num_windows} windows will share this run")
+        
+        return wandb_run
+    
     def train_sequential(self) -> Dict:
         """
         主訓練循環：序列訓練各窗口
@@ -442,7 +495,11 @@ class TimeWindowTrainer:
         Returns:
             訓練結果字典：{'window_results': [...], 'final_loss': ...}
         """
+        import wandb
         from pinnx.train.trainer_builder import TrainerBuilder
+        
+        # ========== 關鍵修正：在外層初始化 WandB（對齊 JaxPI） ==========
+        wandb_run = self._init_wandb_once()
         
         logger.info(f"\n{'='*70}")
         logger.info(f"🪟 Starting Time Window Training")
@@ -452,6 +509,7 @@ class TimeWindowTrainer:
         logger.info(f"{'='*70}\n")
         
         all_results = []
+        cumulative_steps = 0  # ========== 新增：累計步數（對齊 JaxPI step_offset） ==========
         
         for idx, (t_start, t_end) in enumerate(self.windows):
             logger.info(f"\n{'='*70}")
@@ -502,8 +560,22 @@ class TimeWindowTrainer:
                     logger.info(f"   Causal weighter (v2) active - time range handled dynamically")
             
             # 4. 使用 TrainerBuilder 創建當前窗口的 Trainer
+            # ⚠️ 關鍵修正：將總 epochs 平分給各 window
+            total_epochs = self.config['training'].get('epochs', 1000)
+            epochs_per_window = total_epochs // self.num_windows
+            remaining_epochs = total_epochs % self.num_windows
+            
+            # 最後一個 window 處理剩餘的 epochs
+            window_epochs = epochs_per_window + (remaining_epochs if idx == self.num_windows - 1 else 0)
+            
+            # 創建當前 window 的配置副本（避免修改原始配置）
+            import copy
+            window_config = copy.deepcopy(self.config)
+            window_config['training']['epochs'] = window_epochs
+            
             logger.info(f"   Building trainer for Window {idx+1}...")
-            builder = TrainerBuilder(self.config, self.device)
+            logger.info(f"   Total epochs: {total_epochs}, This window: {window_epochs}")
+            builder = TrainerBuilder(window_config, self.device, skip_wandb_init=True)  # ✅ 跳過 WandB 初始化
             builder.with_model(self.model)
             builder.with_physics(self.physics)
             builder.with_losses(self.losses)
@@ -518,6 +590,10 @@ class TimeWindowTrainer:
             if self.weighters:
                 builder.with_weighters(self.weighters)
             
+            # ========== 新增：注入 WandB run 和 step_offset（對齊 JaxPI） ==========
+            builder.with_wandb_run(wandb_run)
+            builder.with_step_offset(cumulative_steps)
+            
             # 構建 Trainer
             trainer = builder.build()
             
@@ -525,6 +601,13 @@ class TimeWindowTrainer:
             logger.info(f"   Starting training for Window {idx+1}...")
             result = trainer.train()
             all_results.append(result)
+            
+            # ========== 更新累計步數（使用實際訓練的 epochs，對齊 JaxPI step_offset） ==========
+            # 從訓練結果中獲取實際完成的 epochs，用於下一個 window 的 step_offset
+            completed_epochs = result.get('epochs_completed', window_epochs)
+            cumulative_steps += completed_epochs
+            logger.info(f"   Window {idx+1} completed {completed_epochs} epochs")
+            logger.info(f"   Cumulative steps: {cumulative_steps}")
             
             logger.info(f"   ✅ Window {idx+1} training completed")
             logger.info(f"   Final loss: {result.get('final_loss', 'N/A'):.6f}")

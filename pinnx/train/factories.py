@@ -201,6 +201,36 @@ def _create_reduce_on_plateau(optimizer, config):
     )
 
 
+@_scheduler_factory.register('warmup_exponential')
+def _create_warmup_exponential(optimizer, config):
+    """Warmup + Exponential Decay 調度器（JAXpi 風格，推薦）"""
+    from pinnx.train.schedulers import WarmupExponentialScheduler
+
+    # 從配置中讀取參數（提供 JAXpi 風格的預設值）
+    warmup_steps = config.get('warmup_steps', 2000)
+    total_steps = config.get('total_steps', config.get('max_epochs', 10000))
+    base_lr = optimizer.param_groups[0]['lr']  # 從優化器獲取 base_lr
+    decay_rate = config.get('decay_rate', 0.9)
+    decay_steps = config.get('decay_steps', 2000)
+    min_lr = config.get('min_lr', 1e-6)
+    staircase = config.get('staircase', False)
+
+    logging.info(
+        f"✅ 使用 Warmup Exponential 調度器（JAXpi 風格）"
+    )
+
+    return WarmupExponentialScheduler(
+        optimizer,
+        warmup_steps=warmup_steps,
+        total_steps=total_steps,
+        base_lr=base_lr,
+        decay_rate=decay_rate,
+        decay_steps=decay_steps,
+        min_lr=min_lr,
+        staircase=staircase
+    )
+
+
 # ============================================================================
 # Optimizer Factory (Registry Pattern)
 # ============================================================================
