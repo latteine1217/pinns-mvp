@@ -58,65 +58,39 @@ class GradNormWeighter(LossWeighter):
     def __init__(self,
                  model: nn.Module,
                  loss_names: List[str],
-                 alpha: float = 1.5,
                  update_frequency: int = 100,
                  initial_weights: Optional[Dict[str, float]] = None,
-                 target_gradient_ratio: float = 1.0,
                  target_ratios: Optional[List[float]] = None,
                  device: Optional[str] = None,
                  min_weight: float = 0.1,
                  max_weight: float = 10.0,
-                 max_ratio: float = 50.0,
-                 momentum: float = 0.95,
-                 normalize_weights: bool = False):
+                 momentum: float = 0.95):
         """
         Args:
             model: PINN 模型
             loss_names: 損失項名稱列表 ['data', 'residual', 'boundary', 'prior']
-            alpha: [已棄用] 保留用於向後相容，當前實作不使用（JaxPI alpha=0）
             update_frequency: 權重更新頻率（每多少步更新一次）
                             推薦值: 100 (JaxPI 每步更新，但 PINNs 可用低頻減少開銷)
             initial_weights: 初始權重字典
-            target_gradient_ratio: [已棄用] 保留用於向後相容
             target_ratios: 目標分佈比例（可選，用於不同損失項的相對重要性）
             device: 計算設備 (None 為自動檢測)
             min_weight: 權重下界比例（相對於 initial_weights，默認 0.1 = 10%）
             max_weight: 權重上界比例（相對於 initial_weights，默認 10.0 = 1000%）
-            max_ratio: [已棄用] 當前實作不使用權重歸一化
             momentum: EMA 平滑係數（推薦值: 0.95，JaxPI 默認值）
-            normalize_weights: [已棄用] JaxPI 不使用權重歸一化（建議設為 False）
         
         Note:
-            權重裁剪使用**相對範圍**（v1.1.0+ 修復）:
+            權重裁剪使用**相對範圍**:
             - 絕對範圍: [initial_weight * min_weight, initial_weight * max_weight]
             - 例如: initial_weight=100, min=0.1, max=10 → 裁剪範圍 [10, 1000]
-            - 修復前: 使用絕對範圍 [0.1, 10.0]，導致大初始權重被過度裁剪
         """
         self.model = model
         self.loss_names = loss_names
-        self.alpha = alpha
         self.update_frequency = update_frequency
-        self.target_gradient_ratio = target_gradient_ratio
         self.target_ratios = target_ratios
-        # 🔧 FIX: 使用相對裁剪比例（v1.1.0+）
-        self.min_weight_ratio = float(min_weight)  # 權重下界比例（相對於 initial_weight）
-        self.max_weight_ratio = float(max_weight)  # 權重上界比例（相對於 initial_weight）
-        # 向後相容：保留舊屬性名
-        self.min_weight = self.min_weight_ratio
-        self.max_weight = self.max_weight_ratio
-        self.max_ratio = float(max(1.0, max_ratio))
-        self.momentum = float(momentum)  # EMA 平滑係數 (對齊 JaxPI)
-        self.normalize_weights = bool(normalize_weights)  # 控制是否正規化權重總和
+        self.min_weight_ratio = float(min_weight)
+        self.max_weight_ratio = float(max_weight)
+        self.momentum = float(momentum)
         self.eps = _EPS
-        
-        # 🚨 警告：normalize_weights 已棄用（對齊 JaxPI）
-        if normalize_weights:
-            import logging
-            logging.warning(
-                "⚠️  normalize_weights=True is deprecated and has no effect. "
-                "JaxPI-style GradNorm does not normalize weight sums. "
-                "Please set grad_norm_normalize=false in your config to suppress this warning."
-            )
         
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -295,10 +269,10 @@ class GradNormWeighter(LossWeighter):
             grad_norm = gradients[name]
             
             # JaxPI 公式: w_i = mean_grad / (grad_norm + eps * mean_grad)
-            eps_adjusted = self.eps * mean_grad  # 數值穩定項
+            eps_adjusted = self.eps * mean_grad
             new_weight = mean_grad / (grad_norm + eps_adjusted)
             
-            # 可選：考慮 target_distribution（保留向後相容性）
+            # 考慮 target_distribution（不同損失項的相對重要性）
             if hasattr(self, 'target_distribution') and name in self.target_distribution:
                 distribution_scale = self.target_distribution[name]
                 new_weight = new_weight * distribution_scale

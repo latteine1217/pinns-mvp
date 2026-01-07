@@ -20,7 +20,7 @@ from typing import Dict, Any
 import torch
 import torch.nn as nn
 
-from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
+from pinnx.losses.weighting import GradNormWeighter, AdaptiveWeightScheduler
 from pinnx.losses.causal_weighter_v2 import create_causal_weighter
 from pinnx.train.schedulers import StagedWeightScheduler, CurriculumScheduler
 from pinnx.train.config_loader import derive_loss_weights
@@ -132,10 +132,8 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         weighters['gradnorm'] = GradNormWeighter(
             model=model,
             loss_names=adaptive_terms,
-            alpha=loss_cfg.get('grad_norm_alpha', 1.5),          # 對齊 JaxPI 默認值
-            update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 1000)),  # 對齊 JaxPI 默認值
-            momentum=weight_cfg.get('momentum', loss_cfg.get('grad_norm_momentum', 0.9)),    # EMA 平滑（對齊 JaxPI）
-            normalize_weights=loss_cfg.get('grad_norm_normalize', False),  # 🔧 FIX: 默認改為 False（對齊 JaxPI）
+            update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 1000)),
+            momentum=weight_cfg.get('momentum', loss_cfg.get('grad_norm_momentum', 0.9)),
             initial_weights=initial_weights,
             device=str(device),
             min_weight=loss_cfg.get('grad_norm_min_weight', 0.1),
@@ -147,44 +145,24 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         if loss_cfg.get('adaptive_weighting', False) and weighters['staged'] is not None:
             logging.info("⚠️  adaptive_weighting disabled (using staged_weights)")
     
-    # 因果權重器（對齊 JaxPI 參數）
+    # 因果權重器（JAX-PI 對齊）
     if loss_cfg.get('causal_weighting', False) or weight_cfg.get('use_causal', False):
         # 獲取配置參數
         causal_cfg = weight_cfg.get('causal', {})
-        causal_version = causal_cfg.get('version', 'v1')  # 默認 v1 保持向後相容
         causal_tol = causal_cfg.get('causal_tol', weight_cfg.get('causal_tol', loss_cfg.get('causal_tol', 1.0)))
         num_chunks = causal_cfg.get('num_chunks', weight_cfg.get('num_chunks', loss_cfg.get('num_chunks', 32)))
         
-        # 獲取時間範圍（用於預計算因果矩陣）
-        kol_cfg = config['data'].get('kolmogorov_config', {})
-        time_range = kol_cfg.get('time_range', [0.0, 1.0])
-        t_min, t_max = time_range
-        
-        if causal_version == 'v2':
-            # 使用新的分量級因果權重器（對齊 JAX-PI）
-            weighters['causal'] = create_causal_weighter(
-                version='v2',
-                causal_tol=causal_tol,
-                num_chunks=num_chunks,
-                device=str(device)
-            )
-            logging.info(
-                f"✅ Causal weighting v2 enabled (JAX-PI aligned): "
-                f"tol={causal_tol:.2f}, chunks={num_chunks}, device={device}"
-            )
-        else:
-            # 使用舊版因果權重器（向後相容）
-            weighters['causal'] = CausalWeighter(
-                causal_tol=causal_tol,
-                num_chunks=num_chunks,
-                t_min=t_min,
-                t_max=t_max,
-                device=str(device)
-            )
-            logging.info(
-                f"✅ Causal weighting v1 enabled: tol={causal_tol:.2f}, "
-                f"chunks={num_chunks}, time_range=[{t_min}, {t_max}], device={device}"
-            )
+        # 使用分量級因果權重器 v2（對齊 JAX-PI）
+        weighters['causal'] = create_causal_weighter(
+            version='v2',
+            causal_tol=causal_tol,
+            num_chunks=num_chunks,
+            device=str(device)
+        )
+        logging.info(
+            f"✅ Causal weighting enabled (JAX-PI aligned): "
+            f"tol={causal_tol:.2f}, chunks={num_chunks}, device={device}"
+        )
     else:
         weighters['causal'] = None
     
