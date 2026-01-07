@@ -188,24 +188,25 @@ class TestCausalWeighterPerComponent:
     
     def test_factory_function(self):
         """測試工廠函數"""
-        # 創建 v2 版本
-        weighter_v2 = create_causal_weighter(
-            version='v2',
+        # 創建因果權重器（v2，對齊 JAX-PI）
+        weighter = create_causal_weighter(
             causal_tol=1.0,
             num_chunks=16,
             device='cpu'
         )
-        assert isinstance(weighter_v2, CausalWeighterPerComponent)
+        assert isinstance(weighter, CausalWeighterPerComponent)
         
-        # 創建兼容版本
-        weighter_compat = create_causal_weighter(
-            version='v1_compat',
-            causal_tol=1.0,
-            num_chunks=16,
-            device='cpu'
-        )
-        # 兼容版本應該有 compute_weights 方法
-        assert hasattr(weighter_compat, 'compute_weights')
+        # 驗證基本功能
+        n_points = 1024
+        residual_dict = {
+            'momentum_x': torch.randn(n_points, 1),
+            'momentum_y': torch.randn(n_points, 1),
+        }
+        time_coords = torch.linspace(0, 1, n_points).unsqueeze(1)
+        
+        # 應該能正常計算權重
+        gamma, _ = weighter.compute_component_weights(residual_dict, time_coords)
+        assert gamma.shape[0] > 0, "Should compute valid causal weights"
         
         print("✅ Factory function test passed")
 

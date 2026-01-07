@@ -300,62 +300,10 @@ class CausalWeighterPerComponent(nn.Module):
 
 
 # ============================================================================
-# 向後兼容包裝器
-# ============================================================================
-
-class CausalWeighterCompatWrapper:
-    """
-    向後兼容包裝器 - 將新版本的分量級因果權重器包裝為舊接口
-    
-    用途：
-    - 保持與現有代碼的兼容性
-    - 逐步遷移到新接口
-    """
-    
-    def __init__(self, causal_tol: float = 1.0, num_chunks: int = 16, device: str = 'cpu'):
-        self.weighter = CausalWeighterPerComponent(
-            causal_tol=causal_tol,
-            num_chunks=num_chunks,
-            device=device
-        )
-    
-    def compute_weights(
-        self,
-        residuals: torch.Tensor,
-        coords: torch.Tensor,
-        context: Dict[str, Any]
-    ) -> torch.Tensor:
-        """
-        舊接口：計算點級權重
-        
-        注意：這是簡化版，僅用於向後兼容
-        """
-        # 假設所有殘差來自單一分量
-        residual_dict = {'residual': residuals}
-        time_coords = coords[:, 0:1] if coords.ndim > 1 else coords
-        
-        gamma, _ = self.weighter.compute_component_weights(
-            residual_dict, time_coords, component_keys=['residual']
-        )
-        
-        # 映射回點級權重（簡化版）
-        n_points = residuals.numel()
-        num_chunks = len(gamma)
-        chunk_size = n_points // num_chunks
-        
-        weights = gamma.repeat_interleave(chunk_size)
-        if len(weights) < n_points:
-            weights = torch.cat([weights, gamma[-1].repeat(n_points - len(weights))])
-        
-        return weights.unsqueeze(1)  # [N, 1]
-
-
-# ============================================================================
 # 工廠函數
 # ============================================================================
 
 def create_causal_weighter(
-    version: str = 'v2',
     causal_tol: float = 1.0,
     num_chunks: int = 16,
     device: str = 'cpu'
@@ -364,27 +312,15 @@ def create_causal_weighter(
     工廠函數：創建因果權重器
     
     Args:
-        version: 版本選擇
-            - 'v2': 新版本（分量級 + 取最小值，對齊 JAX-PI）
-            - 'v1_compat': 舊版本兼容包裝器
-        causal_tol: 因果容差
+        causal_tol: 因果容差（對齊 JAX-PI，默認值 1.0）
         num_chunks: 分塊數量
         device: 計算設備
     
     Returns:
-        因果權重器實例
+        CausalWeighterPerComponent 實例（v2，對齊 JAX-PI）
     """
-    if version == 'v2':
-        return CausalWeighterPerComponent(
-            causal_tol=causal_tol,
-            num_chunks=num_chunks,
-            device=device
-        )
-    elif version == 'v1_compat':
-        return CausalWeighterCompatWrapper(
-            causal_tol=causal_tol,
-            num_chunks=num_chunks,
-            device=device
-        )
-    else:
-        raise ValueError(f"Unknown version: {version}. Choices: ['v2', 'v1_compat']")
+    return CausalWeighterPerComponent(
+        causal_tol=causal_tol,
+        num_chunks=num_chunks,
+        device=device
+    )
