@@ -36,11 +36,11 @@ class TestWeightingStrategies:
         ).to(self.device)
 
     def test_gradnorm_weighting(self):
-        """測試 GradNorm 權重策略"""
+        """測試 GradNorm 權重策略（JaxPI 對齊，2026-01-08）"""
         loss_names = ['data', 'pde', 'boundary']
         gradnorm = GradNormWeighter(
             self.model, loss_names,
-            alpha=0.9, target_ratios=[1.0, 1.0, 0.5], update_frequency=1
+            target_ratios=[1.0, 1.0, 0.5], update_frequency=1
         )
 
         # 模擬損失
@@ -52,21 +52,22 @@ class TestWeightingStrategies:
             'boundary': output[:, 2].abs().mean()
         }
 
-        weights = gradnorm.update_weights(losses, sum(losses.values()))
+        # 使用統一接口：update_weights(losses, context)
+        weights = gradnorm.update_weights(losses, {'step': 1, 'total_loss': sum(losses.values())})
 
         assert len(weights) == len(loss_names)
         assert all(w > 0 for w in weights.values())
         assert all(loss_name in weights for loss_name in loss_names)
 
     def test_gradnorm_weight_sum_and_ratio(self):
-        """GradNorm 權重應維持總和恆定且比例受限"""
+        """GradNorm 權重應維持初始範圍內（JaxPI 對齊，2026-01-08）"""
         loss_names = ['data', 'pde', 'boundary']
         gradnorm = GradNormWeighter(
             self.model,
             loss_names,
-            alpha=0.5,
             update_frequency=1,
-            max_ratio=20.0
+            min_weight=0.1,  # 相對下界
+            max_weight=10.0  # 相對上界
         )
 
         initial_sum = sum(gradnorm.initial_weight_values.values())
@@ -80,14 +81,14 @@ class TestWeightingStrategies:
             'boundary': torch.relu(output[:, 2]).mean()
         }
 
-        weights = gradnorm.update_weights(losses, sum(losses.values()))
+        # 使用統一接口
+        weights = gradnorm.update_weights(losses, {'step': 1, 'total_loss': sum(losses.values())})
 
-        total_weight = sum(weights.values())
-        assert pytest.approx(total_weight, rel=1e-3) == initial_sum
-
-        max_w = max(weights.values())
-        min_w = min(weights.values())
-        assert max_w / max(min_w, 1e-12) <= gradnorm.max_ratio + 1e-6
+        # 檢查權重範圍（相對於 initial_weights）
+        for name in loss_names:
+            init_weight = gradnorm.initial_weight_values[name]
+            assert weights[name] >= init_weight * gradnorm.min_weight_ratio - 1e-6
+            assert weights[name] <= init_weight * gradnorm.max_weight_ratio + 1e-6
 
     def test_adaptive_weighting(self):
         """測試自適應權重策略"""
@@ -113,9 +114,9 @@ class TestWeightingStrategies:
             assert all(w > 0 for w in weights.values())
 
     def test_causal_weighting(self):
-        """測試因果權重策略"""
+        """測試因果權重策略（JAX-PI 對齊，2026-01-08）"""
         causal = CausalWeighter(
-            epsilon=1.0,
+            causal_tol=1.0,  # JAX-PI 參數命名
             num_chunks=5,
             t_min=0.0,
             t_max=4.0,

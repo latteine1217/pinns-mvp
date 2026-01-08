@@ -5,6 +5,11 @@
 1. 裁剪邊界是相對於 initial_weights 的比例（非絕對值）
 2. 不同 initial_weight 值應得到不同的絕對邊界
 3. 權重更新時正確使用相對邊界進行裁剪
+
+注意（2026-01-08 更新）:
+- GradNormWeighter 已對齊 JaxPI 實作，移除 alpha 參數
+- 採用簡化版本（alpha=0），不考慮相對損失
+- 核心公式: w_i = Ḡ / (G_i + ε·Ḡ)
 """
 
 import torch
@@ -41,10 +46,8 @@ class TestGradNormRelativeClipping:
         weighter = GradNormWeighter(
             model=model,
             loss_names=loss_names,
-            initial_weights=init_weights,
-            alpha=1.5,
-            min_weight=0.1,   # 相對比例
-            max_weight=10.0   # 相對比例
+            initial_weights=init_weights
+            # 使用預設 min_weight=0.1, max_weight=10.0
         )
         
         # 驗證絕對邊界
@@ -75,7 +78,6 @@ class TestGradNormRelativeClipping:
             model=model,
             loss_names=loss_names,
             initial_weights=init_weights,
-            alpha=1.5,
             min_weight=0.1,
             max_weight=10.0
         )
@@ -96,29 +98,28 @@ class TestGradNormRelativeClipping:
             model=model,
             loss_names=loss_names,
             initial_weights=init_weights,
-            alpha=1.5,
-            min_weight=0.2,   # 20% 下界
-            max_weight=5.0    # 500% 上界
+            min_weight=0.1,   # 10% 下界
+            max_weight=10.0   # 1000% 上界
         )
         
         # 驗證邊界計算
-        # loss1: 50.0 * [0.2, 5.0] = [10.0, 250.0]
-        assert weighter.min_weight_abs["loss1"] == pytest.approx(10.0)
-        assert weighter.max_weight_abs["loss1"] == pytest.approx(250.0)
+        # loss1: 50.0 * [0.1, 10.0] = [5.0, 500.0]
+        assert weighter.min_weight_abs["loss1"] == pytest.approx(5.0)
+        assert weighter.max_weight_abs["loss1"] == pytest.approx(500.0)
         
-        # loss2: 2.0 * [0.2, 5.0] = [0.4, 10.0]
-        assert weighter.min_weight_abs["loss2"] == pytest.approx(0.4)
-        assert weighter.max_weight_abs["loss2"] == pytest.approx(10.0)
+        # loss2: 2.0 * [0.1, 10.0] = [0.2, 20.0]
+        assert weighter.min_weight_abs["loss2"] == pytest.approx(0.2)
+        assert weighter.max_weight_abs["loss2"] == pytest.approx(20.0)
         
         # 手動測試裁剪功能
         # 超過上界 → 應裁剪到上界
-        weighter.weights["loss1"] = torch.tensor(300.0)
+        weighter.weights["loss1"] = torch.tensor(600.0)
         clamped = torch.clamp(
             weighter.weights["loss1"],
             min=weighter.min_weight_abs["loss1"],
             max=weighter.max_weight_abs["loss1"]
         )
-        assert clamped.item() == pytest.approx(250.0), "超過上界應裁剪到 250.0"
+        assert clamped.item() == pytest.approx(500.0), "超過上界應裁剪到 500.0"
         
         # 低於下界 → 應裁剪到下界
         weighter.weights["loss2"] = torch.tensor(0.1)
@@ -127,7 +128,7 @@ class TestGradNormRelativeClipping:
             min=weighter.min_weight_abs["loss2"],
             max=weighter.max_weight_abs["loss2"]
         )
-        assert clamped.item() == pytest.approx(0.4), "低於下界應裁剪到 0.4"
+        assert clamped.item() == pytest.approx(0.2), "低於下界應裁剪到 0.2"
 
     def test_backward_compatibility_default_values(self):
         """測試向後相容性: 預設值 (0.1, 10.0) 對於 init_weights=1.0 行為一致"""
@@ -138,8 +139,7 @@ class TestGradNormRelativeClipping:
         weighter = GradNormWeighter(
             model=model,
             loss_names=loss_names,
-            initial_weights=init_weights,
-            alpha=1.5
+            initial_weights=init_weights
             # 使用預設 min_weight=0.1, max_weight=10.0
         )
         
@@ -159,7 +159,6 @@ class TestGradNormRelativeClipping:
             model=model,
             loss_names=loss_names,
             initial_weights=init_weights,
-            alpha=1.5,
             min_weight=0.1,
             max_weight=10.0
         )
@@ -189,7 +188,6 @@ class TestGradNormRelativeClipping:
             model=model,
             loss_names=loss_names,
             initial_weights=init_weights,
-            alpha=1.5,
             min_weight=0.1,
             max_weight=10.0
         )

@@ -397,13 +397,16 @@ class TestTrainerStep:
     
     def test_step_with_gradnorm_weighting(self, simple_model, mock_physics, mock_losses,
                                           basic_config, device, training_data_2d, create_trainer):
-        """測試權重應用邏輯（簡化版 - GradNorm 需要額外初始化）"""
+        """測試權重應用邏輯（JaxPI-aligned GradNorm，2026-01-08）"""
         basic_config['losses'].update({
             'adaptive_weighting': True,
-            'adaptive_loss_terms': ['data', 'momentum_x', 'momentum_y', 'continuity', 'wall_constraint'],
-            'weight_update_freq': 1,
-            'grad_norm_alpha': 0.2,
+            'adaptive_loss_terms': ['data', 'momentum_x', 'momentum_y', 'continuity'],
+            'weight_update_freq': 100,  # JaxPI 推薦值
         })
+        basic_config['losses']['weighting'] = {
+            'scheme': 'grad_norm',
+            'momentum': 0.95
+        }
         
         trainer = create_trainer(simple_model, mock_physics, mock_losses, basic_config, device)
         trainer.training_data = training_data_2d
@@ -420,7 +423,7 @@ class TestTrainerStep:
         assert 'data' in applied_weights
         assert 'momentum_x' in applied_weights
         assert 'momentum_y' in applied_weights
-        assert 'divergence' in applied_weights
+        assert 'continuity' in applied_weights
         
         # 驗證帶權重的 loss 數值一致（基本檢查）
         assert result['weighted_data_loss'] > 0

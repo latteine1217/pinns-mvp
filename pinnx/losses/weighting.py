@@ -228,10 +228,18 @@ class GradNormWeighter(LossWeighter):
         其中:
             - Ḡ = mean(G_i): 平均梯度範數
             - G_i = ||∇_θ L_i||: 第 i 個損失的梯度範數
-            - ε = 1e-5: 數值穩定性參數
+            - ε = 1e-5: 數值穩定性參數（JaxPI 默認值）
         
-        參考: JaxPI models.py:208-224
-        論文: Chen et al., "GradNorm" (ICML 2018) - 簡化版本（alpha=0）
+        實現細節（2026-01-08 更新）:
+            - 移除 alpha 參數（對齊 JaxPI，假設 alpha=0）
+            - 移除相對損失計算（不使用 r_i(t)）
+            - 直接計算權重比例（非梯度下降）
+            - 保留 EMA 平滑（提升穩定性）
+        
+        參考: 
+            - JaxPI models.py:208-224
+            - 技術分析: context/technical_reviews/JAXPI_GRADNORM_ANALYSIS_2026-01-06.md
+            - 論文: Chen et al., "GradNorm" (ICML 2018) - 簡化版本（alpha=0）
 
         Args:
             losses: 損失項字典
@@ -260,7 +268,7 @@ class GradNormWeighter(LossWeighter):
         grad_values = torch.stack(usable_gradients)
         mean_grad = grad_values.mean()
         
-        # 3. JaxPI 風格權重計算
+        # 3. JaxPI 風格權重計算（極簡版本）
         for name in self.loss_names:
             if name not in gradients:
                 continue
@@ -268,14 +276,12 @@ class GradNormWeighter(LossWeighter):
             # 當前梯度範數
             grad_norm = gradients[name]
             
-            # JaxPI 公式: w_i = mean_grad / (grad_norm + eps * mean_grad)
-            eps_adjusted = self.eps * mean_grad
-            new_weight = mean_grad / (grad_norm + eps_adjusted)
-            
             # 考慮 target_distribution（不同損失項的相對重要性）
-            if hasattr(self, 'target_distribution') and name in self.target_distribution:
-                distribution_scale = self.target_distribution[name]
-                new_weight = new_weight * distribution_scale
+            distribution_scale = self.target_distribution.get(name, 1.0) if hasattr(self, 'target_distribution') else 1.0
+            
+            # JaxPI 公式: w_i = Ḡ / (G_i + ε·Ḡ) × distribution_scale
+            eps_adjusted = self.eps * mean_grad
+            new_weight = (mean_grad / (grad_norm + eps_adjusted)) * distribution_scale
             
             # 應用 EMA 平滑（對齊 JaxPI）
             # JaxPI: w_new = w_old * momentum + w_computed * (1 - momentum)
@@ -285,7 +291,7 @@ class GradNormWeighter(LossWeighter):
                 new_weight = old_weight * self.momentum + new_weight * (1 - self.momentum)
             
             # 裁剪權重範圍（防止極端值）
-            # 🔧 FIX: 使用相對裁剪範圍（針對每個損失項）
+            # 使用相對裁剪範圍（針對每個損失項）
             self.weights[name] = torch.clamp(
                 new_weight.detach(),
                 min=self.min_weight_abs[name],

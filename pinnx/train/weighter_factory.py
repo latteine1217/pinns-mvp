@@ -103,13 +103,15 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
     else:
         adaptive_terms = default_adaptive_terms
     if loss_cfg.get('adaptive_weighting', False) and weighters['staged'] is None and adaptive_terms:
-        # 🔧 FIX: GradNorm 初始權重統一設為 1.0（學習相對比例，而非絕對值）
-        # 原因：如果使用 base_weight_template (例如 data=100.0, pde=1.0)，
-        #       會導致 gradnorm_ratio 始終接近 1.0，applied_weight 無法動態調整
+        # 🔧 JaxPI 對齊（2026-01-08）: GradNorm 初始權重統一設為 1.0
+        # 原理：
+        #   - JaxPI 的 GradNorm 是「相對比例」平衡器，不考慮絕對值
+        #   - 公式 w_i = Ḡ / (G_i + ε·Ḡ) 自動學習相對比例
+        #   - initial_weights 僅用於設定不同損失項的「相對重要性」
         # 
         # 設計：
-        #   - 默認所有損失項初始權重為 1.0
-        #   - 允許通過 init_weights 指定特定損失的相對重要性（例如 u_ic: 100.0 表示 IC 比 PDE 重要 100 倍）
+        #   - 默認所有損失項初始權重為 1.0（同等重要）
+        #   - 允許通過 init_weights 指定特定損失的相對重要性（例如 data: 2.0 表示資料項比 PDE 重要 2 倍）
         #   - GradNorm 會在此基礎上動態調整，輸出範圍 [0.1, 10.0]（相對於初始值）
         initial_weights = {name: 1.0 for name in adaptive_terms}
         if weight_cfg.get('scheme') == 'grad_norm':
@@ -129,17 +131,22 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
                 if mapped in initial_weights:
                     # 直接使用配置值（表示相對重要性）
                     initial_weights[mapped] = float(value)
+        
+        # JaxPI 推薦參數（2026-01-08）
+        # - update_frequency: 100 (JaxPI 每步更新，但 PINNs 可用低頻減少開銷)
+        # - momentum: 0.95 (JaxPI 默認值，較高的平滑係數提升穩定性)
+        # - min/max_weight: [0.1, 10.0] (相對範圍，防止極端值)
         weighters['gradnorm'] = GradNormWeighter(
             model=model,
             loss_names=adaptive_terms,
-            update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 1000)),
-            momentum=weight_cfg.get('momentum', loss_cfg.get('grad_norm_momentum', 0.9)),
+            update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 100)),  # JaxPI 推薦: 100
+            momentum=weight_cfg.get('momentum', loss_cfg.get('grad_norm_momentum', 0.95)),  # JaxPI 推薦: 0.95
             initial_weights=initial_weights,
             device=str(device),
             min_weight=loss_cfg.get('grad_norm_min_weight', 0.1),
             max_weight=loss_cfg.get('grad_norm_max_weight', 10.0)
         )
-        logging.info("GradNorm adaptive weighting enabled")
+        logging.info(f"✅ GradNorm adaptive weighting enabled (JaxPI-aligned): update_freq={weighters['gradnorm'].update_frequency}, momentum={weighters['gradnorm'].momentum}")
     else:
         weighters['gradnorm'] = None
         if loss_cfg.get('adaptive_weighting', False) and weighters['staged'] is not None:
@@ -152,9 +159,8 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
         causal_tol = causal_cfg.get('causal_tol', weight_cfg.get('causal_tol', loss_cfg.get('causal_tol', 1.0)))
         num_chunks = causal_cfg.get('num_chunks', weight_cfg.get('num_chunks', loss_cfg.get('num_chunks', 32)))
         
-        # 使用分量級因果權重器 v2（對齊 JAX-PI）
+        # 使用分量級因果權重器（對齊 JAX-PI）
         weighters['causal'] = create_causal_weighter(
-            version='v2',
             causal_tol=causal_tol,
             num_chunks=num_chunks,
             device=str(device)
