@@ -58,7 +58,7 @@ class GradNormWeighter(LossWeighter):
     def __init__(self,
                  model: nn.Module,
                  loss_names: List[str],
-                 update_frequency: int = 100,
+                 update_frequency: int = 500,
                  initial_weights: Optional[Dict[str, float]] = None,
                  target_ratios: Optional[List[float]] = None,
                  device: Optional[str] = None,
@@ -70,7 +70,7 @@ class GradNormWeighter(LossWeighter):
             model: PINN 模型
             loss_names: 損失項名稱列表 ['data', 'residual', 'boundary', 'prior']
             update_frequency: 權重更新頻率（每多少步更新一次）
-                            推薦值: 100 (JaxPI 每步更新，但 PINNs 可用低頻減少開銷)
+                            推薦值: 500 (折衷值：JaxPI 每步更新，PINNs 用低頻減少開銷)
             initial_weights: 初始權重字典
             target_ratios: 目標分佈比例（可選，用於不同損失項的相對重要性）
             device: 計算設備 (None 為自動檢測)
@@ -82,6 +82,11 @@ class GradNormWeighter(LossWeighter):
             權重裁剪使用**相對範圍**:
             - 絕對範圍: [initial_weight * min_weight, initial_weight * max_weight]
             - 例如: initial_weight=100, min=0.1, max=10 → 裁剪範圍 [10, 1000]
+            
+            更新頻率建議（2026-01-08）:
+            - JaxPI: 每步更新（適用於 JAX 的高效自動微分）
+            - 本實作: 500 步更新（平衡計算成本與響應速度）
+            - 可根據訓練總步數調整：50k 步訓練用 500，200k 步訓練可用 1000
         """
         self.model = model
         self.loss_names = loss_names
