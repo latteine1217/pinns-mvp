@@ -22,7 +22,7 @@ data:
   dataset: re50_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns_npy/re50
+    data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
     description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
     resolution:
       x: 256
@@ -56,10 +56,10 @@ normalization:
     - 15.0
     - 35.0
 sensors:
-  K: 200
+  K: 100
   selection_method: precomputed
-  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K200_N256_t0-20.json
-  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K200_N256_t0-20_dns_values.npz
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K100_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K100_N256_t0-20_dns_values.npz
   quality_metrics:
     condition_number: 52900.0
     source_resolution: 128x128
@@ -69,8 +69,8 @@ model:
   type: fourier_vs_mlp
   in_dim: 3
   out_dim: 3
-  width: 256
-  depth: 6
+  width: 768
+  depth: 2
   activation: swish
   block_type: piratenet
   use_rwf: true
@@ -128,7 +128,7 @@ losses:
   adaptive_weighting: true
   grad_norm_momentum: 0.9
   weight_update_freq: 1000
-  causal_weighting: true
+  causal_weighting: false
   causal_tol: 1.0
   num_chunks: 16
   merge_momentum: true
@@ -142,7 +142,7 @@ losses:
       rc: 1.0
     momentum: 0.9
     update_every_steps: 1000
-    use_causal: true
+    use_causal: false
     causal_tol: 1.0
     num_chunks: 16
     causal:
@@ -163,20 +163,20 @@ training:
     decay_steps: 2000
     min_lr: 1.0e-06
     staircase: false
-  epochs: 10000
-  batch_size: 10000
+  epochs: 300000
+  batch_size: 8000  # 提升 2 倍以利用雙 GPU 記憶體（避免梯度計算 OOM）
   validation_freq: 100
-  checkpoint_freq: 200
+  checkpoint_freq: 2000
   log_interval: 20
   early_stopping:
     enabled: true
     patience: 2000
     min_delta: 1.0e-06
   sampling:
-    N_pde: 8000
+    N_pde: 6000  # 提升 2 倍以匹配 batch_size 比例 (4:3)
     adaptive_sampling: false
     boundary_points: 500
-  gradient_clip: 5.0
+  gradient_clip: 1.0
   num_time_windows: 3
   time_window_overlap: 0.0
   amp:
@@ -222,7 +222,7 @@ logging:
   level: info
   log_freq: 10
   save_predictions: true
-  wandb: true
+  wandb: false
 output:
   checkpoint_dir: ./checkpoints/experiments/S2_K100
   results_dir: ./results/experiments/S2_K100

@@ -3,38 +3,6 @@
 - **Role**: 資深 AI Engineer & 物理資訊機器學習 (SciML) 專家
 - **Specialty**: PyTorch 架構設計、流體力學逆問題、高維度優化策略
 
-## 核心哲學
-
-1. **Good Taste**: 追求簡潔優雅的邏輯，消除不必要的條件判斷。
-2. **Never Break Userspace**: 絕對相容性，不破壞現有流程，修改前先測試。
-3. **Pragmatism**: 解決真問題。不追求理論完美但無法落地的方案。
-4. **Simplicity**: 複雜性是萬惡之源。代碼短小精悍，專注單一職責。
-
-## 🧠 寫程式哲學（Programming Philosophy）
-
-1. **程式碼是「假設的具象化」，不是答案**
-   - 每一行 code 都在說：「我假設這樣的物理、這樣的資料、這樣的權重是合理的。」
-   - 因此：
-     - 寫 code = 提出假設
-     - Debug = 推翻假設
-
-2. **工程先於理論完美**
-   - 一個能被質疑、被驗證、被重現的解，永遠優於一個漂亮但無法落地的理論
-   - 這正是 Pragmatism 在 SciML 中的具體實踐。
-
-3. **Data ≠ Truth**
-   - 感測資料是帶噪聲的觀測
-   - RANS 是結構化偏誤的 prior，DNS 是「評估現實的工具」
-   - 程式結構必須反映這個層級關係。
-
-4. **能刪掉的程式碼，才是好設計**
-   - 若移除一個模組，結果不變 → 它不該存在
-   - 複雜性不是能力，是風險
-   - 這是 Good Taste × Simplicity 的交集。
-
-5. **好工程是「可辯護的」**
-   - 參數為何這樣選？為何這個 prior 合理？為何這個結果失敗？
-   - 答得出來，比跑得快重要。
 ---
 
 # 🎯 專案目標
@@ -120,111 +88,70 @@
 - 所有修正必須可回溯、可解釋
 - 縮進是語法：大改動後必做 import + AST；避免 Trainer 方法「消失」的歷史 bug 重演
 
-## 三、🧠 寫程式哲學（Programming Philosophy）
-
-1. **程式碼是「假設的具象化」，不是答案**
-   - 每一行 code 都在說：「我假設這樣的物理、這樣的資料、這樣的權重是合理的。」
-   - 因此：
-     - 寫 code = 提出假設
-     - Debug = 推翻假設
-
-2. **工程先於理論完美**
-   - 一個能被質疑、被驗證、被重現的解，永遠優於一個漂亮但無法落地的理論
-   - 這正是 Pragmatism 在 SciML 中的具體實踐。
-
-3. **Data ≠ Truth**
-   - 感測資料是帶噪聲的觀測
-   - RANS 是結構化偏誤的 prior，DNS 是「評估現實的工具」
-   - 程式結構必須反映這個層級關係。
-
-4. **能刪掉的程式碼，才是好設計**
-   - 若移除一個模組，結果不變 → 它不該存在
-   - 複雜性不是能力，是風險
-   - 這是 Good Taste × Simplicity 的交集。
-
-5. **好工程是「可辯護的」**
-   - 參數為何這樣選？為何這個 prior 合理？為何這個結果失敗？
-   - 答得出來，比跑得快重要。
-
 ---
 
 ## 📂 關鍵專案結構
 
-### 核心模組
+### 核心模組 (`pinnx/`)
 
 ```
 pinnx/
 ├── constants.py              # 物理常數管理（JHTDB 統計量、參考值）
 ├── models/                   # 神經網路架構
-│   ├── mlp.py               # 基礎 MLP (Fourier Features + SIREN)
-│   └── wrappers.py          # ManualScalingWrapper, OutputTransform
-├── physics/                  # 物理方程式
-│   ├── kolmogorov_flow.py   # Kolmogorov Flow 2D
-│   └── vs_pinn.py           # Variable-Scaling PINN
-├── training/                 # 訓練系統
+│   ├── fourier_mlp.py       # 基礎 MLP (Fourier Features + SIREN)
+│   └── axis_selective_fourier.py # 軸向選擇性 Fourier Embedding
+├── physics/                  # 物理方程式與微分算子
+│   ├── base/                # 基礎微分算子 (Gradient, Laplacian)
+│   └── gradient_cache.py    # 梯度快取優化 (Gradient Caching)
+├── train/                    # 訓練系統
 │   ├── trainer.py           # 核心 Trainer
-│   └── builder.py           # TrainerBuilder
-├── utils/                    # 工具函數
-│   ├── denormalization.py   # 反標準化工具
-│   └── evaluation_utils.py  # 模型載入與評估工具
-└── evals/                    # 評估指標
-    └── metrics.py           # L2, RMSE, 守恆誤差等
+│   ├── trainer_builder.py   # TrainerBuilder (Builder Pattern)
+│   ├── schedulers/          # 學習率與權重調度
+│   └── validation_manager.py # 驗證管理器
+├── losses/                   # 損失函數
+│   ├── causal_weighter_v2.py # 因果加權 (Causal Weighting)
+│   └── residuals.py         # PDE 殘差計算
+├── optim/                    # 優化器
+│   └── soap.py              # SOAP 優化器
+├── sensors/                  # 感測器佈點策略
+│   └── qr_pivot/            # QR-Pivot 稀疏採樣
+└── dataio/                   # 資料載入與介面
+    ├── loaders/             # 資料集 Loaders (Kolmogorov, RANS)
+    └── jhtdb_client.py      # JHTDB 資料庫介面
 ```
 
-### 評估工具（兩層級體系）
-
-```
-scripts/
-├── evaluate_unified.py                   # 🚀 快速評估工具（訓練中驗證）
-│   - 用途: 日常 checkpoint 快速檢查
-│   - 時間: 1-2 分鐘
-│   - 指標: L2, RMSE, 守恆誤差
-│   - 輸出: JSON + Markdown + 場對比圖
-│
-└── evaluate/
-    ├── README.md                          # 評估工具使用指南
-    ├── comprehensive_evaluation.py        # 🔬 進階科學分析工具（論文級評估）
-    │   - 用途: 論文投稿前完整評估
-    │   - 時間: 5-10 分鐘
-    │   - 進階指標: 能量譜、壁剪應力、速度剖面、高階統計矩
-    │   - 輸出: 高品質科學圖表 + 完整報告
-    │
-    └── archived/                          # 已歸檔的舊評估腳本
-        ├── evaluate.py
-        ├── evaluate_checkpoint.py
-        ├── evaluate_curriculum.py
-        └── evaluate_kolmogorov_2d.py
-```
-
-**評估工具選擇指南**:
-- **訓練階段**: 使用 `evaluate_unified.py` 快速驗證
-- **最終評估**: 使用 `comprehensive_evaluation.py` 深度分析
-- 詳細說明請見: `scripts/evaluate/README.md`
-
-### 配置與文檔
-
-```
-configs/                      # 配置文件
-docs/                         # 完整文檔
-├── EVALUATION_GUIDE.md      # 評估策略與反標準化指南
-├── CONFIG_GUIDE.md          # 配置參數說明
-├── TRAINERBUILDER_GUIDE.md # TrainerBuilder 使用指南
-└── QUICK_START.md           # 快速開始指南
-
-context/
-└── session_logs/            # 會話記錄（所有重要決策與報告）
-```
-
-### 工具腳本
+### 工具腳本 (`scripts/`)
 
 ```
 scripts/
 ├── train/
-│   └── train.py             # 訓練主程式
-├── tools/
-│   ├── validate_config_keys.py    # 配置鍵驗證（必跑！）
-│   └── validate_config.py         # 配置完整性驗證
-└── evaluate_unified.py      # 統一評估入口
+│   └── train.py             # 訓練主程式 (Entry Point)
+├── evaluate_unified.py      # 🚀 快速評估工具 (訓練中/後驗證)
+│   - 用途: Checkpoint 快速檢查 (L2, RMSE, Conservation)
+├── evaluate/
+│   ├── comprehensive_evaluation.py # 🔬 進階科學分析 (論文級)
+│   │   - 用途: 能量譜、壁剪應力、速度剖面
+│   └── README.md            # 評估指南
+├── generate/                # 資料生成工具
+│   ├── sensors/             # 感測器佈點生成 (QR-Pivot, Random)
+│   └── dns/                 # DNS/LES 地面真值生成
+└── tools/
+    ├── validate_config.py   # 配置完整性驗證
+    └── validate_config_keys.py # 配置鍵值檢查 (Fail Fast)
+```
+
+### 配置與文檔
+
+```
+configs/                      # 實驗配置文件 (YAML)
+docs/                         # 完整開發文檔
+├── EVALUATION_GUIDE.md      # 評估策略指南
+├── CONFIG_GUIDE.md          # 配置參數詳解
+├── TRAINERBUILDER_GUIDE.md  # TrainerBuilder 架構說明
+└── QUICK_START.md           # 快速入門
+
+context/
+└── session_logs/            # 會話記錄 (Session Logs & Decision Records)
 ```
 
 ---

@@ -667,7 +667,9 @@ class TrainerBuilder:
             model,
             device_ids=[local_rank],
             output_device=local_rank,
-            find_unused_parameters=False  # 如果確定所有參數都參與梯度計算
+            find_unused_parameters=False,  # 如果確定所有參數都參與梯度計算
+            broadcast_buffers=True,
+            gradient_as_bucket_view=True
         )
         
         return ddp_model

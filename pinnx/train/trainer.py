@@ -592,6 +592,11 @@ class Trainer:
         # 4. 反向傳播與優化
         self._backward_and_optimize(total_loss, data_batch, epoch)
 
+        # 4.1 DDP 損失同步（僅用於日誌與監控）
+        if self._is_ddp_enabled() and self._should_reduce_losses():
+            from pinnx.utils.ddp_utils import reduce_loss_dict
+            result = reduce_loss_dict(result, average=True)
+
         # 5. 附加訓練元數據
         self._add_training_metadata(result, losses, epoch)
 
@@ -700,7 +705,10 @@ class Trainer:
         transferred_batch = {}
         for key, value in data_batch.items():
             if isinstance(value, torch.Tensor):
-                transferred_batch[key] = value.to(self.device, non_blocking=non_blocking)
+                if value.device == self.device:
+                    transferred_batch[key] = value
+                else:
+                    transferred_batch[key] = value.to(self.device, non_blocking=non_blocking)
             else:
                 transferred_batch[key] = value
         
@@ -988,18 +996,17 @@ class Trainer:
         if is_vs_pinn:
             loss_terms['momentum_z'] = losses['momentum_z_loss']
 
-        # 🔧 FIX: 添加先驗一致性損失到 GradNorm（如果存在且非零）
+        # 🔧 FIX: 添加先驗一致性損失到 GradNorm（避免 .item() 同步）
         if 'prior_consistency_loss' in losses:
             prior_loss_val = losses['prior_consistency_loss']
-            # 只在先驗損失有效時加入（避免零值影響梯度計算）
-            if isinstance(prior_loss_val, torch.Tensor) and prior_loss_val.item() > 1e-12:
+            if isinstance(prior_loss_val, torch.Tensor):
                 loss_terms['prior'] = prior_loss_val
         
-        # 🔧 FIX: 添加初始條件損失到 GradNorm（如果存在且非零）
+        # 🔧 FIX: 添加初始條件損失到 GradNorm（避免 .item() 同步）
         # 註：目前 loss_manager 可能尚未實現 initial_condition_loss，預留接口
         if 'initial_condition_loss' in losses:
             ic_loss_val = losses['initial_condition_loss']
-            if isinstance(ic_loss_val, torch.Tensor) and ic_loss_val.item() > 1e-12:
+            if isinstance(ic_loss_val, torch.Tensor):
                 loss_terms['initial_condition'] = ic_loss_val
 
         # GradNorm 動態權重
@@ -1204,8 +1211,13 @@ class Trainer:
                 self.device, loop_helper.get_history()
             )
             
-            # 2. 執行訓練步驟
-            loss_dict = self.step(self.training_data, epoch)
+            # 2. DDP 數據分割（必要時）
+            data_batch = self.training_data
+            if self._is_ddp_enabled() and self._should_split_training_data():
+                data_batch = self._split_training_data(data_batch)
+            
+            # 3. 執行訓練步驟
+            loss_dict = self.step(data_batch, epoch)
             
             # 3. 驗證指標計算
             if validation_freq > 0 and epoch % validation_freq == 0:
@@ -1351,6 +1363,8 @@ class Trainer:
         else:
             current_metric = loss_dict['total_loss']
         
+        current_metric = self._to_scalar(current_metric)
+        
         # 檢查是否應該停止
         if self.check_early_stopping(current_metric):
             logging.info(f"🛑 早停觸發於 epoch {epoch}")
@@ -1375,7 +1389,8 @@ class Trainer:
         Returns:
             True 表示已達收斂條件
         """
-        if self.convergence_threshold is not None and loss_dict['total_loss'] < self.convergence_threshold:
+        total_loss = self._to_scalar(loss_dict['total_loss'])
+        if self.convergence_threshold is not None and total_loss < self.convergence_threshold:
             logging.info(f"✅ 快速收斂於 epoch {epoch}（loss < {self.convergence_threshold:.2e}）")
             return True
         return False
@@ -1400,7 +1415,7 @@ class Trainer:
             訓練結果字典
         """
         total_time = time.time() - start_time
-        final_loss = loss_dict['total_loss']
+        final_loss = self._to_scalar(loss_dict['total_loss'])
 
         # 🆕 停止 Timer 並打印摘要
         self.timer.stop()
@@ -1482,6 +1497,45 @@ class Trainer:
         
         # 分散式環境，檢查 rank
         return dist.get_rank() == 0
+
+    def _is_ddp_enabled(self) -> bool:
+        """判斷是否啟用 DDP"""
+        import torch.distributed as dist
+
+        if not dist.is_available() or not dist.is_initialized():
+            return False
+
+        ddp_cfg = self.train_cfg.get('ddp', {})
+        enabled = ddp_cfg.get('enabled')
+        if enabled is False:
+            return False
+
+        return True
+
+    def _should_split_training_data(self) -> bool:
+        """判斷是否需要分割訓練資料"""
+        ddp_cfg = self.train_cfg.get('ddp', {})
+        return bool(ddp_cfg.get('split_data', True))
+
+    def _should_reduce_losses(self) -> bool:
+        """判斷是否需要同步損失"""
+        ddp_cfg = self.train_cfg.get('ddp', {})
+        return bool(ddp_cfg.get('reduce_losses', True))
+
+    def _split_training_data(self, training_data: Dict[str, Any]) -> Dict[str, Any]:
+        """執行 DDP 訓練資料分割"""
+        import torch.distributed as dist
+        from pinnx.utils.ddp_utils import split_data_by_rank, verify_data_split
+
+        ddp_cfg = self.train_cfg.get('ddp', {})
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        split_data = split_data_by_rank(training_data, rank=rank, world_size=world_size)
+
+        if ddp_cfg.get('verify_data_split', False):
+            verify_data_split(split_data, rank=rank, world_size=world_size)
+
+        return split_data
     
     # ========================================================================
     # 配置解析輔助方法
@@ -1810,6 +1864,8 @@ class Trainer:
             # 跳過字典類型的值（如 gradnorm_weights, applied_weights）
             if isinstance(value, dict):
                 continue
+            if isinstance(value, torch.Tensor):
+                value = self._to_scalar(value)
             # 跳過非數值類型（如字串、列表等）
             if not isinstance(value, (int, float)):
                 continue
@@ -1831,6 +1887,6 @@ class Trainer:
         for key, value in metrics.items():
             if key not in self.history:
                 self.history[key] = []
-            self.history[key].append(value)
+            self.history[key].append(self._to_scalar(value))
         
         self.history['lr'].append(self.get_current_lr())

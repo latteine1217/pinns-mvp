@@ -272,6 +272,13 @@ training:
       enabled: false
   gradient_clip: 1.0
   
+  # ========== DDP 分散式訓練 ==========
+  ddp:
+    enabled: null         # null=自動偵測, true=強制啟用, false=禁用
+    split_data: true      # 是否分割訓練數據
+    reduce_losses: true   # 是否同步損失做監控
+    verify_data_split: false
+  
   # ========== Time Window Training 配置 ==========
   # 適用於長時間模擬（如 Kolmogorov Flow 0-50s）
   # 參考: docs/TIME_WINDOW_TRAINING_GUIDE.md

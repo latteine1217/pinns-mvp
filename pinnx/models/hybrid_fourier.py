@@ -175,11 +175,12 @@ class HybridFourierFeatures(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         🚀 Phase 3 優化：Lazy Evaluation + 記憶體預分配
+        🔧 DDP 修復：避免 in-place 切片賦值，改用 list concatenation
         
         前向傳播優化策略：
         1. 'none' 類型軸直接透傳，零 Fourier 計算開銷
-        2. 預分配輸出 tensor，避免動態拼接
-        3. 使用切片賦值替代 torch.cat（減少記憶體複製）
+        2. 使用 list 收集特徵，最後一次性 cat（避免 in-place 修改）
+        3. DDP-safe：不修改任何 tensor 的 view
         
         Args:
             x: [batch_size, in_dim] 輸入座標
@@ -190,33 +191,31 @@ class HybridFourierFeatures(nn.Module):
         if x.shape[1] != self.in_dim:
             raise ValueError(f"輸入維度不匹配: 期望 {self.in_dim}, 實際 {x.shape[1]}")
         
-        batch_size = x.shape[0]
-        
-        # 🚀 Phase 3: 預分配輸出 tensor（避免多次 torch.cat）
-        output = torch.empty(batch_size, self.out_dim, dtype=x.dtype, device=x.device)
+        # 🔧 DDP fix: 使用 list 收集特徵，避免 in-place 切片賦值
+        feature_list = []
         
         # 🚀 Phase 3: 效能統計（僅在啟用時）
         if self.enable_perf_stats:
             self._perf_stats['forward_calls'] += 1
         
-        # 對每個軸分別編碼（使用切片賦值）
+        # 對每個軸分別編碼
         for axis_idx in range(self.in_dim):
             x_axis = x[:, axis_idx:axis_idx+1]  # [batch, 1]
             encoder = self.encoder_map[axis_idx]  # 🚀 使用 encoder_map 避免類型錯誤
-            start_idx, end_idx = self._axis_slice_indices[axis_idx]
             
             if encoder is None:
                 # 🚀 Phase 3: 直接透傳（零計算開銷）
-                output[:, start_idx:end_idx] = x_axis
+                feature_list.append(x_axis)
             else:
                 # 使用編碼器計算 Fourier 特徵
-                output[:, start_idx:end_idx] = encoder(x_axis)
+                feature_list.append(encoder(x_axis))
                 
                 # 🚀 Phase 3: 統計實際執行的 Fourier 運算
                 if self.enable_perf_stats:
                     self._perf_stats['total_fourier_ops'] += 1
         
-        return output
+        # 🔧 DDP fix: 一次性 concatenate，避免 in-place 修改
+        return torch.cat(feature_list, dim=1)
     
     def get_perf_stats(self) -> Dict[str, Any]:
         """
@@ -296,7 +295,11 @@ class PeriodicFourierFeatures(nn.Module):
         if trainable:
             self.frequencies = nn.Parameter(frequencies)
         else:
-            self.register_buffer('frequencies', frequencies)
+            # 🚀 效能優化: 註冊為 persistent=False 的 buffer
+            # - 自動跟隨模型 device (消除每次 forward 的 .to() 調用)
+            # - persistent=False 避免保存到 checkpoint
+            # - DDP-safe: buffer 會自動同步
+            self.register_buffer('frequencies', frequencies, persistent=False)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -305,7 +308,10 @@ class PeriodicFourierFeatures(nn.Module):
         Returns:
             [batch_size, 2*n_modes] 週期性特徵
         """
-        z = x * self.frequencies.unsqueeze(0)  # [batch, n_modes]
+        # 🚀 效能優化: self.frequencies 現在是 buffer，自動在正確的 device 上
+        # 無需手動 .to(device)，減少每次 forward 的開銷
+        freq = self.frequencies.reshape(1, -1)  # [1, n_modes]
+        z = x * freq  # [batch, n_modes]
         return torch.cat([torch.sin(z), torch.cos(z)], dim=-1)
     
     def extra_repr(self) -> str:
@@ -346,7 +352,11 @@ class StandardFourierFeatures1D(nn.Module):
         if trainable:
             self.B = nn.Parameter(B)
         else:
-            self.register_buffer('B', B)
+            # 🚀 效能優化: 註冊為 persistent=False 的 buffer
+            # - 自動跟隨模型 device (消除每次 forward 的 .to() 調用)
+            # - persistent=False 避免保存到 checkpoint
+            # - DDP-safe: buffer 會自動同步
+            self.register_buffer('B', B, persistent=False)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -355,9 +365,11 @@ class StandardFourierFeatures1D(nn.Module):
         Returns:
             [batch_size, 2*m] Fourier 特徵
         """
+        # 🚀 效能優化: self.B 現在是 buffer，自動在正確的 device 上
+        # 無需手動 .to(device)，減少每次 forward 的開銷
         z = x @ self.B  # [batch, m]
         if self.use_2pi:
-            z = 2.0 * np.pi * z
+            z = z * (2.0 * np.pi)
         return torch.cat([torch.cos(z), torch.sin(z)], dim=-1)
     
     def extra_repr(self) -> str:

@@ -43,15 +43,16 @@ def _extract_dns_initial_condition(
         subsample_factor: 降采樣因子（2 = 每隔一個點取樣，減少 IC 點數）
     
     Returns:
-        IC 數據字典，包含：
-        - 'x', 'y', 't': 座標張量 [N_ic, 1]
-        - 'u', 'v', 'p': 場變量張量 [N_ic, 1]
-        - 't_actual': 實際提取的時間（最接近 t_target 的時間步）
-        
+        初始條件字典，包含 x, y, t, u, v, p 張量
         若無法提取則返回 None
     """
     try:
         data_path = Path(config['data_path'])
+        
+        # 🔧 檢查：如果 data_path 是文件而非目錄，則無法提取 IC
+        if data_path.is_file():
+            logging.info(f"   ⏭️  data_path 指向文件 ({data_path.name})，跳過 IC 提取")
+            return None
         
         # 載入時間軸（mmap 模式）
         time_all = np.load(data_path / 'time.npy', mmap_mode='r')
@@ -155,12 +156,16 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     dns_values_npz_path = None
     if dns_values_file:
         dns_values_npz_path = Path(dns_values_file)
+        # 如果是相對路徑，相對於專案根目錄（不是 sensor_file 的 parent）
+        if not dns_values_npz_path.is_absolute():
+            dns_values_npz_path = Path.cwd() / dns_values_npz_path
     elif dns_values_npz:
         dns_values_npz_path = Path(dns_values_npz)
-
-    if dns_values_npz_path is not None:
+        # 如果從 sensor JSON 讀取，相對於 sensor_file 的 parent
         if not dns_values_npz_path.is_absolute():
             dns_values_npz_path = (Path(sensor_file).parent / dns_values_npz_path).resolve()
+
+    if dns_values_npz_path is not None:
         if not dns_values_npz_path.exists():
             raise FileNotFoundError(f"DNS values npz 不存在: {dns_values_npz_path}")
 

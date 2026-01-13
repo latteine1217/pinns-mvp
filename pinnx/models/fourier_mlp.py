@@ -161,7 +161,11 @@ class FourierFeatures(nn.Module):
         if trainable:
             self.B = nn.Parameter(B)
         else:
-            self.register_buffer("B", B)
+            # 🚀 效能優化: 註冊為 persistent=False 的 buffer
+            # - 自動跟隨模型 device (消除每次 forward 的 .to() 調用)
+            # - persistent=False 避免保存到 checkpoint (節省空間)
+            # - DDP-safe: buffer 會自動同步
+            self.register_buffer('B', B, persistent=False)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -170,6 +174,8 @@ class FourierFeatures(nn.Module):
         Returns:
             [batch_size, 2*m] Fourier 特徵 [cos(z), sin(z)]
         """
+        # 🚀 效能優化: self.B 現在是 buffer，自動在正確的 device 上
+        # 無需手動 .to(device)，減少每次 forward 的開銷
         z = x @ self.B
         if self.use_2pi:
             z = 2.0 * math.pi * z
@@ -223,7 +229,11 @@ class PeriodicFourierFeatures(nn.Module):
         if trainable:
             self.frequencies = nn.Parameter(frequencies)
         else:
-            self.register_buffer('frequencies', frequencies)
+            # 🚀 效能優化: 註冊為 persistent=False 的 buffer
+            # - 自動跟隨模型 device (消除每次 forward 的 .to() 調用)
+            # - persistent=False 避免保存到 checkpoint
+            # - DDP-safe: buffer 會自動同步
+            self.register_buffer('frequencies', frequencies, persistent=False)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -232,9 +242,11 @@ class PeriodicFourierFeatures(nn.Module):
         Returns:
             [batch_size, 2*n_modes] 週期性 Fourier 特徵 [sin(ω₁x), ..., sin(ωₙx), cos(ω₁x), ..., cos(ωₙx)]
         """
-        # 計算相位：z = [ω₁x, ω₂x, ..., ωₙx]
-        z = x * self.frequencies.unsqueeze(0)  # [batch, n_modes]
-        
+        # 🚀 效能優化: self.frequencies 現在是 buffer，自動在正確的 device 上
+        # 無需手動 .to(device)，減少每次 forward 的開銷
+        freq = self.frequencies.reshape(1, -1)  # [1, n_modes]
+        z = x * freq  # [batch, n_modes]
+
         # 返回 [sin, cos] 組合
         return torch.cat([torch.sin(z), torch.cos(z)], dim=-1)
     

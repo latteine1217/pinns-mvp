@@ -56,7 +56,7 @@ normalization:
     - 15.0
     - 35.0
 sensors:
-  K: 50
+  K: 30
   selection_method: precomputed
   sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K50_N256_t0-20.json
   dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K50_N256_t0-20_dns_values.npz
@@ -69,8 +69,8 @@ model:
   type: fourier_vs_mlp
   in_dim: 3
   out_dim: 3
-  width: 256
-  depth: 6
+  width: 768
+  depth: 2
   activation: swish
   block_type: piratenet
   use_rwf: true
@@ -163,10 +163,10 @@ training:
     decay_steps: 2000
     min_lr: 1.0e-06
     staircase: false
-  epochs: 10000
+  epochs: 300000
   batch_size: 10000
   validation_freq: 100
-  checkpoint_freq: 200
+  checkpoint_freq: 2000
   log_interval: 20
   early_stopping:
     enabled: true
@@ -176,7 +176,7 @@ training:
     N_pde: 8000
     adaptive_sampling: false
     boundary_points: 500
-  gradient_clip: 5.0
+  gradient_clip: 1.0
   num_time_windows: 3
   time_window_overlap: 0.0
   amp:

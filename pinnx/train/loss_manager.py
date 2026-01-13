@@ -195,7 +195,9 @@ class LossManager:
         # 提取時間分量（如果存在）
         t_pde = data_batch.get('t_pde')
         if t_pde is not None:
-            t_pde = t_pde.to(self.device).requires_grad_(True)
+            if isinstance(t_pde, torch.Tensor) and t_pde.device != self.device:
+                t_pde = t_pde.to(self.device)
+            t_pde = t_pde.requires_grad_(True)
             
             # ========== 驗證: 時間維度處理 ==========
             if epoch == 0:
@@ -880,52 +882,52 @@ class LossManager:
         
         # === 基礎損失項（必定存在）===
         result = {
-            'total_loss': total_loss.item(),
-            'data_loss': loss_dict['data_loss'].item(),
-            'pde_loss': (weighted_momentum_loss + weighted_continuity_loss).item(),
-            'bc_loss': unweighted_bc_loss.item(),
-            'continuity_loss': loss_dict['continuity_loss'].item(),
-            'momentum_x_loss': loss_dict['momentum_x_loss'].item(),
-            'momentum_y_loss': loss_dict['momentum_y_loss'].item(),
-            'momentum_z_loss': loss_dict['momentum_z_loss'].item(),
-            'u_loss': loss_dict['u_loss'].item(),
-            'v_loss': loss_dict['v_loss'].item(),
-            'w_loss': loss_dict['w_loss'].item(),
-            'pressure_loss': loss_dict['pressure_loss'].item(),
+            'total_loss': total_loss,
+            'data_loss': loss_dict['data_loss'],
+            'pde_loss': weighted_momentum_loss + weighted_continuity_loss,
+            'bc_loss': unweighted_bc_loss,
+            'continuity_loss': loss_dict['continuity_loss'],
+            'momentum_x_loss': loss_dict['momentum_x_loss'],
+            'momentum_y_loss': loss_dict['momentum_y_loss'],
+            'momentum_z_loss': loss_dict['momentum_z_loss'],
+            'u_loss': loss_dict['u_loss'],
+            'v_loss': loss_dict['v_loss'],
+            'w_loss': loss_dict['w_loss'],
+            'pressure_loss': loss_dict['pressure_loss'],
         }
         
         # === 加權損失項 ===
         result.update({
-            'weighted_data_loss': weighted_data_loss.item(),
-            'weighted_pde_loss': weighted_momentum_loss.item(),
-            'weighted_continuity_loss': weighted_continuity_loss.item(),
-            'weighted_bc_loss': weighted_bc_loss.item(),
-            'weighted_prior_loss': weighted_prior_loss.item(),  # 🔧 FIX: 加權先驗損失
-            'weighted_ic_loss': weighted_ic_loss.item(),        # 🔧 FIX: 加權初始條件損失
+            'weighted_data_loss': weighted_data_loss,
+            'weighted_pde_loss': weighted_momentum_loss,
+            'weighted_continuity_loss': weighted_continuity_loss,
+            'weighted_bc_loss': weighted_bc_loss,
+            'weighted_prior_loss': weighted_prior_loss,  # 🔧 FIX: 加權先驗損失
+            'weighted_ic_loss': weighted_ic_loss,        # 🔧 FIX: 加權初始條件損失
         })
         
         # === 邊界條件損失細項（所有類型，不存在則為 0.0）===
         result.update({
-            'periodic_x_loss': loss_dict.get('periodic_x_loss', torch.tensor(0.0, device=self.device)).item(),
-            'periodic_y_loss': loss_dict.get('periodic_y_loss', torch.tensor(0.0, device=self.device)).item(),
-            'wall_loss': loss_dict.get('wall_loss', torch.tensor(0.0, device=self.device)).item(),
-            'inlet_loss': loss_dict.get('inlet_loss', torch.tensor(0.0, device=self.device)).item(),
-            'outlet_loss': loss_dict.get('outlet_loss', torch.tensor(0.0, device=self.device)).item(),
+            'periodic_x_loss': loss_dict.get('periodic_x_loss', torch.tensor(0.0, device=self.device)),
+            'periodic_y_loss': loss_dict.get('periodic_y_loss', torch.tensor(0.0, device=self.device)),
+            'wall_loss': loss_dict.get('wall_loss', torch.tensor(0.0, device=self.device)),
+            'inlet_loss': loss_dict.get('inlet_loss', torch.tensor(0.0, device=self.device)),
+            'outlet_loss': loss_dict.get('outlet_loss', torch.tensor(0.0, device=self.device)),
         })
         
         # === 先驗一致性損失（不存在則為 0.0）===
         result.update({
-            'prior_consistency_loss': loss_dict.get('prior_consistency_loss', torch.tensor(0.0, device=self.device)).item(),
-            'prior_loss_u': loss_dict.get('prior_loss_u', torch.tensor(0.0, device=self.device)).item(),
-            'prior_loss_v': loss_dict.get('prior_loss_v', torch.tensor(0.0, device=self.device)).item(),
-            'prior_loss_p': loss_dict.get('prior_loss_p', torch.tensor(0.0, device=self.device)).item(),
+            'prior_consistency_loss': loss_dict.get('prior_consistency_loss', torch.tensor(0.0, device=self.device)),
+            'prior_loss_u': loss_dict.get('prior_loss_u', torch.tensor(0.0, device=self.device)),
+            'prior_loss_v': loss_dict.get('prior_loss_v', torch.tensor(0.0, device=self.device)),
+            'prior_loss_p': loss_dict.get('prior_loss_p', torch.tensor(0.0, device=self.device)),
         })
         
         # === 正則化損失（不存在則為 0.0）===
         result.update({
-            'regularization_loss': loss_dict.get('regularization_loss', torch.tensor(0.0, device=self.device)).item(),
-            'l2_reg': loss_dict.get('l2_reg', torch.tensor(0.0, device=self.device)).item(),
-            'gradient_penalty': loss_dict.get('gradient_penalty', torch.tensor(0.0, device=self.device)).item(),
+            'regularization_loss': loss_dict.get('regularization_loss', torch.tensor(0.0, device=self.device)),
+            'l2_reg': loss_dict.get('l2_reg', torch.tensor(0.0, device=self.device)),
+            'gradient_penalty': loss_dict.get('gradient_penalty', torch.tensor(0.0, device=self.device)),
         })
         
         # === 應用權重字典 ===

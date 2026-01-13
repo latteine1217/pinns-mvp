@@ -230,17 +230,20 @@ class AxisSelectiveFourierFeatures(nn.Module):
         
         # Step 1: 歸一化輸入到 [0, 2π] 範圍
         # x_normalized = x * (2π / L)
-        norm_factors = cast(torch.Tensor, self._normalization_factors).to(x.device)
+        # 🚀 效能優化: _normalization_factors 是 buffer，自動在正確的 device 上
+        norm_factors = cast(torch.Tensor, self._normalization_factors)
         x_norm = x * norm_factors
-        
+
         # Step 2: 計算相位 z = x_normalized @ B
         # 維度：[batch, in_dim] @ [in_dim, total_freqs] = [batch, total_freqs]
-        z = x_norm @ self.B.to(x.device)
-        
+        # 🚀 效能優化: self.B 是 buffer，自動在正確的 device 上
+        z = x_norm @ self.B
+
         # Step 3: 🔧 TASK-007 頻率掩碼（退火支援）
         # 若當前 axes_config 是 full_axes_config 的子集，需要掩碼未啟用頻率
         if hasattr(self, '_frequency_mask'):
-            mask = cast(torch.Tensor, self._frequency_mask).to(x.device)
+            # 🚀 效能優化: _frequency_mask 是 buffer，自動在正確的 device 上
+            mask = cast(torch.Tensor, self._frequency_mask)
             z = z * mask
         
         # Step 4: 計算 cos/sin 特徵

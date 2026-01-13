@@ -5,8 +5,10 @@
 #SBATCH --time=14-00:00:00
 #SBATCH --partition=r740
 #SBATCH --mem=108G
-#SBATCH --gres=gpu:1
-#SBATCH --array=0-4
+#SBATCH --gres=gpu:2
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --array=0-3
 
 # ===================================================================
 # S2 K-Scan SLURM 陣列任務（平行執行）
@@ -20,14 +22,24 @@
 #   - 每個 K 值會分配到獨立的 GPU
 #   - 可同時執行 4 個實驗（如果資源允許）
 #   - 每個任務最多執行 14 天
+#   - 使用伺服器上可用的感測器文件: K=50, 100, 200, 400
 # ===================================================================
 
 # 設定環境
 source ~/.bashrc
 cd /home/junyi/pinns-sparse-flow || exit 1
 
-# K 值列表
-K_VALUES=(30 50 80 100 200)
+# 設定 Python 路徑
+export PYTHONPATH="/home/junyi/pinns-sparse-flow:$PYTHONPATH"
+
+# 添加 torchrun 到 PATH
+export PATH="/home/junyi/.local/bin:$PATH"
+
+# 禁用 WandB（伺服器無法連接外網）
+export WANDB_MODE=disabled
+
+# K 值列表（使用實際可用的感測器文件）
+K_VALUES=(50 100 200 400)
 
 # 根據 SLURM_ARRAY_TASK_ID 選擇 K 值
 K=${K_VALUES[$SLURM_ARRAY_TASK_ID]}
@@ -54,8 +66,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# 啟動訓練
-python3 scripts/train/train.py --cfg "$CONFIG_FILE"
+# 啟動訓練（使用 torchrun 啟動 DDP）
+echo "🚀 Launching DDP training with 2 GPUs..."
+torchrun --standalone --nnodes=1 --nproc_per_node=2 \
+    scripts/train/train.py --cfg "$CONFIG_FILE"
 
 EXIT_CODE=$?
 

@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 import wandb
 
+from pinnx.utils.metrics_buffer import MetricsBuffer
+
 
 class TrainingLoopManager:
     """
@@ -33,23 +35,47 @@ class TrainingLoopManager:
     - 早停決策（check_early_stopping）
     """
     
-    def __init__(self, config: Dict, wandb_run: Optional[Any], step_offset: int = 0):
+    def __init__(self, config: Dict, wandb_run: Optional[Any], step_offset: int = 0,
+                 use_metrics_buffer: bool = True):
         """
         Args:
             config: 訓練配置字典
             wandb_run: WandB Run 實例（若為 None 則不記錄）
             step_offset: 訓練步數偏移（用於 time window 訓練）
+            use_metrics_buffer: 是否使用批次化指標緩衝（預設 True，效能優化）
         """
         self.config = config
         self.wandb_run = wandb_run
         self.step_offset = step_offset
-        
+        self.use_metrics_buffer = use_metrics_buffer
+
         # 訓練歷史記錄
         self.history = {
             'total_loss': [],
             'val_loss': [],
             'epoch': []
         }
+
+        # 🚀 效能優化：批次化指標緩衝
+        if use_metrics_buffer:
+            # 從 config 讀取或使用預設值
+            log_interval = config.get('logging', {}).get('log_interval', 10)
+            flush_frequency = max(1, log_interval // 2)  # Flush 頻率為 log 頻率的一半
+
+            self.metrics_buffer = MetricsBuffer(
+                flush_frequency=flush_frequency,
+                enable_stats=False  # 生產環境關閉統計
+            )
+            logging.info(f"✅ MetricsBuffer 啟用（flush_frequency={flush_frequency}）")
+        else:
+            self.metrics_buffer = None
+
+    @staticmethod
+    def _to_scalar(value: Any):
+        """安全轉換為 Python scalar（避免在熱路徑大量同步）"""
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().item()
+        return value
     
     # ========================================================================
     # 歷史記錄管理
@@ -57,16 +83,40 @@ class TrainingLoopManager:
     
     def update_history(self, loss_dict: Dict, epoch: int):
         """
-        更新訓練歷史
-        
+        更新訓練歷史（🚀 優化：使用 MetricsBuffer 延遲同步）
+
         Args:
             loss_dict: 損失字典
             epoch: 當前 epoch
         """
-        self.history['total_loss'].append(loss_dict['total_loss'])
-        self.history['epoch'].append(epoch)
-        if 'val_loss' in loss_dict:
-            self.history['val_loss'].append(loss_dict['val_loss'])
+        if self.use_metrics_buffer and self.metrics_buffer is not None:
+            # 🚀 使用 MetricsBuffer：延遲同步
+            metrics_to_record = {
+                'total_loss': loss_dict['total_loss'],
+                'epoch': torch.tensor(epoch, dtype=torch.float32)
+            }
+            if 'val_loss' in loss_dict:
+                metrics_to_record['val_loss'] = loss_dict['val_loss']
+
+            self.metrics_buffer.record(metrics_to_record)
+
+            # 檢查是否需要 flush
+            if self.metrics_buffer.should_flush():
+                flushed_metrics = self.metrics_buffer.flush()
+
+                # 添加到歷史記錄
+                if 'total_loss' in flushed_metrics:
+                    self.history['total_loss'].extend(flushed_metrics['total_loss'])
+                if 'epoch' in flushed_metrics:
+                    self.history['epoch'].extend([int(e) for e in flushed_metrics['epoch']])
+                if 'val_loss' in flushed_metrics:
+                    self.history['val_loss'].extend(flushed_metrics['val_loss'])
+        else:
+            # 傳統方式：立即同步（向後相容）
+            self.history['total_loss'].append(self._to_scalar(loss_dict['total_loss']))
+            self.history['epoch'].append(epoch)
+            if 'val_loss' in loss_dict:
+                self.history['val_loss'].append(self._to_scalar(loss_dict['val_loss']))
     
     def get_history(self) -> Dict:
         """
@@ -145,6 +195,13 @@ class TrainingLoopManager:
 
         # 9. 損失權重（GradNorm 與應用權重）
         self._add_loss_weights(log_dict, loss_dict)
+
+        # 10. DDP 訓練指標
+        self._add_ddp_metrics(log_dict)
+
+        # 統一轉換為 Python scalar（減少同步頻率）
+        for key, value in log_dict.items():
+            log_dict[key] = self._to_scalar(value)
 
         # 一次性記錄所有指標
         wandb.log(log_dict)
@@ -260,6 +317,22 @@ class TrainingLoopManager:
                 for key, value in applied_weights.items():
                     # 記錄到 Weights/Applied/ 路徑下
                     log_dict[f'Weights/Applied/{key}'] = float(value)
+
+    def _add_ddp_metrics(self, log_dict: Dict) -> None:
+        """記錄 DDP 相關指標"""
+        import torch.distributed as dist
+
+        if not dist.is_available() or not dist.is_initialized():
+            return
+
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        batch_size = self.config.get('training', {}).get('batch_size', 0)
+
+        log_dict['DDP/world_size'] = world_size
+        log_dict['DDP/rank'] = rank
+        if batch_size:
+            log_dict['DDP/effective_batch_size'] = batch_size * world_size
 
     def log_hyperparameters(self, current_lr: float, epoch: int):
         """
@@ -432,7 +505,11 @@ class TrainingLoopManager:
                 # 3. 定義殘差計算函數
                 def residual_fn(points: torch.Tensor) -> torch.Tensor:
                     """計算 PDE 殘差"""
-                    points_device = points.to(device).requires_grad_(True)
+                    if points.device == device:
+                        points_device = points
+                    else:
+                        points_device = points.to(device)
+                    points_device = points_device.requires_grad_(True)
                     outputs = model(points_device)
                     
                     # 根據 physics 模組計算殘差

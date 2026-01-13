@@ -242,6 +242,24 @@ data:
 - ❌ Kolmogorov Flow 未啟用: "Time Window mode requires Kolmogorov Flow enabled"
 - ⚠️ 窗口過短: "窗口持續時間過短：建議減少窗口數量"
 
+#### DDP Multi-GPU 訓練
+
+建議使用 `torchrun` 啟動，系統會自動偵測並啟用 DDP：
+
+```bash
+torchrun --nproc_per_node=2 scripts/train/train.py --cfg configs/your_config.yml
+```
+
+DDP 配置範例：
+
+```yaml
+training:
+  ddp:
+    enabled: null         # null=自動偵測, true=強制啟用, false=禁用
+    split_data: true      # 分割訓練資料
+    reduce_losses: true   # 同步損失供監控
+```
+
 ### 5. lowfi_prior（低保真先驗）
 
 ```yaml
@@ -382,5 +400,5 @@ cp configs/my_exp.yml configs/archive/my_exp_20260105.yml
 
 ---
 
-**最後更新**: 2026-01-05
-**版本**: v1.3.0（Registry Pattern + Schema Validation）
+**最後更新**: 2026-01-13
+**版本**: v1.3.1（DDP 分割與同步補充）
