@@ -27,6 +27,12 @@ export MASTER_ADDR=$(hostname)
 export MASTER_PORT=29500
 export PINNX_DETECT_ANOMALY=1
 
+# NCCL 除錯與穩定性設定
+export TORCH_NCCL_BLOCKING_WAIT=1
+export NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_DEBUG=INFO
+export NCCL_P2P_DISABLE=1
+
 if [ -f "${PROJECT_DIR}/.wandb_config" ]; then
     source "${PROJECT_DIR}/.wandb_config"
     echo "✅ WandB API Key loaded from .wandb_config"
