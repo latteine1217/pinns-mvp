@@ -33,6 +33,25 @@ else
     echo "⚠️  .wandb_config not found, WandB may not work"
 fi
 
+# === Python venv 環境 ===
+VENV_DIR="${PROJECT_DIR}/.venv"
+REQUIREMENTS_FILE="${PROJECT_DIR}/requirements.txt"
+
+if [ ! -d "${VENV_DIR}" ]; then
+    echo "🛠️  建立 venv: ${VENV_DIR}"
+    python3 -m venv "${VENV_DIR}"
+    source "${VENV_DIR}/bin/activate"
+    python3 -m pip install --upgrade pip
+    if [ -f "${REQUIREMENTS_FILE}" ]; then
+        python3 -m pip install -r "${REQUIREMENTS_FILE}"
+    else
+        echo "❌ 找不到 requirements.txt: ${REQUIREMENTS_FILE}"
+        exit 1
+    fi
+else
+    source "${VENV_DIR}/bin/activate"
+fi
+
 cd ${PROJECT_DIR}
 
 echo "==========================="
