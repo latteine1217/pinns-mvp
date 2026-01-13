@@ -35,11 +35,15 @@ export TORCH_NCCL_TRACE_BUFFER_SIZE=1048576
 export NCCL_DEBUG=INFO
 export NCCL_P2P_DISABLE=1
 
+# WandB 配置
+export WANDB_API_KEY=daf43f72d9f4f636dc69479c446ace76a4a3eb92
+export WANDB_PROJECT=pinns-turbulence-reconstruction
+echo "✅ WandB API Key configured"
+
+# 若伺服器端有 .wandb_config 則覆蓋本地設定
 if [ -f "${PROJECT_DIR}/.wandb_config" ]; then
     source "${PROJECT_DIR}/.wandb_config"
-    echo "✅ WandB API Key loaded from .wandb_config"
-else
-    echo "⚠️  .wandb_config not found, WandB may not work"
+    echo "✅ WandB config overridden from .wandb_config"
 fi
 
 # === Python 環境 ===

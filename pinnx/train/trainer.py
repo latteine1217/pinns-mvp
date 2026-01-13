@@ -1130,13 +1130,18 @@ class Trainer:
         if not self.validation_manager.has_strategies():
             return None
 
+        # DDP 下只在主程序執行驗證，避免 collective mismatch
+        if self._is_ddp_enabled() and not self._is_main_process():
+            return None
+
         # 保存訓練狀態
         training_mode = self.model.training
+        model_to_validate = self.model.module if hasattr(self.model, 'module') else self.model
 
         try:
             # 委託給 ValidationManager 執行所有驗證策略
             results = self.validation_manager.validate(
-                model=self.model,
+                model=model_to_validate,
                 device=self.device,
                 validation_data=self.validation_data,
                 is_3d=(self.model_input_dim == 3),
@@ -1649,10 +1654,11 @@ class Trainer:
         from pinnx.train.checkpointing import validate_physics_before_save
         
         physics_metrics = {}
+        model_to_validate = self.model.module if hasattr(self.model, 'module') else self.model
         
         if validation_coords is not None:
             validation_passed, physics_metrics = validate_physics_before_save(
-                self.model,
+                model_to_validate,
                 validation_coords,
                 self.config,
                 self.device
@@ -1847,8 +1853,16 @@ class Trainer:
     def get_current_lr(self) -> float:
         """獲取當前學習率"""
         return self.optimizer.param_groups[0]['lr']
+
+    @staticmethod
+    def _to_scalar(value: Any):
+        """安全轉換為 Python scalar"""
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().item()
+        return value
     
     def log_epoch(self, epoch: int, metrics: Dict[str, float]):
+
         """
         記錄 epoch 訓練資訊
         
