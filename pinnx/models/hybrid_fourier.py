@@ -310,7 +310,7 @@ class PeriodicFourierFeatures(nn.Module):
         """
         # 🚀 效能優化: self.frequencies 現在是 buffer，自動在正確的 device 上
         # 無需手動 .to(device)，減少每次 forward 的開銷
-        freq = self.frequencies.reshape(1, -1)  # [1, n_modes]
+        freq = self.frequencies.reshape(1, -1).clone()  # [1, n_modes]
         z = x * freq  # [batch, n_modes]
         return torch.cat([torch.sin(z), torch.cos(z)], dim=-1)
     
