@@ -783,6 +783,10 @@ class TrainerBuilder:
             components=components,
         )
 
+        if not hasattr(trainer, '_to_scalar'):
+            from pinnx.train.training_loop_manager import TrainingLoopManager
+            trainer._to_scalar = TrainingLoopManager._to_scalar
+
         logging.info("✅ TrainerBuilder: Trainer 構建完成")
         return trainer
     
