@@ -39,6 +39,8 @@ REQUIREMENTS_FILE="${PROJECT_DIR}/requirements.txt"
 if [ -f "${HOME}/python/bin/activate" ]; then
     source "${HOME}/python/bin/activate"
     export PATH="${HOME}/bin:${HOME}/python/bin:${PATH}"
+    export PATH="${HOME}/.local/bin:${PATH}"
+    export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH}"
 else
     echo "❌ 找不到 Python 環境: ${HOME}/python/bin/activate"
     exit 1
