@@ -15,7 +15,7 @@
 # ===========================
 
 PROJECT_DIR="${HOME}/pinns-sparse-flow"
-CONFIG_FILE="configs/kolmogorov_re50_kf4_K100.yml"
+CONFIG_FILE="configs/experiments/S2_k_scan/s2_qr_K100_2d_re100.yml"
 WORKDIR="${PROJECT_DIR}/results/ddp_profiler_${SLURM_JOB_ID}"
 
 mkdir -p ${HOME}/logs
@@ -38,12 +38,13 @@ REQUIREMENTS_FILE="${PROJECT_DIR}/requirements.txt"
 
 if [ -f "${HOME}/python/bin/activate" ]; then
     source "${HOME}/python/bin/activate"
+    export PATH="${HOME}/bin:${HOME}/python/bin:${PATH}"
 else
     echo "❌ 找不到 Python 環境: ${HOME}/python/bin/activate"
     exit 1
 fi
 
-python3 -m pip install --upgrade pip
+python -m pip install --upgrade pip
 if [ -f "${REQUIREMENTS_FILE}" ]; then
     python3 -m pip install -r "${REQUIREMENTS_FILE}"
 else
