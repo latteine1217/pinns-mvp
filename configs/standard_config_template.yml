@@ -77,9 +77,11 @@ normalization:
     z_position: 4.71
     steady_state: true
 sensors:
-  K: 100
+  K: 400
   selection_method: qr_pivot
   spatial_coverage: optimal
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
 model:
   type: fourier_vs_mlp
   in_dim: 3  # [x, y, z] or [t, x, y] depending on problem

@@ -5,45 +5,66 @@ Kolmogorov Flow DNS 數據視覺化工具
 用途: 視覺化生成的 DNS 數據，包括速度場、能量演化、渦度分佈等
 """
 
-import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+import matplotlib.animation as animation
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 import argparse
 from pathlib import Path
+
+try:
+    import h5py
+except ImportError:
+    h5py = None
 
 
 def load_dns_data(file_path):
     """載入 DNS 數據"""
-    data = {}
-    with h5py.File(file_path, 'r') as f:
-        data['u'] = np.array(f['u'])
-        data['v'] = np.array(f['v'])
-        data['time'] = np.array(f['time'])
-        
-        # 載入壓力場（如果存在）
-        if 'p' in f:
-            data['p'] = np.array(f['p'])
-        
-        # 載入配置
-        if 'config' in f:
-            config_dict = {}
-            for key in f['config'].attrs.keys():
-                config_dict[key] = f['config'].attrs[key]
-            data['config'] = config_dict
-        
-        # 載入診斷資訊（如果存在）
-        if 'diagnostics' in f:
-            diag_dict = {}
-            diag_group = f['diagnostics']
-            try:
-                for key in list(diag_group.keys()):  # type: ignore
-                    diag_dict[key] = np.array(diag_group[key])  # type: ignore
-            except AttributeError:
-                pass
-            data['diagnostics'] = diag_dict
-    
-    return data
+    file_path = Path(file_path)
+
+    if file_path.suffix == '.npy':
+        payload = np.load(file_path, allow_pickle=True)
+        data = payload.item() if hasattr(payload, 'item') else payload
+        if not isinstance(data, dict):
+            raise ValueError(f"NPY 檔案內容格式不正確: {file_path}")
+        return data
+
+    if file_path.suffix in {'.h5', '.hdf5'}:
+        if h5py is None:
+            raise ImportError('缺少 h5py，無法讀取 HDF5 檔案')
+
+        data = {}
+        with h5py.File(file_path, 'r') as f:
+            data['u'] = np.array(f['u'])
+            data['v'] = np.array(f['v'])
+            data['time'] = np.array(f['time'])
+
+            # 載入壓力場（如果存在）
+            if 'p' in f:
+                data['p'] = np.array(f['p'])
+
+            # 載入配置
+            if 'config' in f:
+                config_dict = {}
+                for key in f['config'].attrs.keys():
+                    config_dict[key] = f['config'].attrs[key]
+                data['config'] = config_dict
+
+            # 載入診斷資訊（如果存在）
+            if 'diagnostics' in f:
+                diag_dict = {}
+                diag_group = f['diagnostics']
+                try:
+                    for key in list(diag_group.keys()):  # type: ignore
+                        diag_dict[key] = np.array(diag_group[key])  # type: ignore
+                except AttributeError:
+                    pass
+                data['diagnostics'] = diag_dict
+
+        return data
+
+    raise ValueError(f"不支援的檔案格式: {file_path}")
 
 
 def compute_vorticity(u, v, dx, dy):
@@ -54,9 +75,50 @@ def compute_vorticity(u, v, dx, dy):
     return dv_dx - du_dy
 
 
+def resolve_vorticity(data, u, v, dx, dy):
+    """優先使用資料內建 omega，否則以 u/v 計算"""
+    if 'omega' in data:
+        return data['omega']
+    return compute_vorticity(u, v, dx, dy)
+
+
 def compute_kinetic_energy(u, v):
     """計算動能"""
     return 0.5 * (u**2 + v**2)
+
+
+def build_signed_colormap():
+    """建立黑-藍-白-紅-黑的雙極色盤"""
+    return LinearSegmentedColormap.from_list(
+        'signed_black_blue_white_red_black',
+        ['black', 'blue', 'white', 'red', 'black']
+    )
+
+
+def build_signed_norm(field):
+    """建立以 0 為中心的雙極色階"""
+    max_abs = float(np.nanmax(np.abs(field)))
+    if max_abs == 0.0:
+        max_abs = 1.0
+    return TwoSlopeNorm(vmin=-max_abs, vcenter=0.0, vmax=max_abs)
+
+
+def select_time_indices_every_second(time_array):
+    """每秒選取最接近的時間索引"""
+    if len(time_array) == 0:
+        return []
+
+    target_times = np.arange(0.0, np.floor(time_array[-1]) + 1.0, 1.0)
+    indices = [int(np.argmin(np.abs(time_array - t))) for t in target_times]
+
+    seen = set()
+    unique_indices = []
+    for idx in indices:
+        if idx not in seen:
+            unique_indices.append(idx)
+            seen.add(idx)
+
+    return unique_indices
 
 
 def plot_snapshots(data, output_dir, time_indices=None, time_range=None):
@@ -94,64 +156,126 @@ def plot_snapshots(data, output_dir, time_indices=None, time_range=None):
             n_frames = len(time)
             time_indices = [0, n_frames//4, n_frames//2, 3*n_frames//4, -1]
     
+    dx = dy = L / N
+    vorticity_all = resolve_vorticity(data, u, v, dx, dy)
+    signed_cmap = build_signed_colormap()
+
     for idx in time_indices:
         t = time[idx]
         u_snap = u[idx]
         v_snap = v[idx]
-        
-        # 計算渦度
-        dx = dy = L / N
-        u_slice = u[idx:idx+1] if idx != -1 else u[-1:]
-        v_slice = v[idx:idx+1] if idx != -1 else v[-1:]
-        vort_3d = compute_vorticity(u_slice, v_slice, dx, dy)
-        vorticity = vort_3d[0] if vort_3d.shape[0] > 0 else np.zeros((N, N))
+        vorticity = vorticity_all[idx]
         
         # 計算速度大小
         speed = np.sqrt(u_snap**2 + v_snap**2)
         
         # 創建圖形
-        fig = plt.figure(figsize=(18, 5))
-        gs = GridSpec(1, 3, figure=fig, hspace=0.3, wspace=0.3)
+        fig = plt.figure(figsize=(12, 5))
+        gs = GridSpec(1, 2, figure=fig, hspace=0.3, wspace=0.3)
         
-        # 1. V 速度場
+        # 1. 速度大小
         ax1 = fig.add_subplot(gs[0, 0])
-        im1 = ax1.contourf(X, Y, v_snap, levels=256, cmap='RdBu_r')
+        im1 = ax1.contourf(X, Y, speed, levels=256, cmap='viridis')
         ax1.set_xlabel('x')
         ax1.set_ylabel('y')
-        ax1.set_title(f'V Velocity at t={t:.2f}')
+        ax1.set_title(f'Speed at t={t:.2f}')
         ax1.set_aspect('equal')
-        plt.colorbar(im1, ax=ax1, label='v')
+        plt.colorbar(im1, ax=ax1, label='|u|')
         
-        # 2. 速度大小
+        # 2. 渦度場
         ax2 = fig.add_subplot(gs[0, 1])
-        im2 = ax2.contourf(X, Y, speed, levels=256, cmap='viridis')
-        # 疊加流線
-        skip = N // 20
-        ax2.streamplot(X[::skip, ::skip], Y[::skip, ::skip], 
-                      u_snap[::skip, ::skip], v_snap[::skip, ::skip],
-                      color='white', linewidth=0.5, density=1.5, arrowsize=0.8)
+        vort_norm = build_signed_norm(vorticity)
+        im2 = ax2.contourf(X, Y, vorticity, levels=256,
+                          cmap=signed_cmap, norm=vort_norm)
         ax2.set_xlabel('x')
         ax2.set_ylabel('y')
-        ax2.set_title(f'Speed at t={t:.2f}')
+        ax2.set_title(f'Vorticity at t={t:.2f}')
         ax2.set_aspect('equal')
-        plt.colorbar(im2, ax=ax2, label='|u|')
-        
-        # 3. 渦度場
-        ax3 = fig.add_subplot(gs[0, 2])
-        vort_max = np.abs(vorticity).max()
-        im3 = ax3.contourf(X, Y, vorticity, levels=256, 
-                          cmap='RdBu_r', vmin=-vort_max, vmax=vort_max)
-        ax3.set_xlabel('x')
-        ax3.set_ylabel('y')
-        ax3.set_title(f'Vorticity at t={t:.2f}')
-        ax3.set_aspect('equal')
-        plt.colorbar(im3, ax=ax3, label='ω')
+        plt.colorbar(im2, ax=ax2, label='ω')
         
         # 儲存圖片
         output_file = output_dir / f'snapshot_t{t:.2f}.png'
         plt.savefig(output_file, dpi=150, bbox_inches='tight')
         plt.close()
         print(f'✅ Saved: {output_file}')
+
+
+def create_speed_vorticity_gif(data, output_dir, gif_name):
+    """輸出每個 time step 的 |u| / vorticity GIF（動態色階）"""
+    u = data['u']
+    v = data['v']
+    time = data['time']
+    config = data.get('config', {})
+
+    N = u.shape[1]
+    L = config.get('L', 2 * np.pi)
+    x = np.linspace(0, L, N)
+    y = np.linspace(0, L, N)
+    X, Y = np.meshgrid(x, y)
+
+    dx = dy = L / N
+    speed = np.sqrt(u**2 + v**2)
+    vorticity = resolve_vorticity(data, u, v, dx, dy)
+    signed_cmap = build_signed_colormap()
+
+    # 速度場使用全域最大值（保持一致）
+    speed_max = np.max(speed)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+    ax_speed, ax_vort = axes
+
+    extent = (x.min(), x.max(), y.min(), y.max())
+    
+    # 初始化 imshow（使用第一幀）
+    vort_norm = build_signed_norm(vorticity[0])
+    
+    speed_plot = ax_speed.imshow(
+        speed[0].T,
+        origin='lower',
+        extent=extent,
+        cmap='viridis',
+        vmin=0.0,
+        vmax=speed_max,
+        aspect='equal',
+        interpolation='bilinear'
+    )
+    vort_plot = ax_vort.imshow(
+        vorticity[0].T,
+        origin='lower',
+        extent=extent,
+        cmap=signed_cmap,
+        norm=vort_norm,
+        aspect='equal',
+        interpolation='bilinear'
+    )
+
+    ax_speed.set_title('Speed |u|')
+    ax_speed.set_xlabel('x')
+    ax_speed.set_ylabel('y')
+    ax_vort.set_title('Vorticity')
+    ax_vort.set_xlabel('x')
+    ax_vort.set_ylabel('y')
+
+    cbar_speed = fig.colorbar(speed_plot, ax=ax_speed, label='|u|')
+    cbar_vort = fig.colorbar(vort_plot, ax=ax_vort, label='ω')
+
+    def update(frame_idx):
+        # 更新速度場
+        speed_plot.set_data(speed[frame_idx].T)
+        
+        # 更新渦度場（動態色階）
+        vort_frame = vorticity[frame_idx]
+        vort_plot.set_data(vort_frame.T)
+        vort_plot.set_norm(build_signed_norm(vort_frame))
+        
+        fig.suptitle(f't = {time[frame_idx]:.2f}')
+        return speed_plot, vort_plot
+
+    gif_path = output_dir / gif_name
+    anim = animation.FuncAnimation(fig, update, frames=len(time), interval=100)
+    anim.save(gif_path, writer='pillow')
+    plt.close(fig)
+    print(f'✅ Saved GIF: {gif_path}')
 
 
 def plot_temporal_evolution(data, output_dir):
@@ -170,11 +294,8 @@ def plot_temporal_evolution(data, output_dir):
     L = data['config'].get('L', 2 * np.pi)
     dx = dy = L / N
     
-    vorticity_rms = []
-    for i in range(len(time)):
-        vort = compute_vorticity(u[i:i+1], v[i:i+1], dx, dy)[0]
-        vorticity_rms.append(np.sqrt((vort**2).mean()))
-    vorticity_rms = np.array(vorticity_rms)
+    vorticity = resolve_vorticity(data, u, v, dx, dy)
+    vorticity_rms = np.sqrt((vorticity**2).mean(axis=(1, 2)))
     
     # 計算速度統計
     v_mean = v.mean(axis=(1, 2))
@@ -315,7 +436,7 @@ def plot_energy_spectrum(data, output_dir, time_idx=-1):
     ax.set_title(f'2D Turbulence Energy Spectrum at t={time:.2f}', fontsize=14, fontweight='bold')
     ax.legend(fontsize=11, loc='best')
     ax.grid(True, alpha=0.3, which='both', linestyle='--')
-    ax.set_xlim([1, N//3])
+    ax.set_xlim([1, 1e3])
     
     output_file = output_dir / f'energy_spectrum_t{time:.2f}.png'
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
@@ -355,10 +476,12 @@ def plot_statistics_summary(data, output_dir):
     x = np.linspace(0, L, N)
     y = np.linspace(0, L, N)
     X, Y = np.meshgrid(x, y)
+    signed_cmap = build_signed_colormap()
     
     # 1. U 時間平均
     ax1 = fig.add_subplot(gs[0, 0])
-    im1 = ax1.contourf(X, Y, u_mean, levels=256, cmap='RdBu_r')
+    u_mean_norm = build_signed_norm(u_mean)
+    im1 = ax1.contourf(X, Y, u_mean, levels=256, cmap=signed_cmap, norm=u_mean_norm)
     ax1.set_xlabel('x')
     ax1.set_ylabel('y')
     ax1.set_title('Time-Averaged U')
@@ -367,7 +490,8 @@ def plot_statistics_summary(data, output_dir):
     
     # 2. V 時間平均
     ax2 = fig.add_subplot(gs[0, 1])
-    im2 = ax2.contourf(X, Y, v_mean, levels=256, cmap='RdBu_r')
+    v_mean_norm = build_signed_norm(v_mean)
+    im2 = ax2.contourf(X, Y, v_mean, levels=256, cmap=signed_cmap, norm=v_mean_norm)
     ax2.set_xlabel('x')
     ax2.set_ylabel('y')
     ax2.set_title('Time-Averaged V')
@@ -376,9 +500,9 @@ def plot_statistics_summary(data, output_dir):
     
     # 3. Reynolds Stress
     ax3 = fig.add_subplot(gs[0, 2])
-    rs_max = np.abs(reynolds_stress).max()
-    im3 = ax3.contourf(X, Y, reynolds_stress, levels=256, 
-                      cmap='RdBu_r', vmin=-rs_max, vmax=rs_max)
+    rs_norm = build_signed_norm(reynolds_stress)
+    im3 = ax3.contourf(X, Y, reynolds_stress, levels=256,
+                      cmap=signed_cmap, norm=rs_norm)
     ax3.set_xlabel('x')
     ax3.set_ylabel('y')
     ax3.set_title("Reynolds Stress <u'v'>")
@@ -580,9 +704,9 @@ def generate_report(data, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description='Visualize Kolmogorov Flow DNS data')
-    parser.add_argument('--input', type=str, 
-                       default='data/kolmogorov_dns_re100_512x512_kf4.h5',
-                       help='DNS data file (HDF5)')
+    parser.add_argument('--input', type=str,
+                       default='data/kolmogorov_dns.npy',
+                       help='DNS data file (.npy or .h5)')
     parser.add_argument('--output', type=str,
                        default='results/dns_visualization',
                        help='Output directory for plots')
@@ -590,6 +714,12 @@ def main():
                        help='Time indices for snapshots (default: auto-select)')
     parser.add_argument('--time-range', type=float, nargs=2, default=None,
                         help='Time range [t_start, t_end] for visualizations')
+    parser.add_argument('--every-second', action='store_true',
+                        help='每秒輸出一次快照（覆蓋 snapshots）')
+    parser.add_argument('--make-gif', action='store_true',
+                        help='輸出 |u| / vorticity GIF')
+    parser.add_argument('--gif-re', type=int, default=1000,
+                        help='GIF 檔名使用的雷諾數')
     
     args = parser.parse_args()
     
@@ -611,8 +741,13 @@ def main():
     print()
     
     # 生成視覺化
+    time_indices = args.snapshots
+    if args.every_second:
+        time_indices = select_time_indices_every_second(data['time'])
+        print(f"⏱️ 每秒輸出快照：{len(time_indices)} 張")
+
     print("🎨 生成快照...")
-    plot_snapshots(data, output_dir, time_indices=args.snapshots, time_range=args.time_range)
+    plot_snapshots(data, output_dir, time_indices=time_indices, time_range=args.time_range)
     print()
     
     print("📈 生成時間演化圖...")
@@ -626,7 +761,13 @@ def main():
     print("📊 生成統計摘要...")
     plot_statistics_summary(data, output_dir)
     print()
-    
+
+    if args.make_gif:
+        gif_name = f"kolmogorov_re{args.gif_re}.gif"
+        print(f"🎞️  生成 GIF: {gif_name}")
+        create_speed_vorticity_gif(data, output_dir, gif_name)
+        print()
+
     print("📝 生成報告...")
     generate_report(data, output_dir)
     print()

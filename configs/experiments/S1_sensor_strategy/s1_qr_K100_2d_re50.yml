@@ -58,7 +58,8 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K100_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K100_N256_t0-20_dns_values.npz
   quality_metrics:
     condition_number: 52900.0
     method: qr_pivot_rans

@@ -117,7 +117,7 @@ def _extract_dns_initial_condition(
         return None
 
 
-def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.device) -> Dict[str, torch.Tensor]:
+def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
     """準備 Kolmogorov Flow 訓練資料 (固定感測器 x 時間序列)
     
     使用 NPY memory-mapped 檔案，實現零拷貝高效讀取
@@ -133,6 +133,7 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     kol_cfg = config['data']['kolmogorov_config']
     data_path = Path(kol_cfg['data_path'])
     time_range = kol_cfg['time_range']
+    t_start, t_end = time_range
     
     # 1. 讀取感測器位置檔案 (QR-Pivot 結果)
     sensor_file = config.get('sensors', {}).get('sensor_file')
@@ -142,100 +143,127 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     logging.info(f"📂 載入感測器位置: {sensor_file}")
     with open(sensor_file, 'r') as f:
         sensor_data = json.load(f)
-        
-    # sensor_indices 是展平後的空間索引 (0 ~ N*N-1)
+
     spatial_indices = np.array(sensor_data['indices'])
     K = len(spatial_indices)
     logging.info(f"   已選定 {K} 個固定空間感測點")
 
-    # 2. 載入 DNS 數據（memory-mapped，零拷貝）
-    logging.info(f"📂 載入 DNS 數據（NPY mmap）: {data_path}")
-    
-    # 載入時間軸
-    time_all = np.load(data_path / 'time.npy', mmap_mode='r')
-    
-    # 選擇時間範圍
-    t_start, t_end = time_range
-    time_mask = (time_all >= t_start) & (time_all <= t_end)
-    time_selected = time_all[time_mask]
-    T_selected = len(time_selected)
-    
-    logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}], 共 {T_selected} 個時間步")
-    
-    # 載入元數據
-    metadata = _load_dns_metadata(data_path)
-    N = metadata.get('N', 256)
-    L = metadata.get('L', 2 * np.pi)
-    
-    # 建立空間座標網格
-    x_1d = np.linspace(0, L, N, endpoint=False)
-    y_1d = np.linspace(0, L, N, endpoint=False)
-    X_mesh, Y_mesh = np.meshgrid(x_1d, y_1d, indexing='ij')
-    
-    # 提取感測點的 (x, y) 座標
-    X_flat = X_mesh.flatten()
-    Y_flat = Y_mesh.flatten()
-    
-    x_sensor_locs = X_flat[spatial_indices]  # [K]
-    y_sensor_locs = Y_flat[spatial_indices]  # [K]
-    
-    # 3. 提取感測點的時間序列數據（使用 mmap，只讀取需要的時間切片）
-    # Memory-mapped 讀取：OS 自動管理分頁，實現按需載入
-    u_all = np.load(data_path / 'u.npy', mmap_mode='r')
-    v_all = np.load(data_path / 'v.npy', mmap_mode='r')
-    
-    p_file = data_path / 'p.npy'
-    if p_file.exists():
-        p_all = np.load(p_file, mmap_mode='r')
+    dns_values_npz = sensor_data.get('dns_values_npz')
+    selected_coords = sensor_data.get('selected_coordinates')
+    dns_values_file = config.get('sensors', {}).get('dns_values_file')
+
+    dns_values_npz_path = None
+    if dns_values_file:
+        dns_values_npz_path = Path(dns_values_file)
+    elif dns_values_npz:
+        dns_values_npz_path = Path(dns_values_npz)
+
+    if dns_values_npz_path is not None:
+        if not dns_values_npz_path.is_absolute():
+            dns_values_npz_path = (Path(sensor_file).parent / dns_values_npz_path).resolve()
+        if not dns_values_npz_path.exists():
+            raise FileNotFoundError(f"DNS values npz 不存在: {dns_values_npz_path}")
+
+        logging.info(f"📂 載入 DNS values npz: {dns_values_npz_path}")
+        dns_values = np.load(dns_values_npz_path)
+
+        time_selected = dns_values['time']
+        T_selected = len(time_selected)
+
+        u_sensors_vals = dns_values['u'].T  # [T, K]
+        v_sensors_vals = dns_values['v'].T
+        p_sensors_vals = dns_values['p'].T if 'p' in dns_values else None
+
+        expected_shape = (T_selected, K)
+        if u_sensors_vals.shape != expected_shape:
+            raise ValueError(
+                f"❌ DNS values 形狀錯誤！\n"
+                f"   預期: {expected_shape}\n"
+                f"   實際: {u_sensors_vals.shape}"
+            )
+
+        if selected_coords is None:
+            raise ValueError("sensor JSON 缺少 selected_coordinates")
+        coords_arr = np.array(selected_coords)
+        x_sensor_locs = coords_arr[:, 0]
+        y_sensor_locs = coords_arr[:, 1]
+
+        L = float(kol_cfg.get('L', 2 * np.pi))
+        N = int(kol_cfg.get('N', 256))
+
+        logging.info(f"   使用 DNS values time steps: {T_selected}")
     else:
-        p_all = None
-    
-    # 提取時間切片（零拷貝，只在實際存取時才載入記憶體）
-    u_slice = u_all[time_mask]  # [T, N, N]
-    v_slice = v_all[time_mask]
-    p_slice = p_all[time_mask] if p_all is not None else None
-    
-    # 展平空間維度 [T, N*N]
-    u_flat = u_slice.reshape(T_selected, -1)
-    v_flat = v_slice.reshape(T_selected, -1)
-    p_flat = p_slice.reshape(T_selected, -1) if p_slice is not None else None
-    
-    # ========== 驗證 1: Sensor 索引越界檢查 ==========
-    N_total = u_flat.shape[1]
-    if spatial_indices.max() >= N_total:
-        raise IndexError(
-            f"❌ Sensor 索引越界！最大索引 {spatial_indices.max()} >= 總點數 {N_total}\n"
-            f"   可能原因：Sensor 檔案基於不同網格解析度生成\n"
-            f"   DNS 網格: {N}x{N} = {N_total} 點\n"
-            f"   Sensor 索引範圍: [{spatial_indices.min()}, {spatial_indices.max()}]"
+        logging.info(f"📂 載入 DNS 數據（NPY mmap）: {data_path}")
+
+        time_all = np.load(data_path / 'time.npy', mmap_mode='r')
+        time_mask = (time_all >= t_start) & (time_all <= t_end)
+        time_selected = time_all[time_mask]
+        T_selected = len(time_selected)
+
+        logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}], 共 {T_selected} 個時間步")
+
+        metadata = _load_dns_metadata(data_path)
+        N = metadata.get('N', 256)
+        L = metadata.get('L', 2 * np.pi)
+
+        x_1d = np.linspace(0, L, N, endpoint=False)
+        y_1d = np.linspace(0, L, N, endpoint=False)
+        X_mesh, Y_mesh = np.meshgrid(x_1d, y_1d, indexing='ij')
+
+        X_flat = X_mesh.flatten()
+        Y_flat = Y_mesh.flatten()
+
+        x_sensor_locs = X_flat[spatial_indices]
+        y_sensor_locs = Y_flat[spatial_indices]
+
+        u_all = np.load(data_path / 'u.npy', mmap_mode='r')
+        v_all = np.load(data_path / 'v.npy', mmap_mode='r')
+
+        p_file = data_path / 'p.npy'
+        if p_file.exists():
+            p_all = np.load(p_file, mmap_mode='r')
+        else:
+            p_all = None
+
+        u_slice = u_all[time_mask]
+        v_slice = v_all[time_mask]
+        p_slice = p_all[time_mask] if p_all is not None else None
+
+        u_flat = u_slice.reshape(T_selected, -1)
+        v_flat = v_slice.reshape(T_selected, -1)
+        p_flat = p_slice.reshape(T_selected, -1) if p_slice is not None else None
+
+        N_total = u_flat.shape[1]
+        if spatial_indices.max() >= N_total:
+            raise IndexError(
+                f"❌ Sensor 索引越界！最大索引 {spatial_indices.max()} >= 總點數 {N_total}\n"
+                f"   可能原因：Sensor 檔案基於不同網格解析度生成\n"
+                f"   DNS 網格: {N}x{N} = {N_total} 點\n"
+                f"   Sensor 索引範圍: [{spatial_indices.min()}, {spatial_indices.max()}]"
+            )
+        if spatial_indices.min() < 0:
+            raise IndexError(
+                f"❌ Sensor 索引無效！最小索引 {spatial_indices.min()} < 0"
+            )
+
+        logging.info(
+            f"✅ Sensor 索引驗證通過: [{spatial_indices.min()}, {spatial_indices.max()}] "
+            f"⊂ [0, {N_total-1}]"
         )
-    if spatial_indices.min() < 0:
-        raise IndexError(
-            f"❌ Sensor 索引無效！最小索引 {spatial_indices.min()} < 0"
-        )
-    
-    logging.info(
-        f"✅ Sensor 索引驗證通過: [{spatial_indices.min()}, {spatial_indices.max()}] "
-        f"⊂ [0, {N_total-1}]"
-    )
-    # ===================================================
-    
-    # 提取感測點的值 [T, K]
-    u_sensors_vals = u_flat[:, spatial_indices]
-    v_sensors_vals = v_flat[:, spatial_indices]
-    p_sensors_vals = p_flat[:, spatial_indices] if p_flat is not None else None
-    
-    # ========== 驗證 2: Sensor 資料形狀檢查 ==========
-    expected_shape = (T_selected, K)
-    if u_sensors_vals.shape != expected_shape:
-        raise ValueError(
-            f"❌ Sensor 資料形狀錯誤！\n"
-            f"   預期: {expected_shape}\n"
-            f"   實際: {u_sensors_vals.shape}"
-        )
-    
-    logging.info(f"✅ Sensor 資料形狀驗證: u_sensors_vals.shape = {u_sensors_vals.shape}")
-    # ===================================================
+
+        u_sensors_vals = u_flat[:, spatial_indices]
+        v_sensors_vals = v_flat[:, spatial_indices]
+        p_sensors_vals = p_flat[:, spatial_indices] if p_flat is not None else None
+
+        expected_shape = (T_selected, K)
+        if u_sensors_vals.shape != expected_shape:
+            raise ValueError(
+                f"❌ Sensor 資料形狀錯誤！\n"
+                f"   預期: {expected_shape}\n"
+                f"   實際: {u_sensors_vals.shape}"
+            )
+
+        logging.info(f"✅ Sensor 資料形狀驗證: u_sensors_vals.shape = {u_sensors_vals.shape}")
     
     # 4. 構建訓練張量 (T * K 樣本)
     # 我們需要將 [T, K] 展平成 [T*K, 1]
@@ -370,7 +398,7 @@ def prepare_time_window_data(
     window_idx: int,
     num_windows: int,
     prev_window_ic: Dict[str, torch.Tensor] | None = None
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, Any]:
     """
     為時間窗口訓練準備單一窗口的資料（使用 NPY mmap）
     

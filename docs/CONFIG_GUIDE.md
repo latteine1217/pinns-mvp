@@ -38,8 +38,10 @@ normalization:      # 輸入/輸出標準化與資料統計
   type: training_data_norm
 
 sensors:            # 感測器設定
-  K: 100
+  K: 400
   selection_method: "qr_pivot"
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
 
 model:              # 網路架構
   type: "fourier_vs_mlp"

@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### 🔄 Changed - Kolmogorov LES & Sensor Pipeline (2026-01-13)
+
+- **Kolmogorov Prior**: 2D Leith → 2D LES（hyperviscosity + 線性摩擦）
+- **Sensor Data**: 改為 JSON + DNS values `.npz` 雙檔輸入（`dns_values_file`）
+- **Configs**: 預設 K=400，sensor 檔案統一指向 `data/kolmogorov_sensors/re100/`
+
+### ✨ Added
+
+- `scripts/generate/dns/generate_kolmogorov_les.py`: 2D LES 生成器（3/2 或 2/3 去混疊可選）
+- `scripts/visualize/compare_kolmogorov_dns_les.py`: DNS vs LES 對比視覺化
+- `scripts/visualize/visualize_kolmogorov_sensors.py`: 感測器位置視覺化（含背景網格、多子圖）
+
+### 🐛 Fixed
+
+- `pinnx/dataio/loaders/kolmogorov.py`: 支援 `dns_values_file` 並優先讀取 DNS values `.npz`
+
 ### 🚀 Phase 3 優化：Fourier Features Lazy Evaluation (2025-01-07)
 
 #### Added

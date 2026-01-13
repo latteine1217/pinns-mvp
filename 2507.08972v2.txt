@@ -1,0 +1,941 @@
+
+
+===== PAGE 1 =====
+
+Simulating Three-dimensional Turbulence with
+Physics-informed Neural Networks
+Sifan Wang1,*, Shyam Sankaran2, Xiantao Fan3, Panos Stinis4, and Paris Perdikaris2,*
+1Institution for Foundation of Data Science, Y ale University, New Haven, CT 06520
+2Department of Mechanical Engineering and Applied Mechanics, University of Pennsylvania, Philadelphia, PA
+19104
+3Sibley School of Mechanical and Aerospace Engineering, Cornell University, Ithaca, NY , 14850
+4Advanced Computing, Mathematics and Data Division, Pacific Northwest National Laboratory, Richland, WA,
+99354
+*sifan.wang@yale.edu, pgp@seas.upenn.edu
+ABSTRACT
+Turbulent fluid flows are among the most computationally demanding problems in science, requiring enormous computational
+resources that become prohibitive at high flow speeds. Physics-informed neural networks (PINNs) represent a radically different
+approach that trains neural networks directly from physical equations rather than data, offering the potential for continuous,
+mesh-free solutions. Here we show that appropriately designed PINNs can successfully simulate fully turbulent flows in both
+two and three dimensions, directly learning solutions to the fundamental fluid equations without traditional computational grids
+or training data. Our approach combines several algorithmic innovations including adaptive network architectures, causal
+training, and advanced optimization methods to overcome the inherent challenges of learning chaotic dynamics. Through
+rigorous validation on challenging turbulent problems, we demonstrate that PINNs accurately reproduce key flow statistics
+including energy spectra, kinetic energy, enstrophy, and Reynolds stresses. Our results demonstrate that neural equation
+solvers can handle complex chaotic systems, opening new possibilities for continuous turbulence modeling that transcends
+traditional computational limitations.
+Introduction
+Turbulence represents one of the last great unsolved problems in classical physics. Despite governing everything from the
+coffee swirling in your cup to the formation of galaxies, turbulent flows remain notoriously difficult to predict. This difficulty
+stems from their fundamentally chaotic nature: tiny changes in initial conditions can lead to dramatically different outcomes,
+while energy cascades across multiple scales create a computational challenge spanning orders of magnitude in both space and
+time.
+The computational challenge is staggering. Conventional approaches such as direct numerical simulation (DNS)1, 2and
+large-eddy simulation (LES)3, 4have advanced our understanding considerably, but they remain prohibitively expensive at
+the high flow speeds encountered in most real-world applications. DNS requires resolving all relevant scales of motion on
+extremely fine computational grids, while LES introduces modeling assumptions to reduce cost but sacrifices accuracy. Both
+approaches scale poorly with increasing flow complexity, creating a fundamental barrier to progress in many areas of science
+and engineering.
+This computational bottleneck has motivated the search for radically different approaches that can transcend the limitations
+of traditional grid-based methods. Physics-informed neural networks (PINNs)5, 6represent one such paradigm shift. Unlike
+conventional machine learning approaches that learn from data, PINNs embed the fundamental governing equations directly
+into the neural network training process, enabling them to learn continuous solutions to partial differential equations without
+requiring vast datasets or explicit spatial discretization.
+Since their introduction, PINNs have shown promise across diverse applications in fluid mechanics7–10, heat transfer11–13,
+bio-engineering14–16, and materials science17–19. However, their application to turbulent flows has remained elusive20–24. The
+combination of strong nonlinearity, extreme sensitivity to initial conditions, and multiscale dynamics presents a perfect storm
+of challenges that have historically caused PINN training to fail in turbulent regimes. The chaotic nature of turbulence, with its
+sensitive dependence on initial conditions and broad spectrum of active scales, pushes neural network optimization to its limits.
+Here, we demonstrate that these fundamental challenges can be overcome. Through a combination of architectural
+innovations, advanced training strategies, and careful optimization techniques, we show for the first time that PINNs can
+successfully simulate fully developed turbulent flows in both two and three dimensions at high Reynolds numbers. OurarXiv:2507.08972v2  [cs.LG]  11 Oct 2025
+
+===== PAGE 2 =====
+
+framework achieves stable and accurate solutions across three canonical turbulence benchmarks: two-dimensional Kolmogorov
+flow, the three-dimensional Taylor–Green vortex, and turbulent channel flow. The resulting solutions reproduce key turbulence
+statistics – including energy spectra, kinetic energy and enstrophy evolution, and Reynolds stress profiles – at levels comparable
+to high-fidelity spectral solvers.
+Our approach integrates several key innovations25: a physics-informed residual adaptive network (PirateNet) architecture
+that enables deep networks while mitigating spectral bias26; causal training strategies that respect temporal causality27; self-
+adaptive loss weighting that balances competing optimization objectives28, 29; quasi-second-order optimization methods that
+navigate the complex loss landscapes inherent to turbulent systems30; and time-windowing with transfer learning31, 32. Together,
+these components enable robust training of large-scale PINNs for high-Reynolds-number turbulent flows.
+While our method does not yet surpass state-of-the-art spectral solvers in computational efficiency, it establishes an important
+proof of concept: turbulence can be learned directly from governing equations using neural networks, offering continuous,
+mesh-free solutions that are not constrained by traditional discretization limitations. This work opens new possibilities for
+hybrid simulation approaches, data assimilation strategies, and scientific discovery in fluid dynamics and beyond.
+Physics -informed residual adaptive network ( PirateNet ) 
+Time marching with transfer learningAutomatic
+DifferentiationInitial/ boundary and causal PDE loss
+Fourier 
+embeddingDense layer
+Dense layer Dense layer Outputs
+Dense layer with random weight factorization: 
+Incompressible Navier –Stokes equation
+Dense layerDense layerTrained PINN 
+modelPhysics -informed neural network
+t
+x
+y
+zu
+v
+w
+pSelf-adaptive weighting
+PirateNet
+Input 
+coordinates
+TimeSpace
+SOAP 
+optimizer
+Adaptive skip connectionKolmogorov flow Taylor -Green vortex Turbulent channel flow
+Figure 1.Physics-informed neural network framework for solving the incompressible Navier-Stokes equations.The PINN
+model takes spatiotemporal coordinates as input and predicts the velocity and pressure fields asu θ= (u θ,vθ,wθ,pθ), withθ
+denoting the network parameters. The network is trained by minimizing a composite loss that penalizes violations of PDE
+constraints and initial/boundary conditions, with PDE residuals computed via automatic differentiation. The framework
+integrates several key innovations: (a) a physics-informed residual adaptive network (PirateNet) that mitigates spectral bias and
+supports deep architectures; (b) a causal loss formulation that enforces temporal causality during training; (c) a self-adaptive
+weighting strategy that dynamically balances contributions from different loss terms; (d) a quasi-second-order optimizer
+(SOAP) that addresses conflicting gradient directions; and (e) a time-marching scheme with transfer learning, where the
+trainable parameters of models for later time windows are initialized using the converged model parameters for earlier time
+windows. These components collectively enable robust and efficient training of large-scale PINNs, making them viable for
+simulating high Reynolds number turbulent flows.
+Results
+We aim to solve the nondimensional incompressible Navier–Stokes equations in the velocity–pressure formulation using PINNs.
+As illustrated in Figure 1, the PINN approximates the velocity and pressure fields as neural network outputs, and computes the
+2/27
+
+===== PAGE 3 =====
+
+residuals of the governing equations via automatic differentiation with respect to the input coordinates. The network is trained
+by minimizing a composite loss that penalizes the PDE residuals, as well as deviations from the initial and boundary conditions.
+We employ a suite of architectural and algorithmic innovations : (i) the PirateNet architecture26, which enables the use
+of large-capacity networks capable of capturing fine-scale turbulent structures; (ii) self-adaptive loss balancing25, 29, which
+stabilizes training by dynamically adjusting the contributions of different loss terms; (iii) causal training27and time-marching
+strategies33, 34that facilitate convergence over long time horizons; (iv) the SOAP optimizer30, 35that is particularly well-suited
+for ill-conditioned PDE loss landscapes and mitigating gradient conflicts at scale; and (v) transfer learning which enables
+better initialization for the trainable parameters in each time window31, 32. Together, these components enable stable and robust
+training of PINNs for fully turbulent flows (indicated by their high-Reynolds-number, which is a nondimensional quantity
+characterizing the complexity of the flow).
+We evaluate our framework on three canonical benchmarks that test distinct aspects of turbulent behavior: the two-
+dimensional Kolmogorov flow to assess energy and enstrophy cascades in periodic domains, the three-dimensional Taylor–Green
+vortex to examine kinetic energy and enstrophy evolution in developing turbulence, and the three-dimensional turbulent channel
+flow to analyze velocity profiles and Reynolds stresses in near-wall regions. A description of the methodology is provided in
+the Methods section, details about the training procedure and full hyperparameter settings are included in Appendix C and
+additional visualizations and diagnostics can be found in Appendix E.
+2D Turbulent Kolmogorov Flow
+a
+b c d e
+Figure 2.2D Turbulent Kolmogorov Flow ( Re=106).(a) V orticity snapshots at selected time instances comparing predictions
+with reference DNS, computed using a pseudo-spectral method on a 2048×2048 uniform grid. The predicted fields closely
+match the DNS, accurately capturing fine-scale vortical structures and their temporal evolution. (b) Temporal evolution of the
+relativeL2velocity error (spatially averaged), demonstrating sustained accuracy over the time domain. (c–d) Comparison of
+kinetic energy and enstrophy evolution between PINN predictions and DNS results, showing good agreement in the
+preservation of key physical quantities. (e) Comparison of the energy spectrum at the final time between PINN predictions and
+DNS, illustrating accurate recovery of both the inverse energy cascade (k−5/3) and the forward enstrophy cascade (k−3).
+We begin by evaluating our framework on the two-dimensional Kolmogorov flow, a periodic shear-driven system that
+serves as a standard benchmark for studying turbulence36, 37. Despite its relatively simple setup, the flow exhibits nonlinear
+instabilities, an inverse energy cascade and a forward enstrophy cascade, and the formation of long-lived coherent structures38
+3/27
+
+===== PAGE 4 =====
+
+– posing a meaningful challenge for data-free learning methods. We train the PINN on this system to assess its ability to
+reproduce key features of the flow, including vorticity evolution, energy spectra, and long-time statistical behavior.
+The system is governed by the two-dimensional incompressible Navier-Stokes equations on the periodic domain Ω= [0,1]2,
+driven by a steady external forcingf (x,y) = [0.1sin(4πy),0] which injects energy at wavenumber k=2 . We initialize the flow
+with a randomly generated velocity field and evolve it to a final time of of T=5 at a Reynold number of Re=106. At this regime,
+the system develops rich spatiotemporal dynamics characterized by an inverse energy cascade toward large-scale structures and
+a forward enstrophy cascade toward small scales. These dual cascading processes create a wide separation of active scales
+and complex long-range interactions, providing an informative test of the accuracy and stability of physics-informed neural
+networks.
+We benchmark the PINN predictions against high-resolution DNS results obtained using a pseudo-spectral method on a
+2048×2048 grid. Figure 2 summarizes the comparison. Panel (a) shows that the predicted vorticity fields closely agree with
+the DNS across time, capturing both fine-scale features and large-scale structures. This agreement is further quantified in
+panel (b), where the relative L2error of the velocity field remains consistently low, indicating stable and accurate long-term
+predictions. Panels (c) and (d) display the evolution of kinetic energy and enstrophy, respectively, both of which are in good
+agreement with the DNS, confirming the model’s ability to conserve key turbulence statistics. Finally, panel (e) presents the
+energy spectrum at T=5 , where the PINN accurately recovers both the k−5/3scaling of the inertial range and the k−3slope of
+the enstrophy cascade. This result highlights the model’s capacity to resolve nonlinear multiscale interactions across a wide
+range of wavenumbers.
+3D Taylor-Green Vortex
+Having demonstrated our framework’s capability in two dimensions, we now extend the evaluation to three-dimensional
+flows where vortex stretching and energy cascade mechanisms become fundamentally more complex. The Taylor–Green
+vortex (TGV) provides an ideal test case, featuring a well-defined transition from laminar initial conditions to fully developed
+turbulence through nonlinear vortex interactions39, 40.
+We consider the incompressible Navier-Stokes equations initialized with the TGV configuration at Reynolds number
+Re=1,600. The initial velocity field is defined as
+u(x,y,z,0) =sin(x)cos(y)cos(z), (1)
+v(x,y,z,0) =−cos(x)sin(y)cos(z),(2)
+w(x,y,z,0) =0, (3)
+on a triply periodic domain [0,2π]3. The flow evolves through vortex stretching, roll-up, and eventual breakdown, leading to a
+fully developed turbulent state. Our objective is to simulate the flow evolution up to final timeT=10.
+We validated our predictions against high-fidelity DNS data41, which was computed using a dealiased pseudo-spectral
+method on a 5123grid with third-order Runge-Kutta time integration and timestep ∆t=1.0×10−3. Figure3a presents the
+predicted isosurfaces of the Q criterion colored by the velocity magnitude. These visualizations reveal that our PINN captures
+the intricate vortex roll-up and breakdown dynamics characteristic of the laminar-turbulent transition. Quantitative validation
+through the evolution of spatially averaged kinetic energy and enstrophy (Figure3b and Figure3c, respectively) demonstrates
+strong statistical agreement with the DNS throughout the simulation period. Specifically, our model successfully reproduces
+both the overall energy decay profile and the characteristic enstrophy peak, which is associated with intense vortex stretching
+and the generation of small-scale structures. Furthermore, spatial validation via vorticity magnitude contours at t=8 (Figure3d)
+further confirms the framework’s ability to resolve fine-scale turbulent structures with high fidelity.
+While our method does not yet surpass the accuracy of state-of-the-art spectral solvers, it performs comparably to an
+8th-order finite difference method at a resolution of 2563. This demonstrated capability to accurately simulate complex
+three-dimensional turbulent transitions, capturing both global energy dynamics and local vortical structures, indicates the strong
+potential of neural PDE solvers for practical applications.
+3D Turbulent Channel Flow
+Building on our successful simulation of the TGV problem, we proceed to assess the framework’s performance in three-
+dimensional turbulent channel flow. This prototypical wall-bounded system represents a significantly more stringent test for
+numerical methods. Unlike the periodic or isotropic flows previously considered, channel flow is characterized by sharp
+gradients near solid boundaries, inherent anisotropy, and nontrivial momentum transport. For a rigorous evaluation of predicted
+turbulence statistics, we specifically focus on the widely adopted benchmark case at a friction Reynolds number of Reτ=395 ,
+for which extensive DNS statistics data are available42, 43.
+We simulate incompressible channel flow within a computational domain adopting the standard configuration: Lx=2π in
+the streamwise direction, Lz=πin the spanwise direction, and a wall-normal height of Ly=2. No-slip boundary conditions
+4/27
+
+===== PAGE 5 =====
+
+a
+b c d
+Figure 3.Taylor-Green Vortex (Re=1600).(a) Evolution of the iso-surfaces of the Q-criterion(Q=0.1)at different time
+snapshots, predicted by PINNs and colored by the non-dimensional velocity magnitude. (b–c) Temporal evolution of spatially
+averaged kinetic energy and enstrophy, comparing PINN predictions against a pseudo-spectral DNS (resolution 5123) and
+8th-order finite difference solvers at various resolutions (643–5123). The PINN achieves accuracy comparable to high-order
+solvers at moderate resolution and captures key dynamical features of the flow. (d) Comparison of the iso-contours of the
+dimensionless vorticity norm on the periodic facex=−πatt=8.
+5/27
+
+===== PAGE 6 =====
+
+are applied at the channel walls ( y=±1 ), with periodicity enforced in the streamwise ( x) and spanwise ( z) directions. We
+setuτ=0.09875 and the flow is driven by a constant pressure gradient of d p/dx=u2
+τ, with the kinematic viscosity set to
+ν=0.00025 . Importantly, our PINN simulation uses a snapshot of a turbulent DNS field as the initial condition. Our goal is to
+examine if PINNs can maintain and accurately reproduce the established turbulence statistics for this system over the time
+intervalt∈[0,10].
+Figure 4 shows the framework’s performance on the turbulent channel flow benchmark, compared against the reference
+DNS data42–44. Figure 4a displays a representative instantaneous snapshot of the predicted velocity norm, which clearly
+captures the characteristic near-wall streaks and large-scale turbulent structures inherent to wall-bounded turbulence. Beyond
+this qualitative assessment, we quantify the learned statistics against reference DNS data from42–44.
+Figure 4b shows the mean streamwise and spanwise velocity profiles together with the mean pressure distribution, all
+normalized in wall units. The PINN predictions closely follow the DNS data across the viscous sublayer, buffer layer, and
+logarithmic region, demonstrating the model’s ability to recover canonical mean flow behavior. Some discrepancies arises in
+the spanwise velocity component: because its magnitude is relatively small, the PINN struggles to capture it with the same
+accuracy as the streamwise counterpart. Figure 4c presents the Reynolds stress components u′u′+,v′v′+,w′w′+, and u′v′+,
+normalized by the friction velocity uτ. Despite minor deviations, the predicted profiles show good agreement with DNS data in
+both magnitude and wall-normal distribution, successfully capturing the anisotropy of turbulent fluctuations.
+Further validation is provided in Figures 15–18, which present the mean profiles of the RMS vorticity components and the
+energy spectra of the velocity components at different wall-normal locations y+. The vorticity statistics confirm that the PINN
+accurately captures the near-wall peak and the wall-normal decay of all vorticity components, in close agreement with DNS
+data. The energy spectra further demonstrate that the predicted velocity fields reproduce the correct distribution of turbulent
+kinetic energy across scales, although the spectral amplitudes are slightly lower than the DNS reference. These results highlight
+that the PINN framework is capable of resolving both near-wall dynamics and multi-scale energy transfer, while still exhibiting
+a mild underprediction in spectral energy content.
+Figure 4.Turbulent channel flow (Re τ∼395).(a) Instantaneous snapshot of the predicted velocity norm, illustrating
+characteristic near-wall streaks and large-scale turbulent structures. (b) Comparison of the mean streamwise and spanwise
+velocity profile and pressrure profile between PINN predictions and DNS data, normalized in wall units. (c) Comparison of
+Reynolds stress components ( u′u′+,v′v′+,w′w′+, and u′v′+) between PINN predictions and DNS data, normalized by the
+respective friction velocityu τ.
+Discussion
+This work demonstrates that physics-informed neural networks can successfully simulate fully turbulent flows across two
+and three dimensions at high Reynolds numbers. By combining architectural innovations with refined training strategies,
+we have shown that PINNs can accurately resolve canonical turbulence benchmarks including 2D Kolmogorov flow, the 3D
+Taylor–Green vortex, and 3D turbulent channel flow. These findings prove that continuous, mesh-free learning of chaotic,
+multiscale dynamics is achievable directly from the governing Navier–Stokes equations without relying on discretization grids
+or empirical turbulence models. Our success stems from addressing several fundamental challenges through the synergistic
+integration of scalable network architectures (PirateNet), adaptive loss weighting, causal training strategies, quasi-second-order
+optimization (SOAP), and transfer learning. These components work together to overcome the notorious difficulty of learning
+chaotic dynamics with neural networks.
+6/27
+
+===== PAGE 7 =====
+
+Despite these advances, significant limitations remain. Our approach currently requires greater computational resources
+than conventional solvers (Appendix D), and while our solutions are physically consistent, they do not yet achieve the accuracy
+of state-of-the-art spectral methods. The computational overhead stems primarily from the iterative optimization process
+required to satisfy PDE constraints, which contrasts with the direct time-stepping of traditional methods. These limitations
+underscore the need for continued research in network architectures optimized for multiscale problems, more efficient training
+strategies, and rigorous benchmarking on progressively challenging problems. Importantly, turbulence provides an ideal testbed
+for the community to develop next-generation PINNs and other machine learning approaches for scientific computing. The
+field would benefit from moving beyond simple canonical problems towards more challenging benchmarks that expose the
+fundamental difficulties of learning complex physical systems.
+Looking ahead, this work opens several promising research directions. Hybrid approaches that combine neural solvers with
+classical methods could leverage the strengths of both paradigms45, 46, while extensions to more complex scenarios – including
+unsteady boundary conditions, anisotropic turbulence, compressible flows, and multiphysics systems represent natural next
+steps. Perhaps most significantly, the continuous, differentiable nature of PINN solutions makes them particularly well-suited
+for inverse problems, optimization, and control applications where traditional grid-based methods face fundamental limitations.
+Our results establish a foundation for physics-informed machine learning47approaches that inherently respect physical laws
+while tackling the formidable complexity of real-world turbulent systems, marking a significant step toward more flexible,
+continuous computational fluid dynamics.
+Methods
+The preceding results demonstrate that PINNs can simulate high Reynolds-number turbulent flows. We now detail the
+computational methodological framework that enables these achievements.
+Problem Setup and Physics-informed Neural Networks
+We consider the problem of solving the incompressible Navier–Stokes equations, which govern the dynamics of viscous,
+incompressible fluid flows38. In non-dimensional form, the equations are
+∂u
+∂t+u·∇u=−∇p+1
+Re∇2u, (4)
+∇·u=0, (5)
+whereu (t,x)is the velocity field, p(t,x)is the pressure, and Re is the Reynolds number. The equations are posed in a
+spatial domain Ωover a time interval [0,T] , and are supplemented with appropriate initial and boundary conditions defined at
+domain boundaries ∂Ω. Due to the nonlinearity and the coupling between velocity and pressure fields, solving these equations
+– especially in complex geometries or at high Reynolds numbers – remains a significant challenge in computational fluid
+dynamics.
+To solve the equations, we follow the conventional formulation of PINNs5which integrates the governing physical laws
+directly into the neural network training process. The velocity and pressure fields are approximated by neural networksu θ(x,t),
+whereu θ= (u,v,w,p) andθrepresents the network parameters. The networks are trained by minimizing a composite loss
+function:
+L(θ) =Z
+Ω|I[u θ](x)|2dx
+| {z }
+Lic(θ)+ZT
+0Z
+∂Ω|B[u θ](t,x)|2dxdt
+| {z }
+Lbc(θ)+ZT
+0Z
+Ω|R[u θ](t,x)|2dxdt
+| {z }
+Lpde(θ),(6)
+whereI[·],B[·] , andR[·] denote the initial condition, boundary condition, and Navier-Stokes residual operators, respectively.
+Correspondingly, Licpenalizes violations of the initial condition, Lbcenforces the boundary conditions, and Lpdeenforces
+the Navier-Stokes equations.
+In practice, the network parameters are optimized using stochastic gradient descent and these continuous integrals are
+approximated using Monte Carlo sampling. Specifically, at each training iteration, collocation points are randomly sampled from
+the respective domains: the initial condition loss Licis computed from samples
+xic
+i	Nic
+i=1⊂Ω, the boundary loss Lbcfrom
+points
+tbc
+i,xbc
+i	Nbc
+i=1⊂[0,T]×∂Ω , and the PDE residual loss Lpdefrom interior collocation pointsn
+tpde
+i,xpde
+ioNpde
+i=1⊂
+[0,T]×Ω. The total loss is computed as the empirical average over these sample points,
+A key advantage of PINNs is the use of automatic differentiation to compute PDE residuals directly from neural network
+outputs, enabling evaluation of spatial and temporal derivatives without explicit discretization schemes. This approach allows
+PINNs to operate on continuous domains without requiring mesh generation or traditional numerical solvers.
+7/27
+
+===== PAGE 8 =====
+
+However, the applicability of conventional PINNs has been limited by critical challenges in training stability, scalability, and
+efficiency when applied to complex systems like turbulent flows. Specifically, standard PINNs often struggle to (i) accommodate
+the deep architectures necessary for resolving fine-scale structures26, (ii) navigate ill-conditioned optimization landscapes,
+(iii) mitigate training instabilities arising from competing loss terms28, 29; and (iv) respect the causal nature of time-dependent
+problems27. To overcome these inherent limitations and enable stable, accurate learning in complex flow regimes, we introduce
+a suite of algorithmic and architectural innovations, detailed below.
+Network Architecture
+Traditional PINNs exhibit degraded performance with larger and deeper neural network architectures, despite the necessity of
+such networks for approximating complex flows and sharp gradients. This counter-intuitive behavior stems from unsuitable
+initialization schemes in multi-layer perceptron architectures, leading to poor trainability of network derivatives and unstable
+minimization of the PDE residual loss26.
+PirateNet.To address these scalability challenges, we employ the PirateNet architecture26augmented with random weight
+factorization48, which facilitates effective training of deep physics-informed neural networks while maintaining computational
+efficiency.
+The architecture first transforms input coordinatesxinto a high-dimensional feature space using random Fourier features49:
+Φ(x) =
+cos(Bx)
+sin(Bx)
+,
+whereB ∈Rm×dhas entries sampled i.i.d. from N(0,s2)with user-specified s>0 . We typically choose dto be half the width
+of the neural network. This embedding mitigates spectral bias in PINNs by improving the eigenfunction frequency of the
+Neural Tangent Kernel, thus enhancing the learning of high-frequency components and multiscale features50.
+The embedded coordinates are then processed through two dense layers that act as gates:
+U=σ(W 1Φ(x)+b 1),V=σ(W 2Φ(x)+b 2),
+whereσis a point-wise activation function.
+Letx(1)=Φ(x)andx(l)be the input to thel-th block (1≤l≤L). Each block performs the following operations:
+f(l)=σ
+W(l)
+1x(l)+b(l)
+1
+,z(l)
+1=f(l)⊙U+(1−f(l))⊙V,(7)
+g(l)=σ
+W(l)
+2z(l)
+1+b(l)
+2
+,z(l)
+2=g(l)⊙U+(1−g(l))⊙V,(8)
+h(l)=σ
+W(l)
+3z(l)
+2+b(l)
+3
+,x(l+1)=α(l)h(l)+(1−α(l))x(l).(9)
+Each block consists of three dense layers with dual gating operations and an adaptive residual connection. The trainable
+α(l)parameters control block nonlinearity: α(l)=0yields an identity mapping, while α(l)=1produces a fully nonlinear
+transformation. The final output of a PirateNet withLresidual blocks is given by
+uθ=W(L+1)x(L). (10)
+Importantly, we initialize α(l)=0for all adaptive residual blocks, which initially makes the output a linear combination of
+first-layer embeddings. This initialization strategy mitigates training difficulties in deep PINNs by starting with an effectively
+shallow architecture and gradually increasing depth through learnedαvalues during training.
+Random weight factorization (RWF).We further enhance PirateNet’s capabilities with Random Weight Factorization
+(RWF)48, a drop-in replacement of dense layers that acts as learning rate booster to accelerate loss convergence. RWF
+decomposes each neuron’s weight vector as:
+w(k,l)=exp(s(k,l))·v(k,l), (11)
+where k=1,...,d l,l=1,...,L+1 ,w(k,l)∈Rdl−1is the k-th row of weight matrixW(l),s(k,l)∈Ris a trainable scale factor,
+andv(k,l)∈Rdi−1. This factorization can be expressed in matrix form as:
+W(l)=diag
+exp(s(l))
+·V(l),l=1,2,...,L+1,(12)
+wheres(l)∈Rdlcontains the log-scale parameters. The exponential reparameterization ensures that the scale factors are strictly
+positive.
+Intuitively, RWF allows each neuron to effectively learn with its own self-adaptive learning rate, which helps to navigate the
+complex loss landscape more efficiently and overcome issues like spectral bias and poor initialization48.
+8/27
+
+===== PAGE 9 =====
+
+Exact enforcing of periodic boundary conditions.We enforce the periodic boundary conditions as hard constraints,
+following the approach reported in Donget al.51. For a function u(x)which is periodic along an arbitrary axis, this is achieved
+by transforming the input coordinates using a Fourier feature embedding.
+Specifically, for a domain periodic in a given direction with period P, we modify the input to the neural network for that
+coordinate xito include cos(ω ixi)andsin(ω ixi), where ωi=2π
+Piis the frequency corresponding to the period Piin that direction.
+This generalizes directly to multiple periodic dimensions. For example, in a 3D domain with periodicity in x,y,z directions, the
+spatial embedding becomes:
+γ(x,y,z) = [cos(ω xx),sin(ω xx),cos(ω yy),sin(ω yy),cos(ω zz),sin(ω zz)].(13)
+Any network uθ(γ(x))using such an embedding will inherently satisfy the periodic boundary conditions for all derivatives. For
+time-dependent problems, time coordinatestare simply concatenated with these spatial embeddings.
+Training Protocol
+Training PINNs presents significant challenges, including conflicting gradients among loss components, ill-conditioned loss
+landscapes, and violations of temporal causality in time-dependent problems. These difficulties often lead to poor convergence,
+reduced solution accuracy, and physically inconsistent results. To address these fundamental issues, we employ several
+specialized techniques that enhance optimization stability and predictive accuracy.
+Causal training.Recent work27illustrates that PINNs may violate temporal causality when solving time-dependent PDEs,
+often minimizing the PDE residuals at later times before accurately obtaining the solution for earlier times. To address this, we
+employ a causality-aware training approach27, where the PDE residual loss is modified as:
+Lpde(θ) =ZT
+0w(t)Z
+Ω|R[u θ](t,x)|2dxdt,(14)
+w(t) =exp
+−εZt
+0Z
+Ω|R[u θ](τ,x)|2dxdτ
+.(15)
+The weight w(t) decreases exponentially with the cumulative residual loss from earlier times. This mechanism ensures that the
+network prioritizes learning the solutions at earlier times before focusing on later ones, thereby enforcing temporal causality
+during the optimization process.
+Self-adaptive weighting.A central challenge in training PINNs is the imbalance among loss components, which often reflects
+distinct physical scales and yields gradients of vastly different magnitudes. This imbalance can lead to unstable optimization
+and poor convergence. To address this, we implement a self-adaptive learning rate annealing scheme29that dynamically
+balances the weighted composite loss:
+L(θ) =λ icLic(θ)+λ bcLbc(θ)+λ rLr(θ),(16)
+The global weights are computed as:
+λ□=∥∇θLic(θ)∥+∥∇θLbc(θ)∥+
+
+∇θLpde(θ)
+
+∥∇θL□(θ)∥,(17)
+where□∈ {ic,bc,pde}and∥·∥denotes theL2norm. Then we obtain
+∥λic∇θLic(θ)∥=∥λ bc∇θLic(θ)∥=∥λ r∇θLic(θ)∥=∥∇ θLic(θ)∥+∥∇ θLbc(θ)∥+∥∇ θLr(θ)∥.(18)
+This formulation equalizes the gradient norms of weighted losses, preventing bias toward any particular term during training.
+The weights are updated as running averages of their previous values, stabilizing stochastic gradient descent. Updates occur at
+user-specified intervals (typically every 100-1000 iterations), leading to minimal computational overhead.
+SOAP optimizer.As demonstrated by Wang et al.30, PINNs frequently suffer from conflicting gradient directions, which can
+hinder optimization. To mitigate this issue and improve training efficiency, we employ SOAP, a recent optimizer introduced by
+Vyas et al.35
+SOAP operates by performing Adam optimization within an eigenspace constructed from the covariance matrix of gradients.
+Specifically, at each optimization iteration τfor each layer’s weight matrix Wtand its corresponding gradient Gt∈Rm×n, SOAP
+maintains two covariance matrices using exponential moving averages:
+Lτ=β 2Lτ−1+(1−β 2)GτGT
+τ, (19)
+Rτ=β 2Rτ−1+(1−β 2)GT
+τGτ. (20)
+9/27
+
+===== PAGE 10 =====
+
+These matrices are then eigendecomposed as Lτ=Q LΛLQT
+LandRτ=Q RΛRQT
+R. Here, ΛLandΛRcontain eigenvalues that
+capture the principal curvature directions of the loss landscape, providing crucial information for navigating the optimization
+space.
+At each iteration τ, SOAP updates each layer’s weight matrix Wτwith a learning rate ηusing its corresponding gradient Gτ
+as follows:
+1. Project the weight and gradient onto the eigenspace: eWτ=QT
+LWτQR,eGτ=QT
+LGτQR.
+2. Apply the Adam update in therotatedspace: eWτ+1=eWτ−ηAdam( eGτ).
+3. Transform back to the original parameter space:W τ+1=Q LeWτ+1QT
+R.
+SOAP can be viewed as an approximation to the Gauss-Newton method30. Consequently, SOAP actively mitigates conflicting
+gradient directions and preconditions the often ill-posed PINN loss landscape, leading to more stable and efficient training.
+Time-marching and transfer learningTo further enhance model performance and reduce optimization difficulty, we employ
+a time-marching strategy that decomposes the temporal domain into sequential windows. Rather than training a PINN model
+on the entire time domain simultaneously, we solve the problem progressively by training a separate PINN model for each
+consecutive time interval[t i,ti+1]fori=0,1,...,N−1, wheret 0=0 andt N=T.
+For each time window, we implement transfer learning by initializing the PINN parameters using the parameter values of
+the converged PINN model from the previous time interval31, 32. Specifically, the network parameters θ(i+1)for time window
+[ti+1,ti+2]are initialized with the optimized parameters θ(i)
+∗from the preceding window [ti,ti+1]. The initial condition for each
+new time window is obtained from the PINN solution at the final time of the previous interval, ensuring continuity across
+temporal segments. Our experiments demonstrate that this time-marching strategy with transfer learning leads to significantly
+improved loss convergence and solution accuracy compared to training over the entire temporal domain simultaneously from
+scratch.
+Acknowledgments
+The work of P.S., P.P. and S.S. was supported by the U.S. Department of Energy, Advanced Scientific Computing Research
+program, under the “Resolution-invariant deep learning for accelerated propagation of epistemic and aleatory uncertainty in
+multi-scale energy storage systems, and beyond” project (Project No. 81824). Pacific Northwest National Laboratory (PNNL)
+is a multi-program national laboratory operated for the U.S. Department of Energy (DOE) by Battelle Memorial Institute under
+Contract No. DE-AC05-76RL01830.
+Author Contributions Statement
+S.W., P.S., and P.P. conceived the project and jointly designed the methodology. S.W. performed the experiments and analyzed
+the data. S.S. contributed to the implementation and assisted with experimental validation. All authors contributed to interpreting
+the results and to writing and revising the manuscript.
+Code and Reproducibility
+All code used in this study, along with instructions for reproducing the experiments and analyses, will be made publicly
+available upon publication. Detailed documentation and scripts are provided to facilitate reproducibility of the results.
+Competing interests
+The authors declare no competing interests.
+References
+1.Kim, J., Moin, P. & Moser, R. Turbulence statistics in fully developed channel flow at low reynolds number.J. fluid
+mechanics177, 133–166 (1987).
+2.Moin, P. & Mahesh, K. Direct numerical simulation: a tool in turbulence research.Annu. review fluid mechanics30,
+539–578 (1998).
+3.Lesieur, M. & Metais, O. New trends in large-eddy simulations of turbulence.Annu. review fluid mechanics28, 45–82
+(1996).
+10/27
+
+===== PAGE 11 =====
+
+4.Piomelli, U. Large-eddy simulation: achievements and challenges.Prog. aerospace sciences35, 335–362 (1999).
+5.Raissi, M., Perdikaris, P. & Karniadakis, G. E. Physics-informed neural networks: A deep learning framework for solving
+forward and inverse problems involving nonlinear partial differential equations.J. Comput. Phys.378, 686–707 (2019).
+6.Lagaris, I. E., Likas, A. & Fotiadis, D. I. Artificial neural networks for solving ordinary and partial differential equations.
+IEEE transactions on neural networks9, 987–1000 (1998).
+7.Raissi, M., Yazdani, A. & Karniadakis, G. E. Hidden fluid mechanics: Learning velocity and pressure fields from flow
+visualizations.Science367, 1026–1030 (2020).
+8.Almajid, M. M. & Abu-Al-Saud, M. O. Prediction of porous media fluid flow using physics informed neural networks.J.
+Petroleum Sci. Eng.208, 109205 (2022).
+9.Eivazi, H., Tahani, M., Schlatter, P. & Vinuesa, R. Physics-informed neural networks for solving reynolds-averaged
+navier–stokes equations.Phys. Fluids34(2022).
+10.Cao, Z.et al.Surrogate modeling of multi-dimensional premixed and non-premixed combustion using pseudo-time
+stepping physics-informed neural networks.Phys. Fluids36(2024).
+11.Xu, J., Wei, H. & Bao, H. Physics-informed neural networks for studying heat transfer in porous media.Int. J. Heat Mass
+Transf.217, 124671 (2023).
+12.Bararnia, H. & Esmaeilpour, M. On the application of physics informed neural networks (pinn) to solve boundary layer
+thermal-fluid problems.Int. Commun. Heat Mass Transf.132, 105890 (2022).
+13.Gokhale, G., Claessens, B. & Develder, C. Physics informed neural networks for control oriented thermal modeling of
+buildings.Appl. Energy314, 118852 (2022).
+14.Kissas, G.et al.Machine learning in cardiovascular flows modeling: Predicting arterial blood pressure from non-invasive
+4D flow MRI data using physics-informed neural networks.Comput. Methods Appl. Mech. Eng.358, 112623 (2020).
+15.Zhang, X.et al.Physics-informed neural networks (pinns) for 4d hemodynamics prediction: an investigation of optimal
+framework based on vascular morphology.Comput. Biol. Medicine164, 107287 (2023).
+16.Caforio, F.et al.Physics-informed neural network estimation of material properties in soft tissue nonlinear biomechanical
+models.Comput. Mech.1–27 (2024).
+17.Zhang, E., Dao, M., Karniadakis, G. E. & Suresh, S. Analyses of internal structures and defects in materials using
+physics-informed neural networks.Sci. advances8, eabk0644 (2022).
+18.Jeong, H.et al.A physics-informed neural network-based topology optimization (pinnto) framework for structural
+optimization.Eng. Struct.278, 115484 (2023).
+19.Hu, H., Qi, L. & Chao, X. Physics-informed neural networks (pinn) for computational solid mechanics: Numerical
+frameworks and applications.Thin-Walled Struct.112495 (2024).
+20.Sarker, S. & Chakraborty, S. Quantasio: A generalized neural framework for solving 3d navier-stokes dynamics.IEEE
+Transactions on Artif. Intell.(2025).
+21.Khademi, A., Salari, E. & Dufour, S. Simulation of 3d turbulent flows using a discretized generative model physics-informed
+neural networks.Int. J. Non-Linear Mech.170, 104988 (2025).
+22.Khademi, A. & Dufour, S. Physics-informed neural networks with trainable sinusoidal activation functions for approximat-
+ing the solutions of the navier-stokes equations.Comput. Phys. Commun.109672 (2025).
+23.Jin, X., Cai, S., Li, H. & Karniadakis, G. E. Nsfnets (navier-stokes flow nets): Physics-informed neural networks for the
+incompressible navier-stokes equations.J. Comput. Phys.426, 109951 (2021).
+24.Botarelli, T., Fanfani, M., Nesi, P. & Pinelli, L. Using physics-informed neural networks for solving navier-stokes equations
+in fluid dynamic complex scenarios.Eng. Appl. Artif. Intell.148, 110347 (2025).
+25.Wang, S., Sankaran, S., Wang, H. & Perdikaris, P. An expert’s guide to training physics-informed neural networks.arXiv
+preprint arXiv:2308.08468(2023).
+26.Wang, S., Li, B., Chen, Y . & Perdikaris, P. Piratenets: Physics-informed deep learning with residual adaptive networks.
+arXiv preprint arXiv:2402.00326(2024).
+27.Wang, S., Sankaran, S. & Perdikaris, P. Respecting causality is all you need for training physics-informed neural networks.
+arXiv preprint arXiv:2203.07404(2022).
+11/27
+
+===== PAGE 12 =====
+
+28.Wang, S., Yu, X. & Perdikaris, P. When and why PINNs fail to train: A neural tangent kernel perspective.J. Comput. Phys.
+449, 110768 (2022).
+29.Wang, S., Teng, Y . & Perdikaris, P. Understanding and mitigating gradient flow pathologies in physics-informed neural
+networks.SIAM J. on Sci. Comput.43, A3055–A3081 (2021).
+30.Wang, S., Bhartari, A. K., Li, B. & Perdikaris, P. Gradient alignment in physics-informed neural networks: A second-order
+optimization perspective.arXiv preprint arXiv:2502.00604(2025).
+31.Liu, Y ., Liu, W., Yan, X., Guo, S. & Zhang, C.-a. Adaptive transfer learning for pinn.J. Comput. Phys.490, 112291 (2023).
+32.Penwarden, M., Jagtap, A. D., Zhe, S., Karniadakis, G. E. & Kirby, R. M. A unified scalable framework for causal
+sweeping strategies for physics-informed neural networks (pinns) and their temporal decompositions.J. Comput. Phys.
+493, 112464 (2023).
+33.Wight, C. L. & Zhao, J. Solving Allen-Cahn and Cahn-Hilliard equations using the adaptive physics informed neural
+networks.arXiv preprint arXiv:2007.04542(2020).
+34.Krishnapriyan, A. S., Gholami, A., Zhe, S., Kirby, R. M. & Mahoney, M. W. Characterizing possible failure modes in
+physics-informed neural networks.arXiv preprint arXiv:2109.01050(2021).
+35.Vyas, N.et al.Soap: Improving and stabilizing shampoo using adam.arXiv preprint arXiv:2409.11321(2024).
+36.Platt, N., Sirovich, L. & Fitzmaurice, N. An investigation of chaotic kolmogorov flows.Phys. Fluids A: Fluid Dyn.3,
+681–696 (1991).
+37.Chandler, G. J. & Kerswell, R. R. Invariant recurrent solutions embedded in a turbulent two-dimensional kolmogorov flow.
+J. Fluid Mech.722, 554–595 (2013).
+38.Doering, C. R. & Gibbon, J. D.Applied analysis of the Navier-Stokes equations, vol. 12 (Cambridge University Press,
+1995).
+39.Brachet, M. E.et al.Small-scale structure of the taylor–green vortex.J. Fluid Mech.130, 411–452 (1983).
+40.Drikakis, D., Fureby, C., Grinstein, F. F. & Youngs, D. Simulation of transition and turbulence decay in the taylor–green
+vortex.J. Turbul.N20 (2007).
+41.2nd international workshop on high-order cfd methods. http://www.dlr.de/as/hiocfd (2013). Cologne, Germany.
+42.Del Alamo, J. C., Jiménez, J., Zandonade, P. & Moser, R. D. Scaling of the energy spectra of turbulent channels.J. Fluid
+Mech.500, 135–144 (2004).
+43.Hoyas, S. & Jiménez, J. Reynolds number effects on the reynolds-stress budgets in turbulent channels.Phys. Fluids20
+(2008).
+44.Moser, R. D., Kim, J., Mansour, N. N.et al.Direct numerical simulation of turbulent channel flow up to Reτ=590 .Phys.
+fluids11, 943–945 (1999).
+45.Sanderse, B., Stinis, P., Maulik, R. & Ahmed, S. E. Scientific machine learning for closure models in multiscale problems:
+A review.arXiv preprint arXiv:2403.02913(2024).
+46.Qadeer, S., Stinis, P. & Wan, H. Stabilizing pde–ml coupled system (2025). 2506.19274.
+47.Karniadakis, G. E.et al.Physics-informed machine learning.Nat. Rev. Phys.1–19 (2021).
+48.Wang, S., Wang, H., Seidman, J. H. & Perdikaris, P. Random weight factorization improves the training of continuous
+neural representations.arXiv preprint arXiv:2210.01274(2022).
+49.Tancik, M.et al.Fourier features let networks learn high frequency functions in low dimensional domains.arXiv preprint
+arXiv:2006.10739(2020).
+50.Wang, S., Wang, H. & Perdikaris, P. On the eigenvector bias of fourier feature networks: From regression to solving
+multi-scale PDEs with physics-informed neural networks.Comput. Methods Appl. Mech. Eng.384, 113938 (2021).
+51.Dong, S. & Ni, N. A method for representing periodic functions and enforcing exactly periodic boundary conditions with
+deep neural networks.J. Comput. Phys.435, 110242 (2021).
+52.Defazio, A.et al.The road less scheduled.Adv. Neural Inf. Process. Syst.37, 9974–10007 (2024).
+53.Wang, Y . & Lai, C.-Y . Multi-stage neural networks: Function approximator of machine precision.J. Comput. Phys.504,
+112865 (2024).
+12/27
+
+===== PAGE 13 =====
+
+A Nomenclature
+Table 1.Notation used throughout the paper.
+Symbol Description
+Physical Variables
+u,p Velocity and pressure fields
+t,x Time and spatial coordinates
+Ω,T Spatial domain and final time
+Re, Re τ Reynolds and friction Reynolds numbers
+uτ Friction velocity
+Neural Networks
+θ Network parameters
+uθ Network output, denoting the physical fields(u,v,w,p)
+W(l),b(l)Weight matrix and bias for layerl
+α(l)Trainable adaptive residual parameter
+L Number of adaptive residual blokcs
+Φ(x) Random Fourier features
+Loss Functions
+L Total loss function
+Lic,Lbc,Lpde Initial, boundary, and PDE losses
+I[·],B[·],R[·] Initial, boundary, and residual operators
+λic,λbc,λr Adaptive loss weights
+w(t) Causal training weight
+ε Causal tolerence
+Optimization
+Gτ Gradient matrix at iterationτ
+Lτ,Rτ SOAP covariance matrices
+QL,QR Eigenvector matrices of the covariance matrices
+η Learning rate
+s,V Random weight factorization
+Turbulence Diagnostics
+k Wavenumber
+Q Q-criterion
+U+Mean streamwise velocity (wall units)
+u′,v′,w′Velocity fluctuations (wall units)
+u′rms,v′rms,w′rms Root-mean-square (rms) of velocity fluctuations (wall units)
+u′u′+,v′v′+,w′w′+,u′v′+Reynolds stress components (wall units)
+ωx,ωy,ωz V orticity fluctuations (wall units)
+ωrmsx,ωrmsy,ωrmsz Root-mean-square (rms) of vorticity fluctuations(wall units)
+Sampling
+Nic,Nbc,Npde Number of sample points for evaluating the initial/boundary and PDE losses
+13/27
+
+===== PAGE 14 =====
+
+B Metrics
+We detail the evaluation metrics used in our work to assess the accuracy and physical fidelity of the predicted flow fields.
+RelativeL2error.The relativeL2error between the predicted solution ˜uand the reference solutionuis defined as
+RelativeL2Error=∥˜u−u∥ 2
+∥u∥ 2, (21)
+which quantifies the overall discrepancy between the predicted and true velocity fields over the spatial domain.
+Kinetic energy.The kinetic energy of the velocity field is computed as
+KE=1
+2Z
+Ω∥u(x)∥2dx, (22)
+providing a global measure of the flow’s intensity. We report the relative error in kinetic energy compared to the reference data.
+Kinetic energy spectrum.We compute the kinetic energy spectrum (energy spectrum of the velocity field) to analyze the
+distribution of energy across spatial scales. The Fourier transform ˆu(k)is used to calculate the spectrum:
+E(k) = ∑
+|k|=k1
+2|ˆu(k)|2, (23)
+wherekdenotes the wavevector. This metric captures the spectral decay of turbulence.
+Enstrophy.Enstrophy measures the rotational content of the flow and is defined as
+Enstrophy=1
+2Z
+Ω∥∇×u(x)∥2dx.(24)
+It characterizes the presence of small-scale structures and vorticity in the flow.
+Enstrophy spectrum.We compute the enstrophy spectrum (energy spectrum of the vorticity field) to analyze the distribution
+of rotational energy across spatial scales. The vorticity ω=∇× uis first computed, and its Fourier transform ˆω(k)is used to
+calculate the spectrum:
+Eω(k) =∑
+|k|=k1
+2|ˆω(k)|2, (25)
+wherekdenotes the wavevector. This metric is particularly sensitive to small-scale structures and is useful for evaluating how
+well the model captures the fine-scale features and spectral decay of turbulence.
+Mean velocity and pressure profiles (space–time average).For statistically steady turbulent channel flow, the mean
+velocity and pressure profiles are obtained by averaging over the streamwise (x), spanwise (z), and time (t) directions:
+ui(y) =1
+T LxLzZt0+T
+t0ZLx
+0ZLz
+0ui(x,y,z,t)dzdxdt,u i∈ {u,v,w},(26)
+and
+p(y) =1
+T LxLzZt0+T
+t0ZLx
+0ZLz
+0p(x,y,z,t)dzdxdt.(27)
+These Reynolds (space–time) averages yield profiles that depend only on the wall-normal coordinate y, providing a robust
+measure of how well the model captures the mean dynamics.
+To facilitate comparison with reference DNS data, the mean quantities are expressed in wall units:
+U+(y+) =u(y)
+uτ,W+(y+) =w(y)
+uτ,P+(y+) =p(y)
+ρu2τ,
+where
+y+=yuτ
+ν,u τ=p
+τw/ρ,
+withτ wthe mean wall shear stress andνthe kinematic viscosity.
+14/27
+
+===== PAGE 15 =====
+
+Root mean square (RMS) velocity and vorticity fluctuations.The RMS velocity fluctuations for each component are
+defined as
+urms
+i(y) =q
+u′2
+i,u′
+i=u i−ui,(28)
+where the averaging is performed over the streamwise (x), spanwise (z), and time (t) directions:
+u′2
+i(y) =1
+T LxLzZt0+T
+t0ZLx
+0ZLz
+0(ui(x,y,z,t)− ui(y))2dzdxdt.(29)
+These profiles quantify the turbulence intensity and directional anisotropy of the flow.
+Similarly, the RMS vorticity fluctuations are given by
+ωrms
+i(y) =q
+ω2
+i, (30)
+whereω i∈ {ω x,ωy,ωz}are the components of the vorticity field, and
+ω2
+i(y) =1
+T LxLzZt0+T
+t0ZLx
+0ZLz
+0ω2
+i(x,y,z,t)dzdxdt.(31)
+These vorticity-based statistics highlight the strength of small-scale rotational structures and provide complementary insight
+into the near-wall dynamics.
+Reynolds stress.The Reynolds stress components quantify turbulent momentum transport and are defined as
+u′
+iu′
+j=(ui−ui)(uj−uj). (32)
+In turbulent flows such as channel flow, the u′v′component is especially important as it represents shear stress due to turbulence.
+Accurate modeling of Reynolds stresses is crucial for reproducing the correct momentum balance.
+Velocity energy spectrum.The energy spectrum for each velocity component at different wall-normal locations characterizes
+the distribution of kinetic energy across wavenumbers. For the velocity component ui, the one-dimensional energy spectrum in
+thex i-direction is computed as
+Euiui(ki,y) =*
+∑
+kjˆui(ki,kj,y),ˆu∗
+i(ki,kj,y)+
+,(33)
+where kiis the streamwise ( i=1 ) or spanwise ( i=3 ) wavenumber, kjis the complementary horizontal wavenumber, ˆuidenotes
+the Fourier coefficient of ui, and (·)∗indicates the complex conjugate. The angle brackets ⟨·⟩denote ensemble averaging over
+multiple samples to obtain a statistically converged spectrum.
+C Training protocols
+We adopt a unified training protocols across all benchmark tasks, with problem-specific adaptations detailed in the respective
+sections below.
+All models are trained using a time-marching strategy with transfer learning across temporal windows. We use a time
+window size of 0.1 by default. The number of windows is chosen empirically based on problem complexity, with adjustments
+guided by preliminary observations of loss convergence. Within each window, we use PirateNet26as the network backbone,
+comprising two residual blocks (six layers total), a hidden size of 768, and Swish activations. Network weights are initialized
+via random weight factorization (RWF)48using µ=1.0 andσ=0.1 . When applicable, periodic boundary conditions are
+enforced exactly following the method in51, and Fourier features are sampled from a Gaussian distributionN(0,2).
+To ensure stable and effective training, we adopt a self-adaptive loss weighting scheme25, 29, where weights are updated
+every 1,000 iterations using an exponential moving average. For causal training25, 27, each time window is further divided into
+disjoint chunks, and causal weights are evaluated over these chunks with a tolerance ofε=1.0.
+The model is trained by minimizing the composite loss over 105iterations using the SOAP optimizer, with parameters
+β1=0.9 ,β2=0.999 , and eigenspace updates every f=2 steps. The learning rate increases linearly to 10−3in the first 22,000
+steps, followed by an exponential decay with a factor of 0.9 every 2,000 steps. To further accelerate convergence, we employ
+the schedule-free method of52with momentum β=0.9 , together with gradient clipping (global norm of 1) to ensure training
+stability.
+A complete summary of hyperparameters is provided in Table 2, based on configurations validated in prior work25, 26. These
+hyperparameters were also further tuned via extensive ablation studies, which we omit here for brevity.
+15/27
+
+===== PAGE 16 =====
+
+Table 2.Unified hyperparameter configuration for all turbulence benchmarks.RFF and RWF represent Random Fourier
+Features and Random Weight Factorization, respectively.
+Parameter Value
+PirateNet Architecture
+Depth (residual blocks) 2
+Width (hidden size) 768
+Activation Swish
+RFF scaleN(0,2)
+RWFµ=1.0,σ=0.1
+Optimization
+Optimizer SOAP
+β1,β2 0.9, 0.999
+Eigenspace update frequency 2 steps
+Base learning rate 10−3
+Warmup steps 2,000
+Decay rate 0.9
+Decay steps 2,000
+Training
+Iterations (per time window) 105
+Batch size 8,192
+Time window size 0.1
+Loss weighting Grad Norm (updated every 1,000 iters)
+Causal toleranceε=1.0
+16/27
+
+===== PAGE 17 =====
+
+Taylor-Green vortex.For this benchmark, we use a time window size of 0.2 for t∈[0,8] , and reduce it to 0.05 for later times
+as the flow becomes increasingly turbulent. Empirically, smaller time windows result in lower training loss and improved
+resolution of turbulence statistics such as enstrophy. These observations motivate future research into adaptive time window
+strategies, where the window size is adjusted dynamically based on the evolving complexity of the solution.
+To further enhance solution accuracy, we adopt the multi-stage training scheme introduced by Wang et al.53, which addresses
+the inherent limitations of neural networks in achieving high accuracy. In the context of PINNs, this method constructs the
+solution as a series expansion where each term is represented by a neural network. The neural network in the series expansion
+are trained sequentially to reduce the equation residuals left by preceding stages:
+u(n)
+c(t,x) =n
+∑
+j=0εjuj(t,x), (34)
+whereu j(x)denotes the neural network at stagej, andε jis a prescribed scaling factor.
+Training proceeds stage-by-stage, following Algorithm 4 from Wang et al.53:
+1.Stage 0: Train the initial network u0(t,x)using standard PINN optimization to minimize the governing equation residuals
+and enforce initial/boundary conditions.
+2. Stagek+1:
+•Train a new network uk+1(t,x)with a magnitude prefactor εk+1, by minimizing the physics-informed loss of the
+linearized PDEs. The non-linear PDEs are linearized around the current solution u(k)
+c(t,x), yielding linear residual
+equations foru k+1(t,x), where the residual from stagekacts as the source term.
+• Update the composite solution as:
+u(k+1)
+c(t,x) =u(k)
+c(t,x)+ε k+1uk+1(t,x).(35)
+Unlike conventional regression problems, this approach targets the reduction of physics-based residuals rather than fitting
+directly function values (which are unknown for the problems we want to solve). This formulation enables progressive
+refinement of the solution, ultimately achieving better accuracy for challenging multi-scale problems such as the Taylor-Green
+vortex.
+We apply this multi-stage procedure within each time window up to T=8 for this problem. Specifically, we use a two-stage
+setup with prefactorsε 0=1 andε 1=0.001. However, we find it effective only when the first-stage network already achieves
+sufficiently low PDE residuals (e.g., <10−8). In cases where the initial PDE residual remains large, subsequent stages fail to
+effectively reduce the error. For the Kolmogorov flow and turbulent channel flow, achieving this level of accuracy in the initial
+stage proves difficult. As a result, the multi-stage scheme offers limited improvement for these cases and is not employed.
+17/27
+
+===== PAGE 18 =====
+
+D Computational Costs
+All experiments are conducted using our JAX-based implementation, JAX-PI25, on a single NVIDIA H200 GPU. Detailed
+runtime benchmarks are reported in Table 3.
+We acknowledge that the current training times of PINNs remain significantly higher than those of conventional numerical
+solvers. This performance gap highlights a critical challenge and simultaneously motivates the development of next-generation
+physics-informed architectures and training strategies. Despite their computational overhead, our results demonstrate that
+PINNs can achieve stable and accurate simulations for complex turbulent flows in a data-free setting – an important step toward
+practical and scalable scientific machine learning.
+Table 3.Training time per time window (in hours)for each benchmark problem using PINNs with the SOAP optimizer. All
+experiments are conducted on a single NVIDIA H200 GPU.
+Benchmark Training Time (per time window)
+2D Kolmogorov flow 3.00
+3D Taylor–Green vortex 7.45
+3D Turbulent channel flow 7.20
+E Additional Visualizations
+E.1 2D Turbulent Kolmogorov Flow
+Figure 5.2D Turbulent Kolmogorov flow.Comparison of the predicted velocityuagainst the corresponding numerical
+reference at different time snapshots.
+18/27
+
+===== PAGE 19 =====
+
+Figure 6.2D Turbulent Kolmogorov flow.Comparison of the predicted velocityvagainst the corresponding numerical
+reference at different time snapshots.
+Figure 7.2D Turbulent Kolmogorov flow.Evolution of loss values across two consecutive time windows. The sharp spikes in
+loss values around step 5×104mark the transition to training the next time window. IC loss denotes the initial condition loss,
+including uandvcomponents. The PDE residual losses include ru,rv, andrc, corresponding to the momentum equations in
+theu,v, directions and the continuity equation, respectively.
+19/27
+
+===== PAGE 20 =====
+
+E.2 3D Taylor-Green Vortex
+Figure 8.Taylor-Green Vortex.Predicted velocity norm at different time snapshots.
+20/27
+
+===== PAGE 21 =====
+
+Figure 9.Taylor-Green Vortex.Predicted vorticity norm at different time snapshots.
+21/27
+
+===== PAGE 22 =====
+
+Figure 10.Taylor-Green Vortex.Evolution of loss values over two consecutive time windows. The sharp spikes in loss around
+step∼105indicate the transition to the next time window, while the sudden drop at 5×104corresponds to the start of the
+second training stage within the same window. IC loss denotes the initial condition loss, includingu,v,wcomponents. The
+PDE residual losses includeru,rv,rw, andrc, corresponding to the momentum equations in theu,vandwdirections, and
+the continuity equation, respectively.
+22/27
+
+===== PAGE 23 =====
+
+E.3 3D Turbulent Channel Flow
+Figure 11.Turbulent channel flow.Predicted velocity field slices in the XY and YZ planes.
+23/27
+
+===== PAGE 24 =====
+
+Figure 12.Turbulent channel flow.Predicted vorticity field slices at XY and YZ planes.
+Figure 13.Turbulent channel flow.Predicted near-wall streaks of streamwise velocity fluctuations, visualized in the x–zplane.
+24/27
+
+===== PAGE 25 =====
+
+a                                                  b                                                 c                       d                            
+Figure 14.Turbulent channel flow.(a) Joint distribution of the invariantsQ+andR+. (b) Wall-normal profile of the mean
+invariantQ+. (c) Wall-normal profile of the mean invariantR+. (d) Wall-normal profile of the mean dissipation rate per unit
+massε+. All quantities are normalized in wall units.
+Figure 15.Turbulent channel flow.Mean profiles of the root-mean-square (rms) vorticity componentsω+
+x,ω+
+y, andω+
+z
+across the wall-normal direction, comparing reference DNS data and the PINN predictions. Note that the reference data from44
+only reports the vorticity in the near wall region (y+∈[0,50]).
+Figure 16.Turbulent channel flow.Streamwise velocity energy spectrumE uualong streamwise direction (k x) and spanwise
+direction (k z), comparing reference DNS data with PINN predictions.
+25/27
+
+===== PAGE 26 =====
+
+Figure 17.Turbulent channel flow.Wall-normal velocity energy spectrumE vvalong streamwise direction (k x) and spanwise
+direction (k z), comparing reference DNS data with PINN predictions.
+Figure 18.Turbulent channel flow.Spanwise velocity energy spectrumE wwalong streamwise direction (k x) and spanwise
+direction (k z), comparing reference DNS data with PINN predictions.
+26/27
+
+===== PAGE 27 =====
+
+Figure 19.Turbulent channel flow.Evolution of loss values across two consecutive time windows. The sharp spikes in loss
+values around step 105mark the transition to training the next time window. IC loss refers to initial condition loss, and BC loss
+denotes boundary condition loss. Each includeu,v,wcomponents. The PDE residual losses includeru,rv,rw, andrc,
+corresponding to the momentum equations in theu,v,wdirections and the continuity equation, respectively.
+27/27

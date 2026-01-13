@@ -28,8 +28,9 @@ normalization:
   params:
     epsilon: 1.0e-08
 sensors:
-  K: 100
-  sensor_file: ./data/sensors/random_K100_test.json
+  K: 400
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
   selection_method: random
   spatial_coverage: uniform
 model:

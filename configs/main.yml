@@ -49,9 +49,10 @@ normalization:
   - p
   params: {}
 sensors:
-  K: 100
+  K: 400
   selection_method: qr_pivot
-  sensor_file: sensors_K100_qr_pivot_3d_v5_gradu_eig_large.npz
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
   hybrid_config:
     wall_ratio: 0.4
     qr_ratio: 0.6

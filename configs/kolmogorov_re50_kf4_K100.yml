@@ -79,9 +79,10 @@ normalization:
     - 15.0
     - 35.0
 sensors:
-  K: 100
+  K: 400
   selection_method: precomputed
-  sensor_file: ./data/sensors/kolmogorov/sensors_temporal_K100_re50_256x256_t15-35.json
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
 model:
   type: fourier_vs_mlp
   in_dim: 3  # [t, x, y]

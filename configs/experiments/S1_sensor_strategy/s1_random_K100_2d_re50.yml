@@ -58,7 +58,8 @@ normalization:
 sensors:
   K: 100
   selection_method: precomputed
-  sensor_file: ./data/sensors/kolmogorov/sensors_K100_re50_256x256_random_seed42.json
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K100_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K100_N256_t0-20_dns_values.npz
   seed: 42
   quality_metrics:
     method: random_uniform

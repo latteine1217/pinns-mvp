@@ -1,6 +1,6 @@
 # 🌊 PINNs-SparseFlow: 稀疏測量湍流重建
 
-基於物理資訊神經網路 (PINNs) 的湍流逆問題求解器，從極少量感測器觀測 (K ≤ 100) 重建高保真流場。
+基於物理資訊神經網路 (PINNs) 的湍流逆問題求解器，從極少量感測器觀測 (K ≤ 400) 重建高保真流場。
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.9.1-orange)](https://pytorch.org/)
 [![WandB](https://img.shields.io/badge/WandB-Logging-yellow)](https://wandb.ai/)
@@ -12,8 +12,8 @@
 - **效能優化**: 🚀 Phase 3 Lazy Evaluation（時間軸零計算）+ 記憶體預分配 + 效能監控
 - **優化器**: SOAP 為預設，支援 Adam/AdamW/SGD/L-BFGS + 多種 scheduler
 - **權重策略**: GradNorm 動態權重 + Causal Weighting + Curriculum/Staged Weights
-- **先驗整合**: RANS/其他低保真場作為軟約束（可加權/空間加權）
-- **感測器**: QR-Pivot + 分層/混合策略 (K ≤ 100)
+- **先驗整合**: RANS/LES 等低保真場作為軟約束（可加權/空間加權）
+- **感測器**: QR-Pivot + 時間序列佈點 (K ≤ 400)
 - **訓練系統**: TrainerBuilder/TrainerComponents + Checkpoint/Validation Manager + 配置驗證工具
 - **分散式訓練**: 🆕 自動 DDP 支援（多 GPU 加速 ~1.7x）
 
@@ -26,30 +26,37 @@ conda env create -f environment.yml && conda activate pinns-sparse-flow
 # 2. 配置 WandB（必須，僅需一次）
 echo "WANDB_API_KEY=your_key_here" > .wandb_config
 
-# 3. 驗證配置（必跑，Fail Fast）
+# 3. 感測器生成（LES 選點 + DNS values）
+python scripts/generate/sensors/generate_kolmogorov_temporal_qr.py \
+  --input data/kolmogorov_les/kolmogorov_les_re100.npy \
+  --output data/kolmogorov_sensors/re100 \
+  --K 400 --time-range 0 20 --time-stride 10 \
+  --include-dns-values
+
+# 4. 驗證配置（必跑，Fail Fast）
 python scripts/tools/validate_config_keys.py configs/kolmogorov_re50_kf4_K100.yml
 python scripts/tools/validate_config.py --config configs/main.yml
 
-# 4. 訓練
-# 4a. 單 GPU 訓練
+# 5. 訓練
+# 5a. 單 GPU 訓練
 python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 
-# 4b. 多 GPU DDP 訓練（🆕 自動加速 ~1.7x）
+# 5b. 多 GPU DDP 訓練（🆕 自動加速 ~1.7x）
 torchrun --nproc_per_node=2 scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 
-# 5. 評估
-# 5a. 快速評估（訓練中驗證，1-2 分鐘）
+# 6. 評估
+# 6a. 快速評估（訓練中驗證，1-2 分鐘）
 python scripts/evaluate_unified.py \
   --checkpoint checkpoints/<exp>/best_model.pth \
   --output results/evaluation
 
-# 5b. 多模型比較
+# 6b. 多模型比較
 python scripts/evaluate_unified.py \
   --checkpoints checkpoints/model1.pth checkpoints/model2.pth checkpoints/model3.pth \
   --labels "RANS Prior" "Vanilla" "Proposed" \
   --output results/comparison
 
-# 5c. 進階科學分析（論文前評估，5-10 分鐘，含能譜/壁剪應力）
+# 6c. 進階科學分析（論文前評估，5-10 分鐘，含能譜/壁剪應力）
 python scripts/evaluate/comprehensive_evaluation.py \
   --checkpoint checkpoints/<exp>/best_model.pth \
   --reference_dir data/jhtdb \
@@ -68,12 +75,18 @@ MPLCONFIGDIR=./.mplconfig PYTHONPATH=. \
 ### 2D Kolmogorov Flow ✅
 - **用途**: 設計驗證、快速實驗（5-10 分鐘）
 - **物理**: 不可壓縮 NS + 正弦強迫項
+- **低保真先驗**: 2D LES（hyperviscosity + Ekman friction）
 - **域**: 4π × 2π 週期域
 
 ### 3D Channel Flow Re_τ=1000 ✅
 - **用途**: 工程級驗證、生產環境（2-8 小時）
 - **物理**: 不可壓縮 NS + RANS k-ε 模型
 - **域**: 8π × 2 × 3π（x/y/z）
+
+## 感測器資料格式
+
+- **JSON**: 感測器索引與座標（`sensor_file`）
+- **NPZ**: DNS time series values（`dns_values_file`）
 
 ## 文檔索引
 
@@ -93,7 +106,7 @@ MPLCONFIGDIR=./.mplconfig PYTHONPATH=. \
 
 - 流場誤差 ≤ 10-15%（相對 L2）
 - 優於 RANS Baseline ≥ 30%
-- K ≤ 100 感測點（QR-Pivot）
+- K ≤ 400 感測點（QR-Pivot）
 - 收斂速度提升 ≥ 30%
 
 ## 重要更新
