@@ -88,7 +88,20 @@ model:
   out_dim: 4  # [u, v, w, p] or [u, v, p] for 2D
   width: 256
   depth: 8
-  activation: sine
+  activation: sine  # Options: sine | tanh | swish | gelu (PirateNet 推薦 swish)
+  
+  # ========== 架構類型配置 ==========
+  # block_type: 網路架構類型
+  #   - dense: 標準 MLP（預設）
+  #   - resnet: ResNet Block（殘差連接 + alpha 學習權重）
+  #   - piratenet: PirateNet（gated residual blocks，高 Re 湍流推薦）
+  #     * PirateNet 推薦配置：activation=swish, use_input_projection=true
+  #     * 參考: docs/PIRATENET_GUIDE.md
+  block_type: dense
+  
+  # ResNet/PirateNet 專用參數
+  res_block_alpha_init: 0.0  # alpha 初始值（0.0 = 從恆等映射開始）
+  use_input_projection: false  # 是否使用輸入投影層（PirateNet 推薦 true）
   
   # ========== Fourier Features 配置 ==========
   # 可選配置方式：
@@ -258,8 +271,14 @@ training:
     adaptive_collocation:
       enabled: false
   gradient_clip: 1.0
-  num_time_windows: 1
-  time_window_overlap: 0.0
+  
+  # ========== Time Window Training 配置 ==========
+  # 適用於長時間模擬（如 Kolmogorov Flow 0-50s）
+  # 參考: docs/TIME_WINDOW_TRAINING_GUIDE.md
+  num_time_windows: 1              # 時間窗口數量（1 = 不使用 time window）
+  time_window_overlap: 0.0         # 窗口重疊比例（推薦 0.0 無重疊）
+  transfer_learning: true          # 是否從前一個窗口載入參數（推薦 true）
+  
   amp:
     enabled: false
 fourier_annealing:

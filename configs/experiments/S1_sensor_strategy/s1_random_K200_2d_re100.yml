@@ -1,5 +1,5 @@
 experiment:
-  name: s1_random_K200_2d_re50
+  name: s1_random_K200_2d_re100
   version: v1.0_baseline
   seed: 42
   device: auto
@@ -7,7 +7,7 @@ experiment:
   description: 'S1: Random sensor strategy baseline with K=200'
   group: kflow_sensor_strategy
   tags:
-  - kflow_re50
+  - kflow_re100
   - random
   - K200
   - vanilla_mlp
@@ -19,11 +19,11 @@ reproducibility:
   num_workers: 4
 data:
   source: kolmogorov_dns
-  dataset: re50_kf4
+  dataset: re100_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns_npy/re50
-    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
+    data_path: ./data/kolmogorov_dns_npy/re100
+    description: Kolmogorov flow (Re=100, k_f=4, 2D periodic, weak turbulence)
     resolution:
       x: 256
       y: 256
@@ -36,7 +36,7 @@ data:
     - v
     - p
     physics_params:
-      Re: 50.0
+      Re: 100.0
       Re_definition: Musacchio_Boffetta_2014
       nu: 0.039374
       k_f: 4
@@ -58,8 +58,8 @@ normalization:
 sensors:
   K: 200
   selection_method: precomputed
-  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K200_N256_t0-20.json
-  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K200_N256_t0-20_dns_values.npz
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_random_K200_re62_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_random_K200_re62_N256_t0-20_dns_values.npz
   seed: 42
   quality_metrics:
     method: random_uniform
@@ -69,7 +69,7 @@ model:
   out_dim: 3
   width: 256
   depth: 6
-  activation: tanh
+  activation: swish
   block_type: piratenet
   use_rwf: true
   rwf_scale_mean: 1.0
@@ -100,7 +100,7 @@ physics:
     k_f: 4
     amplitude: 1.0
   kolmogorov_flow:
-    Re: 50.0
+    Re: 100.0
     k_f: 4
     forcing_amplitude: 1.0
   domain:
@@ -204,7 +204,7 @@ evaluation:
     dpdy_l2_error: 0.3
     mass_conservation_error: 0.001
     kinetic_energy_rmse: 0.05
-  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_data: ./data/kolmogorov_dns/dns_re100_t100.h5
   reference_time_window:
   - 20.0
   - 40.0
@@ -249,7 +249,7 @@ usage_notes: "\U0001F52C \u5BE6\u9A57\u8A2D\u8A08\uFF1A\n  - \u76EE\u6A19\uFF1A\
   \u5B9A\u5B78\u7FD2\u7387\n  - \u512A\u5316\u5668\uFF1AAdam (lr=1e-3, \u7121\u8ABF\
   \u5EA6)\n  - \u7528\u9014\uFF1A\u4F5C\u70BA\u5C0D\u7167\u7D44\u8A55\u4F30\u9032\u968E\
   \u7279\u5FB5\u7684\u8CA2\u737B\n\n\U0001F680 \u57F7\u884C\u6307\u4EE4\uFF1A\n  python\
-  \ scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla_1k.yml --device\
+  \ scripts/train/train.py --cfg configs/kolmogorov_re100_kf4_K100_vanilla_1k.yml --device\
   \ cuda\n\n\U0001F4CA \u9810\u671F\u7D50\u679C\uFF08\u57FA\u7DDA\u6027\u80FD\uFF09\
   \uFF1A\n  - \u8A13\u7DF4\u6642\u9593\uFF1A3-5 \u5C0F\u6642\uFF0810000 epochs, GPU\uFF09\
   \n  - \u611F\u6E2C\u9EDE L2\uFF1A5-10%\n  - \u5168\u5834 u/v L2\uFF1A20-30%\uFF08\

@@ -33,7 +33,7 @@ STRATEGIES=(qr random)
 STRATEGY=${STRATEGIES[$SLURM_ARRAY_TASK_ID]}
 
 # 配置檔案
-CONFIG_FILE="configs/experiments/S1_sensor_strategy/s1_${STRATEGY}_K200_2d_re50.yml"
+CONFIG_FILE="configs/experiments/S1_sensor_strategy/s1_${STRATEGY}_K200_2d_re100.yml"
 
 # 建立日誌目錄
 mkdir -p logs/slurm

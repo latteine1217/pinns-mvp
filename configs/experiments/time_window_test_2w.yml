@@ -43,7 +43,7 @@ model:
   - p
   width: 256
   depth: 3
-  activation: tanh
+  activation: swish
   use_residual: false
   use_layer_norm: false
   dropout: 0.0

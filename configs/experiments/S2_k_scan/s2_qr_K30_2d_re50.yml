@@ -71,7 +71,7 @@ model:
   out_dim: 3
   width: 256
   depth: 6
-  activation: tanh
+  activation: swish
   block_type: piratenet
   use_rwf: true
   rwf_scale_mean: 1.0

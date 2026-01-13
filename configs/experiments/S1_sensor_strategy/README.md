@@ -7,12 +7,12 @@
 ## 配置文件
 
 ### K=100
-- `s1_random_K100_2d_re50.yml`
-- `s1_qr_K100_2d_re50.yml`
+- `s1_random_K100_2d_re100.yml`
+- `s1_qr_K100_2d_re100.yml`
 
 ### K=200
-- `s1_random_K200_2d_re50.yml`
-- `s1_qr_K200_2d_re50.yml`
+- `s1_random_K200_2d_re100.yml`
+- `s1_qr_K200_2d_re100.yml`
 
 ## 對比指標
 
@@ -23,12 +23,12 @@ L2(u,v,∇p), ‖∇·u‖, sensor quality (condition number)
 ```bash
 # 從 repo root 執行（建議）
 # K=100 實驗
-python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_random_K100_2d_re50.yml
-python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_qr_K100_2d_re50.yml
+python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_random_K100_2d_re100.yml
+python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_qr_K100_2d_re100.yml
 
 # K=200 實驗
-python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_random_K200_2d_re50.yml
-python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_qr_K200_2d_re50.yml
+python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_random_K200_2d_re100.yml
+python scripts/train/train.py --cfg configs/experiments/S1_sensor_strategy/s1_qr_K200_2d_re100.yml
 
 # 或一次跑完本資料夾
 for cfg in configs/experiments/S1_sensor_strategy/*.yml; do python scripts/train/train.py --cfg "$cfg"; done
@@ -40,7 +40,7 @@ for cfg in configs/experiments/S1_sensor_strategy/*.yml; do python scripts/train
 # 以 checkpoint_dir 內的 best_model.pth / latest.pth 為主
 python scripts/evaluate/evaluate_checkpoint.py \
   --checkpoint checkpoints/experiments/S1_qr_K100/best_model.pth \
-  --config configs/experiments/S1_sensor_strategy/s1_qr_K100_2d_re50.yml
+  --config configs/experiments/S1_sensor_strategy/s1_qr_K100_2d_re100.yml
 ```
 
 ## 預期結果

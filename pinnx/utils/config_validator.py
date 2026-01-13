@@ -64,6 +64,7 @@ class ConfigValidator:
         'constant',
         'cosine',
         'warmup_cosine',
+        'warmup_exponential',  # JAXpi 風格：Warmup + Exponential Decay
         'step',
         'exponential',
         'multistep',
@@ -332,7 +333,51 @@ class ConfigValidator:
     
     def _check_logical_consistency(self, config: Dict[str, Any]) -> None:
         """檢查邏輯一致性"""
-        # 檢查 1: 低保真先驗啟用但未提供路徑
+        # 檢查 1: PirateNet 配置建議
+        model_cfg = config.get('model', {})
+        block_type = model_cfg.get('block_type', 'dense')
+        if block_type == 'piratenet':
+            # 檢查 1a: use_input_projection 建議
+            if not model_cfg.get('use_input_projection', False):
+                self.warnings.append(
+                    "⚠️  PirateNet 建議啟用 use_input_projection=true\n"
+                    "   原因: 輸入投影層增強高維度表達能力\n"
+                    "   修復方法: 設置 model.use_input_projection=true\n"
+                    "   參考: docs/PIRATENET_GUIDE.md"
+                )
+            
+            # 檢查 1b: alpha_init 必須為 0.0
+            alpha_init = model_cfg.get('res_block_alpha_init')
+            if alpha_init is not None and alpha_init != 0.0:
+                self.warnings.append(
+                    f"⚠️  PirateNet 強烈建議 res_block_alpha_init=0.0（當前: {alpha_init}）\n"
+                    "   原因: 從恆等映射開始訓練更穩定（Wang et al. 2025）\n"
+                    "   修復方法: 設置 model.res_block_alpha_init=0.0\n"
+                    "   參考: docs/PIRATENET_GUIDE.md#Q2"
+                )
+            
+            # 檢查 1c: SOAP 優化器建議
+            optimizer_type = config.get('training', {}).get('optimizer', {}).get('type', '').lower()
+            if optimizer_type not in ['soap', '']:
+                self.warnings.append(
+                    f"⚠️  PirateNet 推薦使用 SOAP 優化器（當前: {optimizer_type}）\n"
+                    "   原因: SOAP 在深層網路上表現更好（Wang et al. 2025）\n"
+                    "   修復方法: 設置 training.optimizer.type='soap'\n"
+                    "   參考: docs/PIRATENET_GUIDE.md#訓練策略"
+                )
+            
+            # 檢查 1d: Time Window + PirateNet 組合
+            num_windows = config.get('training', {}).get('num_time_windows', 1)
+            if num_windows > 1:
+                transfer_learning = config.get('training', {}).get('transfer_learning', True)
+                if not transfer_learning:
+                    self.warnings.append(
+                        "⚠️  PirateNet + Time Window 建議啟用 transfer_learning=true\n"
+                        "   原因: 參數遷移利用前一窗口的學習成果\n"
+                        "   修復方法: 設置 training.transfer_learning=true"
+                    )
+        
+        # 檢查 2: 低保真先驗啟用但未提供路徑
         lowfi_cfg = config.get('lowfi_prior', {})
         if lowfi_cfg.get('enabled', False):
             data_path = lowfi_cfg.get('data_path', '')
@@ -343,7 +388,7 @@ class ConfigValidator:
                     "   或者設置 lowfi_prior.enabled=false"
                 )
         
-        # 檢查 2: 模型輸入維度與物理域不匹配（考慮時間維度）
+        # 檢查 3: 模型輸入維度與物理域不匹配（考慮時間維度）
         if 'model' in config and 'physics' in config:
             in_dim = config['model'].get('in_dim')
             domain = config['physics'].get('domain', {})
@@ -366,7 +411,7 @@ class ConfigValidator:
                     f"   修復方法: 調整 model.in_dim 或更新 physics.domain"
                 )
         
-        # 檢查 3: VS-PINN 配置不完整
+        # 檢查 4: VS-PINN 配置不完整
         physics_type = config.get('physics', {}).get('type', '')
         if isinstance(physics_type, str) and physics_type not in self.VALID_PHYSICS_TYPES:
             self.warnings.append(

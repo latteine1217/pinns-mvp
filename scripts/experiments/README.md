@@ -14,8 +14,8 @@
 | Colab | `run_s1_sensor_strategy_colab.sh` | 2 | 4-8h |
 
 **配置檔案**:
-- `configs/experiments/S1_sensor_strategy/s1_qr_K100_2d_re50.yml`
-- `configs/experiments/S1_sensor_strategy/s1_random_K100_2d_re50.yml`
+- `configs/experiments/S1_sensor_strategy/s1_qr_K100_2d_re100.yml`
+- `configs/experiments/S1_sensor_strategy/s1_random_K100_2d_re100.yml`
 
 **執行方式**:
 ```bash

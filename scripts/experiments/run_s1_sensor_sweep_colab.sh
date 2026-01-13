@@ -76,7 +76,7 @@ FAILED_LIST=()
 
 # 執行每個策略
 for strategy in "${STRATEGIES[@]}"; do
-    CONFIG_FILE="$EXPERIMENT_DIR/s1_${strategy}_K${K_VALUE}_2d_re50.yml"
+    CONFIG_FILE="$EXPERIMENT_DIR/s1_${strategy}_K${K_VALUE}_2d_re100.yml"
     
     echo -e "${YELLOW}================================${NC}"
     echo -e "${YELLOW}▶ 開始訓練: ${strategy^^} 策略 (K=${K_VALUE})${NC}"
