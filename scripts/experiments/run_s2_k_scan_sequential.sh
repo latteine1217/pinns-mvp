@@ -44,7 +44,7 @@ FAILED_LIST=()
 
 # 依序執行每個 K 值
 for K in "${K_VALUES[@]}"; do
-    CONFIG_FILE="$EXPERIMENT_DIR/s2_qr_K${K}_2d_re50.yml"
+    CONFIG_FILE="$EXPERIMENT_DIR/s2_qr_K${K}_2d_re100.yml"
     
     echo -e "${YELLOW}================================${NC}"
     echo -e "${YELLOW}▶ 開始訓練: K=${K}${NC}"

@@ -1,15 +1,15 @@
 experiment:
-  name: s2_qr_K50_2d_re50
+  name: s2_qr_K30_2d_re100
   version: v1.0_baseline
   seed: 42
   device: auto
   precision: float32
-  description: 'S2: K-scan with K=50 sensors (QR-pivot)'
+  description: 'S2: K-scan with K=30 sensors (QR-pivot)'
   group: kflow_sensor_strategy
   tags:
-  - kflow_re50
+  - kflow_re100
   - qr_pivot
-  - K50
+  - K30
   - vanilla_mlp
   - s2_kscan
   experiment_id: S2
@@ -19,10 +19,10 @@ reproducibility:
   num_workers: 4
 data:
   source: kolmogorov_dns
-  dataset: re50_kf4
+  dataset: re100_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
+    data_path: ./data/kolmogorov_dns_npy/re100
     description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
     resolution:
       x: 256
@@ -56,7 +56,7 @@ normalization:
     - 15.0
     - 35.0
 sensors:
-  K: 50
+  K: 30
   selection_method: precomputed
   sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K50_N256_t0-20.json
   dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K50_N256_t0-20_dns_values.npz
@@ -128,7 +128,7 @@ losses:
   adaptive_weighting: true
   grad_norm_momentum: 0.9
   weight_update_freq: 1000
-  causal_weighting: false
+  causal_weighting: true
   causal_tol: 1.0
   num_chunks: 16
   merge_momentum: true
@@ -142,7 +142,7 @@ losses:
       rc: 1.0
     momentum: 0.9
     update_every_steps: 1000
-    use_causal: false
+    use_causal: true
     causal_tol: 1.0
     num_chunks: 16
     causal:
@@ -164,7 +164,7 @@ training:
     min_lr: 1.0e-06
     staircase: false
   epochs: 300000
-  batch_size: 8000  # 提升 2 倍以利用雙 GPU 記憶體（避免梯度計算 OOM）
+  batch_size: 10000
   validation_freq: 100
   checkpoint_freq: 2000
   log_interval: 20
@@ -173,7 +173,7 @@ training:
     patience: 2000
     min_delta: 1.0e-06
   sampling:
-    N_pde: 6000  # 提升 2 倍以匹配 batch_size 比例 (4:3)
+    N_pde: 8000
     adaptive_sampling: false
     boundary_points: 500
   gradient_clip: 1.0
@@ -206,7 +206,7 @@ evaluation:
     dpdy_l2_error: 0.3
     mass_conservation_error: 0.001
     kinetic_energy_rmse: 0.05
-  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_data: ./data/kolmogorov_dns/dns_re100_t100.h5
   reference_time_window:
   - 20.0
   - 40.0
@@ -222,11 +222,11 @@ logging:
   level: info
   log_freq: 10
   save_predictions: true
-  wandb: false
+  wandb: true
 output:
-  checkpoint_dir: ./checkpoints/experiments/S2_K50
-  results_dir: ./results/experiments/S2_K50
-  visualization_dir: ./results/experiments/S2_K50/visualizations
+  checkpoint_dir: ./checkpoints/experiments/S2_K30
+  results_dir: ./results/experiments/S2_K30
+  visualization_dir: ./results/experiments/S2_K30/visualizations
 test_acceptance:
   stability:
   - no_nan_inf: true
@@ -251,7 +251,7 @@ usage_notes: "\U0001F52C \u5BE6\u9A57\u8A2D\u8A08\uFF1A\n  - \u76EE\u6A19\uFF1A\
   \u5B9A\u5B78\u7FD2\u7387\n  - \u512A\u5316\u5668\uFF1AAdam (lr=1e-3, \u7121\u8ABF\
   \u5EA6)\n  - \u7528\u9014\uFF1A\u4F5C\u70BA\u5C0D\u7167\u7D44\u8A55\u4F30\u9032\u968E\
   \u7279\u5FB5\u7684\u8CA2\u737B\n\n\U0001F680 \u57F7\u884C\u6307\u4EE4\uFF1A\n  python\
-  \ scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla_1k.yml --device\
+  \ scripts/train/train.py --cfg configs/kolmogorov_re100_kf4_K100_vanilla_1k.yml --device\
   \ cuda\n\n\U0001F4CA \u9810\u671F\u7D50\u679C\uFF08\u57FA\u7DDA\u6027\u80FD\uFF09\
   \uFF1A\n  - \u8A13\u7DF4\u6642\u9593\uFF1A3-5 \u5C0F\u6642\uFF0810000 epochs, GPU\uFF09\
   \n  - \u611F\u6E2C\u9EDE L2\uFF1A5-10%\n  - \u5168\u5834 u/v L2\uFF1A20-30%\uFF08\

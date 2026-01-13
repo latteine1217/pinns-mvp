@@ -45,7 +45,7 @@ K_VALUES=(50 100 200 400)
 K=${K_VALUES[$SLURM_ARRAY_TASK_ID]}
 
 # 配置檔案
-CONFIG_FILE="configs/experiments/S2_k_scan/s2_qr_K${K}_2d_re50.yml"
+CONFIG_FILE="configs/experiments/S2_k_scan/s2_qr_K${K}_2d_re100.yml"
 
 # 建立日誌目錄
 mkdir -p logs/slurm

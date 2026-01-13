@@ -1,18 +1,17 @@
 experiment:
-  name: s2_qr_K400_2d_re50
-  version: v1.0_extreme_risk
+  name: s2_qr_K50_2d_re100
+  version: v1.0_baseline
   seed: 42
   device: auto
   precision: float32
-  description: 'S2: K-scan with K=400 sensors (QR-pivot, EXTREME RISK)'
+  description: 'S2: K-scan with K=50 sensors (QR-pivot)'
   group: kflow_sensor_strategy
   tags:
-  - kflow_re50
+  - kflow_re100
   - qr_pivot
-  - K400
+  - K50
   - vanilla_mlp
   - s2_kscan
-  - extreme_risk
   experiment_id: S2
 reproducibility:
   deterministic: true
@@ -20,7 +19,7 @@ reproducibility:
   num_workers: 4
 data:
   source: kolmogorov_dns
-  dataset: re50_kf4
+  dataset: re100_kf4
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
@@ -57,16 +56,15 @@ normalization:
     - 15.0
     - 35.0
 sensors:
-  K: 400
+  K: 50
   selection_method: precomputed
-  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20.json
-  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K50_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K50_N256_t0-20_dns_values.npz
   quality_metrics:
-    condition_number: 5.0e8
+    condition_number: 52900.0
     source_resolution: 128x128
     target_resolution: 256x256
     mapping: RANS -> DNS (factor 2)
-    warning: EXTREME condition number - high probability of failure
 model:
   type: fourier_vs_mlp
   in_dim: 3
@@ -153,11 +151,11 @@ losses:
 training:
   optimizer:
     type: soap
-    lr: 0.0003
+    lr: 0.001
     betas:
     - 0.9
     - 0.999
-    weight_decay: 1.0e-05
+    weight_decay: 0.0
   lr_scheduler:
     type: warmup_exponential
     warmup_steps: 2000
@@ -208,7 +206,7 @@ evaluation:
     dpdy_l2_error: 0.3
     mass_conservation_error: 0.001
     kinetic_energy_rmse: 0.05
-  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_data: ./data/kolmogorov_dns/dns_re100_t100.h5
   reference_time_window:
   - 20.0
   - 40.0
@@ -226,9 +224,9 @@ logging:
   save_predictions: true
   wandb: false
 output:
-  checkpoint_dir: ./checkpoints/experiments/S2_K400
-  results_dir: ./results/experiments/S2_K400
-  visualization_dir: ./results/experiments/S2_K400/visualizations
+  checkpoint_dir: ./checkpoints/experiments/S2_K50
+  results_dir: ./results/experiments/S2_K50
+  visualization_dir: ./results/experiments/S2_K50/visualizations
 test_acceptance:
   stability:
   - no_nan_inf: true
@@ -246,4 +244,30 @@ test_acceptance:
   baseline:
   - training_converged: true
   - no_feature_engineering: true
-usage_notes: "⚠️ 極高風險實驗配置 ⚠️\n\n🔬 實驗目的：\n  - 測試極限感測器數量 (K=400) 的行為\n  - 驗證 condition number > 5e8 是否可訓練\n  - 探索數值穩定性的絕對極限\n\n⚠️ 風險警告：\n  - Condition number > 5×10⁸ 極高（超出 float32 精度極限）\n  - 極高概率出現數值不穩定（NaN/Inf）\n  - 幾乎不可能收斂或結果無意義\n  - 不建議用於任何實際用途\n\n🛡️ 穩定性措施：\n  - 降低學習率：1e-3 → 3e-4\n  - 加強梯度裁剪：5.0 → 1.0\n  - 啟用權重衰減：1e-5\n  - 增加 L2 正則化\n\n🚀 執行指令：\n  python scripts/train/train.py --cfg configs/experiments/S2_k_scan/s2_qr_K400_2d_re50.yml --device cuda\n\n📊 預期結果：\n  - 訓練時間：可能在幾小時內失敗\n  - 成功率：< 10%（極可能失敗）\n  - 如果成功：性能可能不如 K=50/K=100/K=200\n  - 如果失敗：驗證了 K=400 不可行\n\n🔍 監控重點：\n  - 前 100 epochs：梯度是否爆炸/消失\n  - Loss 曲線：是否震盪或發散\n  - NaN/Inf 出現頻率\n  - Checkpoint 品質\n\n💡 建議：\n  - 僅用於理論研究目的\n  - 如果前 500 epochs 出現 NaN → 立即中止\n  - 優先使用 K=50/K=100 作為生產配置\n  - 此實驗主要用於驗證理論分析正確性\n"
+usage_notes: "\U0001F52C \u5BE6\u9A57\u8A2D\u8A08\uFF1A\n  - \u76EE\u6A19\uFF1A\u5EFA\
+  \u7ACB Vanilla PINNs \u57FA\u7DDA\uFF08\u7121\u9032\u968E\u7279\u5FB5\uFF09\n  -\
+  \ \u7B56\u7565\uFF1A\u7D14\u6578\u64DA\u9A45\u52D5 + NS \u65B9\u7A0B\u7D04\u675F\
+  \n  - \u7279\u5FB5\uFF1A\u6A19\u6E96 MLP (tanh) + \u56FA\u5B9A\u6B0A\u91CD + \u56FA\
+  \u5B9A\u5B78\u7FD2\u7387\n  - \u512A\u5316\u5668\uFF1AAdam (lr=1e-3, \u7121\u8ABF\
+  \u5EA6)\n  - \u7528\u9014\uFF1A\u4F5C\u70BA\u5C0D\u7167\u7D44\u8A55\u4F30\u9032\u968E\
+  \u7279\u5FB5\u7684\u8CA2\u737B\n\n\U0001F680 \u57F7\u884C\u6307\u4EE4\uFF1A\n  python\
+  \ scripts/train/train.py --cfg configs/kolmogorov_re100_kf4_K100_vanilla_1k.yml --device\
+  \ cuda\n\n\U0001F4CA \u9810\u671F\u7D50\u679C\uFF08\u57FA\u7DDA\u6027\u80FD\uFF09\
+  \uFF1A\n  - \u8A13\u7DF4\u6642\u9593\uFF1A3-5 \u5C0F\u6642\uFF0810000 epochs, GPU\uFF09\
+  \n  - \u611F\u6E2C\u9EDE L2\uFF1A5-10%\n  - \u5168\u5834 u/v L2\uFF1A20-30%\uFF08\
+  \u8F03\u9032\u968E\u7248\u672C\u5DEE\uFF09\n  - \u58D3\u529B\u5834\uFF1A\u53EF\u80FD\
+  \u8F03\u96E3\u91CD\u5EFA\n\n\U0001F50D \u5C0D\u6BD4\u7528\u9014\uFF1A\n  - vs RANS\
+  \ Prior \u7248\uFF1A\u91CF\u5316 RANS \u5F15\u5C0E\u7684\u6539\u5584\n  - vs Fourier\
+  \ \u7248\uFF1A\u91CF\u5316 Fourier Features \u7684\u8CA2\u737B\n  - vs SIREN \u7248\
+  \uFF1A\u91CF\u5316 SIREN \u521D\u59CB\u5316\u7684\u5F71\u97FF\n  - vs \u81EA\u9069\
+  \u61C9\u6B0A\u91CD\u7248\uFF1A\u91CF\u5316\u52D5\u614B\u6B0A\u91CD\u7684\u6548\u679C\
+  \n\n\U0001F4DD \u8AD6\u6587\u6D88\u878D\u5BE6\u9A57\uFF1A\n  - \u57FA\u7DDA\uFF08\
+  \u672C\u914D\u7F6E\uFF09\uFF1A\u7121\u4EFB\u4F55\u9032\u968E\u7279\u5FB5\n  - +Fourier\uFF1A\
+  \u52A0\u5165 Fourier Features\n  - +SIREN\uFF1A\u52A0\u5165 SIREN \u521D\u59CB\u5316\
+  \n  - +\u81EA\u9069\u61C9\uFF1A\u52A0\u5165 GradNorm \u52D5\u614B\u6B0A\u91CD\n\
+  \  - +RANS Prior\uFF1A\u52A0\u5165\u4F4E\u4FDD\u771F\u5F15\u5C0E\uFF08\u5B8C\u6574\
+  \u7248\uFF09\n  \n\u26A0\uFE0F \u6CE8\u610F\uFF1A\n  - Vanilla \u7248\u672C\u6536\
+  \u6582\u8F03\u6162\uFF0C\u53EF\u80FD\u9700\u8981\u66F4\u591A epochs\n  - \u58D3\u529B\
+  \u5834\u91CD\u5EFA\u6548\u679C\u53EF\u80FD\u4E0D\u4F73\uFF08\u7528\u65BC\u5C0D\u6BD4\
+  \uFF09\n  - \u5EFA\u8B70\u5148\u8A13\u7DF4\u6B64\u57FA\u7DDA\uFF0C\u518D\u8A13\u7DF4\
+  \u9032\u968E\u7248\u672C\u9032\u884C\u5C0D\u6BD4\n"

@@ -1,5 +1,5 @@
 experiment:
-  name: s2_qr_K100_2d_re50
+  name: s2_qr_K100_2d_re100
   version: v1.0_baseline
   seed: 42
   device: auto
@@ -7,7 +7,7 @@ experiment:
   description: 'S2: K-scan with K=100 sensors (QR-pivot)'
   group: kflow_sensor_strategy
   tags:
-  - kflow_re50
+  - kflow_re100
   - qr_pivot
   - K100
   - vanilla_mlp
@@ -19,7 +19,7 @@ reproducibility:
   num_workers: 4
 data:
   source: kolmogorov_dns
-  dataset: re50_kf4
+  dataset: re100_kf4
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
@@ -206,7 +206,7 @@ evaluation:
     dpdy_l2_error: 0.3
     mass_conservation_error: 0.001
     kinetic_energy_rmse: 0.05
-  reference_data: ./data/kolmogorov_dns/dns_re50_t100.h5
+  reference_data: ./data/kolmogorov_dns/dns_re100_t100.h5
   reference_time_window:
   - 20.0
   - 40.0
@@ -251,7 +251,7 @@ usage_notes: "\U0001F52C \u5BE6\u9A57\u8A2D\u8A08\uFF1A\n  - \u76EE\u6A19\uFF1A\
   \u5B9A\u5B78\u7FD2\u7387\n  - \u512A\u5316\u5668\uFF1AAdam (lr=1e-3, \u7121\u8ABF\
   \u5EA6)\n  - \u7528\u9014\uFF1A\u4F5C\u70BA\u5C0D\u7167\u7D44\u8A55\u4F30\u9032\u968E\
   \u7279\u5FB5\u7684\u8CA2\u737B\n\n\U0001F680 \u57F7\u884C\u6307\u4EE4\uFF1A\n  python\
-  \ scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla_1k.yml --device\
+  \ scripts/train/train.py --cfg configs/kolmogorov_re100_kf4_K100_vanilla_1k.yml --device\
   \ cuda\n\n\U0001F4CA \u9810\u671F\u7D50\u679C\uFF08\u57FA\u7DDA\u6027\u80FD\uFF09\
   \uFF1A\n  - \u8A13\u7DF4\u6642\u9593\uFF1A3-5 \u5C0F\u6642\uFF0810000 epochs, GPU\uFF09\
   \n  - \u611F\u6E2C\u9EDE L2\uFF1A5-10%\n  - \u5168\u5834 u/v L2\uFF1A20-30%\uFF08\
