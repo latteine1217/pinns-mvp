@@ -25,6 +25,7 @@ export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH}"
 export WANDB_MODE=offline
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=29500
+export PINNX_DETECT_ANOMALY=1
 
 if [ -f "${PROJECT_DIR}/.wandb_config" ]; then
     source "${PROJECT_DIR}/.wandb_config"

@@ -1201,7 +1201,12 @@ class Trainer:
             logging.info(f"🔄 從 epoch {start_epoch} 恢復訓練")
         
         # === 訓練循環 ===
+        if os.environ.get('PINNX_DETECT_ANOMALY', '0') == '1':
+            torch.autograd.set_detect_anomaly(True)
+            logging.warning("⚠️  已啟用 Autograd Anomaly Detection（僅供除錯）")
+
         for epoch in range(start_epoch, max_epochs):
+
             self.epoch = epoch
             
             # 1. 自適應更新（adaptive sampling + fourier annealing）
