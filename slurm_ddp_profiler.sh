@@ -44,10 +44,8 @@ else
     exit 1
 fi
 
-python -m pip install --upgrade pip
-if [ -f "${REQUIREMENTS_FILE}" ]; then
-    python3 -m pip install -r "${REQUIREMENTS_FILE}"
-else
+# requirements 已手動安裝完成，避免在計算節點進行 pip 安裝
+if [ ! -f "${REQUIREMENTS_FILE}" ]; then
     echo "❌ 找不到 requirements.txt: ${REQUIREMENTS_FILE}"
     exit 1
 fi
