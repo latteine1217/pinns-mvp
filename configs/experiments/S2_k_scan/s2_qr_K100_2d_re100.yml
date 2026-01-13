@@ -177,6 +177,8 @@ training:
     adaptive_sampling: false
     boundary_points: 500
   gradient_clip: 1.0
+  ddp:
+    verify_data_split: true
   num_time_windows: 3
   time_window_overlap: 0.0
   amp:
