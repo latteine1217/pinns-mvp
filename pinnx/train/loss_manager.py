@@ -586,7 +586,10 @@ class LossManager:
                 prior_consistency_loss = prior_losses['prior_consistency_total']
                 
                 # 記錄（低頻率）
-                if epoch == 0 or (epoch > 0 and epoch % 100 == 0):
+                log_interval = self.config.get('logging', {}).get('loss_log_interval')
+                if log_interval is None:
+                    log_interval = max(self.config.get('logging', {}).get('log_freq', 10) * 10, 100)
+                if epoch == 0 or (epoch > 0 and epoch % log_interval == 0):
                     logging.info(f"📊 先驗一致性損失 @ Epoch {epoch}: {prior_consistency_loss.item():.6f}")
                     logging.info(f"   - u: {prior_loss_u.item():.6f}")
                     logging.info(f"   - v: {prior_loss_v.item():.6f}")
@@ -633,7 +636,10 @@ class LossManager:
             mean_constraint_loss = w_mean_constraint * mean_constraint_loss
             
             # 記錄（低頻率）
-            if epoch == 0 or (epoch > 0 and epoch % 100 == 0):
+            log_interval = self.config.get('logging', {}).get('loss_log_interval')
+            if log_interval is None:
+                log_interval = max(self.config.get('logging', {}).get('log_freq', 10) * 10, 100)
+            if epoch == 0 or (epoch > 0 and epoch % log_interval == 0):
                 logging.info(f"📊 均值約束損失 @ Epoch {epoch}: {mean_constraint_loss.item():.6f}")
                 with torch.no_grad():
                     for field_name, idx in field_indices.items():

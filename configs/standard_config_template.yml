@@ -322,6 +322,8 @@ physics_validation:
 logging:
   level: info
   log_freq: 10
+  loss_log_interval: 200
+  wandb_sync_interval: 50
   save_predictions: false
   wandb: true
   save_loss_history: true

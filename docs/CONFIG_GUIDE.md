@@ -260,6 +260,17 @@ training:
     reduce_losses: true   # 同步損失供監控
 ```
 
+#### logging（日誌頻率）
+
+降低 `.item()` 同步造成的 CPU/GPU 等待：
+
+```yaml
+logging:
+  log_freq: 10            # 基本日誌頻率
+  loss_log_interval: 200  # loss 詳細記錄頻率（降低同步）
+  wandb_sync_interval: 50 # WandB 同步頻率（降低同步）
+```
+
 ### 5. lowfi_prior（低保真先驗）
 
 ```yaml

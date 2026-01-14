@@ -161,6 +161,10 @@ class TrainingLoopManager:
         
         if self.wandb_run is None:
             return
+
+        sync_interval = self.config.get('logging', {}).get('wandb_sync_interval')
+        if sync_interval is not None and epoch % sync_interval != 0:
+            return
         
         # 對齊 JaxPI: 使用 step_offset 讓各窗口的 step 連續
         actual_step = epoch + self.step_offset

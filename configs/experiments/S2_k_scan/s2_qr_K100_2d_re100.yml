@@ -223,6 +223,8 @@ logging:
   log_nonlinearities: false
   level: info
   log_freq: 10
+  loss_log_interval: 200
+  wandb_sync_interval: 50
   save_predictions: true
   wandb: false
 output:
