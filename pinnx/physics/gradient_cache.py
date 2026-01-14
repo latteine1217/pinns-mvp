@@ -175,7 +175,8 @@ class GradientCache:
         self,
         first_grad: torch.Tensor,
         coords: torch.Tensor,
-        create_graph: bool
+        create_graph: bool,
+        retain_graph: bool = True
     ) -> torch.Tensor:
         """
         計算二階對角梯度 (∂²/∂x², ∂²/∂y², ∂²/∂z²)
@@ -194,12 +195,12 @@ class GradientCache:
         second_grads = []
         for i in range(3):  # x, y, z
             # 對每個維度計算二階梯度
-            retain_graph = i < 2
+            keep_graph = retain_graph or i < 2
             grad_i = torch.autograd.grad(
                 outputs=first_grad[:, i].sum(),  # 標量化以計算梯度
                 inputs=coords,
                 create_graph=create_graph,
-                retain_graph=retain_graph,
+                retain_graph=keep_graph,
                 allow_unused=False
             )[0][:, i:i+1]  # 只取對角線項 (i, i)
             second_grads.append(grad_i)
