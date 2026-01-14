@@ -113,7 +113,7 @@ class GradientCache2D:
         # 一階梯度 (6 個：u, v 各 2 個 + p 的 2 個)
         u_grads = self._compute_first_order(u, coords, create_graph, retain_graph=True)  # [N, 2]
         v_grads = self._compute_first_order(v, coords, create_graph, retain_graph=True)  # [N, 2]
-        p_grads = self._compute_first_order(p, coords, create_graph=False, retain_graph=keep_graph)  # [N, 2] 壓力不需要二階
+        p_grads = self._compute_first_order(p, coords, create_graph=False, retain_graph=True)  # [N, 2] 壓力不需要二階
         
         # 二階梯度 (4 個：u, v 各 2 個對角線項)
         u_grads_2 = self._compute_second_order_diagonal(
