@@ -134,17 +134,20 @@ def profile_training(batch_size=7000, n_steps=5, device='cuda'):
     print(f"Profiler 結果")
     print(f"{'='*60}")
     
+    events = prof.key_averages()
+    cuda_sort_key = "cuda_time_total" if events and hasattr(events[0], "cuda_time_total") else "cuda_time"
+
     # 1. 按 CUDA 時間排序（最關鍵）
     print(f"\n## Top 20 算子（按 CUDA 時間）")
-    print(prof.key_averages().table(
-        sort_by="cuda_time_total", 
+    print(events.table(
+        sort_by=cuda_sort_key,
         row_limit=20,
         max_src_column_width=50
     ))
     
     # 2. 按 CPU 時間排序
     print(f"\n## Top 20 算子（按 CPU 時間）")
-    print(prof.key_averages().table(
+    print(events.table(
         sort_by="cpu_time_total", 
         row_limit=20,
         max_src_column_width=50
@@ -152,7 +155,7 @@ def profile_training(batch_size=7000, n_steps=5, device='cuda'):
     
     # 3. 按記憶體使用排序
     print(f"\n## Top 10 算子（按記憶體使用）")
-    print(prof.key_averages().table(
+    print(events.table(
         sort_by="cuda_memory_usage", 
         row_limit=10,
         max_src_column_width=50
@@ -160,10 +163,11 @@ def profile_training(batch_size=7000, n_steps=5, device='cuda'):
     
     # 4. 自定義標記的時間統計
     print(f"\n## 自定義標記時間統計")
-    for event in prof.key_averages():
+    for event in events:
         if event.key.startswith('##'):
+            cuda_time = getattr(event, "cuda_time_total", getattr(event, "cuda_time", 0.0))
             print(f"{event.key:40s} CPU: {event.cpu_time_total/1000:8.2f} ms  "
-                  f"CUDA: {event.cuda_time_total/1000:8.2f} ms  "
+                  f"CUDA: {cuda_time/1000:8.2f} ms  "
                   f"呼叫次數: {event.count}")
     
     # 5. 導出 Chrome trace（可選）
@@ -178,7 +182,7 @@ def profile_training(batch_size=7000, n_steps=5, device='cuda'):
     stacks_path = output_dir / "stacks.txt"
     with open(stacks_path, 'w') as f:
         f.write(prof.key_averages(group_by_stack_n=5).table(
-            sort_by="cuda_time_total", 
+            sort_by=cuda_sort_key,
             row_limit=50
         ))
     print(f"✅ Stack traces 已導出: {stacks_path}")
@@ -252,7 +256,9 @@ def profile_gradient_computation_only(batch_size=7000, device='cuda'):
                     )[0]
     
     print(f"\n梯度計算細節：")
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30))
+    grad_events = prof.key_averages()
+    grad_cuda_sort_key = "cuda_time_total" if grad_events and hasattr(grad_events[0], "cuda_time_total") else "cuda_time"
+    print(grad_events.table(sort_by=grad_cuda_sort_key, row_limit=30))
 
 
 def main():
