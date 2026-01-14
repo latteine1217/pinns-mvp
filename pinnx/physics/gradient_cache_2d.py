@@ -109,9 +109,9 @@ class GradientCache2D:
         p = predictions['p']
         
         # 一階梯度 (6 個：u, v 各 2 個 + p 的 2 個)
-        u_grads = self._compute_first_order(u, coords, create_graph)  # [N, 2]
-        v_grads = self._compute_first_order(v, coords, create_graph)  # [N, 2]
-        p_grads = self._compute_first_order(p, coords, create_graph=False)  # [N, 2] 壓力不需要二階
+        u_grads = self._compute_first_order(u, coords, create_graph, retain_graph=True)  # [N, 2]
+        v_grads = self._compute_first_order(v, coords, create_graph, retain_graph=True)  # [N, 2]
+        p_grads = self._compute_first_order(p, coords, create_graph=False, retain_graph=False)  # [N, 2] 壓力不需要二階
         
         # 二階梯度 (4 個：u, v 各 2 個對角線項)
         u_grads_2 = self._compute_second_order_diagonal(u_grads, coords, create_graph)  # [N, 2]
@@ -144,7 +144,8 @@ class GradientCache2D:
         self, 
         field: torch.Tensor, 
         coords: torch.Tensor,
-        create_graph: bool
+        create_graph: bool,
+        retain_graph: bool = True
     ) -> torch.Tensor:
         """
         計算一階空間梯度 ∂field/∂(x,y)
@@ -164,7 +165,7 @@ class GradientCache2D:
             inputs=coords,
             grad_outputs=torch.ones_like(field),
             create_graph=create_graph,
-            retain_graph=True,
+            retain_graph=retain_graph,
             allow_unused=True  # 允許未使用的輸入（例如 Time Window 中的時間維度）
         )[0]
         
@@ -216,12 +217,13 @@ class GradientCache2D:
             grad_outputs[:, i] = 1.0  # [N, 2]，第 i 列為 1
             
             # 對每個空間維度計算二階梯度（批次化）
+            retain_graph = i < 1
             full_grad_i = torch.autograd.grad(
                 outputs=first_grad,
                 inputs=coords,
                 grad_outputs=grad_outputs,
                 create_graph=create_graph,
-                retain_graph=True,
+                retain_graph=retain_graph,
                 allow_unused=True  # 允許未使用的輸入（例如 Time Window 中的時間維度）
             )[0]
             

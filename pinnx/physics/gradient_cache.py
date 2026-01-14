@@ -97,10 +97,10 @@ class GradientCache:
         p = predictions['p']
         
         # 一階梯度 (9 個)
-        u_grads = self._compute_first_order(u, coords, create_graph)  # [N, 3]
-        v_grads = self._compute_first_order(v, coords, create_graph)  # [N, 3]
-        w_grads = self._compute_first_order(w, coords, create_graph)  # [N, 3]
-        p_grads = self._compute_first_order(p, coords, create_graph=False)  # [N, 3] 壓力不需要二階
+        u_grads = self._compute_first_order(u, coords, create_graph, retain_graph=True)  # [N, 3]
+        v_grads = self._compute_first_order(v, coords, create_graph, retain_graph=True)  # [N, 3]
+        w_grads = self._compute_first_order(w, coords, create_graph, retain_graph=True)  # [N, 3]
+        p_grads = self._compute_first_order(p, coords, create_graph=False, retain_graph=False)  # [N, 3] 壓力不需要二階
         
         # 二階梯度 (9 個 - 只需對角線項)
         u_grads_2 = self._compute_second_order_diagonal(u_grads, coords, create_graph)  # [N, 3]
@@ -147,7 +147,8 @@ class GradientCache:
         self, 
         field: torch.Tensor, 
         coords: torch.Tensor,
-        create_graph: bool
+        create_graph: bool,
+        retain_graph: bool = True
     ) -> torch.Tensor:
         """
         計算一階梯度 ∂field/∂coords
@@ -165,7 +166,7 @@ class GradientCache:
             inputs=coords,
             grad_outputs=torch.ones_like(field),
             create_graph=create_graph,
-            retain_graph=True,
+            retain_graph=retain_graph,
             allow_unused=False
         )[0]
         return grad  # [N, 3]
@@ -193,11 +194,12 @@ class GradientCache:
         second_grads = []
         for i in range(3):  # x, y, z
             # 對每個維度計算二階梯度
+            retain_graph = i < 2
             grad_i = torch.autograd.grad(
                 outputs=first_grad[:, i].sum(),  # 標量化以計算梯度
                 inputs=coords,
                 create_graph=create_graph,
-                retain_graph=True,
+                retain_graph=retain_graph,
                 allow_unused=False
             )[0][:, i:i+1]  # 只取對角線項 (i, i)
             second_grads.append(grad_i)
