@@ -81,7 +81,7 @@ def training_step_with_profiler(model, optimizer, coords, device='cuda'):
     # 反向傳播
     with record_function("## Backward Pass"):
         optimizer.zero_grad()
-        loss.backward()
+        loss.backward(retain_graph=True)
     
     with record_function("## Optimizer Step"):
         optimizer.step()
