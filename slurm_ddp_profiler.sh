@@ -86,7 +86,7 @@ START_TIME=$(date +%s)
 
 # === DDP 訓練 ===
 echo "🚀 開始 DDP 訓練..."
-torchrun --nproc_per_node=2 scripts/train/train.py --cfg ${CONFIG_FILE}
+time torchrun --nproc_per_node=2 scripts/train/train.py --cfg ${CONFIG_FILE}
 TRAIN_EXIT_CODE=$?
 
 # === Profiler 分析 ===

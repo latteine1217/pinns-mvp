@@ -135,7 +135,12 @@ def profile_training(batch_size=7000, n_steps=5, device='cuda'):
     print(f"{'='*60}")
     
     events = prof.key_averages()
-    cuda_sort_key = "cuda_time_total" if events and hasattr(events[0], "cuda_time_total") else "cuda_time"
+    if events and hasattr(events[0], "cuda_time_total"):
+        cuda_sort_key = "cuda_time_total"
+    elif events and hasattr(events[0], "device_time_total"):
+        cuda_sort_key = "device_time_total"
+    else:
+        cuda_sort_key = "cuda_time"
 
     # 1. 按 CUDA 時間排序（最關鍵）
     print(f"\n## Top 20 算子（按 CUDA 時間）")
@@ -165,7 +170,11 @@ def profile_training(batch_size=7000, n_steps=5, device='cuda'):
     print(f"\n## 自定義標記時間統計")
     for event in events:
         if event.key.startswith('##'):
-            cuda_time = getattr(event, "cuda_time_total", getattr(event, "cuda_time", 0.0))
+            cuda_time = getattr(
+                event,
+                "cuda_time_total",
+                getattr(event, "device_time_total", getattr(event, "cuda_time", 0.0))
+            )
             print(f"{event.key:40s} CPU: {event.cpu_time_total/1000:8.2f} ms  "
                   f"CUDA: {cuda_time/1000:8.2f} ms  "
                   f"呼叫次數: {event.count}")
@@ -257,7 +266,12 @@ def profile_gradient_computation_only(batch_size=7000, device='cuda'):
     
     print(f"\n梯度計算細節：")
     grad_events = prof.key_averages()
-    grad_cuda_sort_key = "cuda_time_total" if grad_events and hasattr(grad_events[0], "cuda_time_total") else "cuda_time"
+    if grad_events and hasattr(grad_events[0], "cuda_time_total"):
+        grad_cuda_sort_key = "cuda_time_total"
+    elif grad_events and hasattr(grad_events[0], "device_time_total"):
+        grad_cuda_sort_key = "device_time_total"
+    else:
+        grad_cuda_sort_key = "cuda_time"
     print(grad_events.table(sort_by=grad_cuda_sort_key, row_limit=30))
 
 
