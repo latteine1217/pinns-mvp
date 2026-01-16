@@ -1,0 +1,165 @@
+experiment:
+  name: amp_test_fp16
+  version: v1.0_profiling
+  seed: 42
+  device: auto
+  precision: float16  # 使用 FP16 AMP
+  description: 'AMP Profiling Test: FP16 Mixed Precision (10 epochs)'
+  group: amp_profiling
+  tags:
+  - profiling
+  - fp16
+  - amp
+  experiment_id: AMP_FP16
+reproducibility:
+  deterministic: true
+  benchmark: false
+data:
+  source: kolmogorov_dns
+  dataset: re100_kf4
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
+    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
+    resolution:
+      x: 256
+      y: 256
+    time_range:
+    - 15.0
+    - 35.0
+    dt: 0.001
+    variables:
+    - u
+    - v
+    - p
+    physics_params:
+      Re: 50.0
+      Re_definition: Musacchio_Boffetta_2014
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+lowfi_prior:
+  enabled: false
+normalization:
+  type: training_data_norm
+  params: {}
+  steady_state:
+    enabled: true
+    time_window:
+    - 15.0
+    - 35.0
+sensors:
+  K: 200
+  selection_method: precomputed
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K200_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K200_N256_t0-20_dns_values.npz
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 768
+  depth: 2
+  activation: swish
+  block_type: piratenet
+  use_rwf: true
+  rwf_scale_mean: 1.0
+  rwf_scale_std: 0.1
+  fourier_features:
+    type: hybrid
+    axes:
+      0:
+        type: none
+      1:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 64
+      2:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 64
+    trainable_fourier: false
+  output_variables:
+  - u
+  - v
+  - p
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  domain:
+    x_range:
+    - 0.0
+    - 6.283185307179586
+    y_range:
+    - 0.0
+    - 6.283185307179586
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 1.0
+  periodicity_weight: 10.0
+  prior_weight: 0.0
+  l2_regularization: 1.0e-06
+  gradient_penalty: 0.0
+  normalize_losses: false
+  adaptive_weighting: false
+  causal_weighting: false
+  merge_momentum: true
+training:
+  optimizer:
+    type: adam  # 使用 Adam 以簡化測試
+    lr: 0.001
+    betas:
+    - 0.9
+    - 0.999
+    weight_decay: 1.0e-05
+  lr_scheduler:
+    type: warmup_exponential
+    warmup_steps: 100
+    decay_rate: 0.9
+    decay_steps: 1000
+    min_lr: 1.0e-06
+    staircase: false
+  epochs: 10  # 縮短到 10 epochs 用於快速測試
+  batch_size: 8000
+  validation_freq: 0
+  checkpoint_freq: 0
+  log_interval: 1
+  early_stopping:
+    enabled: false
+  sampling:
+    N_pde: 6000
+    adaptive_sampling: false
+    boundary_points: 500
+  gradient_clip: 1.0
+  use_amp: true  # 啟用 AMP
+  amp_dtype: float16  # 明確指定 FP16
+curriculum:
+  enable: false
+optimizer_switching:
+  enabled: false
+ensemble:
+  enable: false
+logging:
+  log_nonlinearities: false
+  level: info
+  log_freq: 1
+  save_predictions: false
+  wandb: false
+output:
+  checkpoint_dir: ./checkpoints/amp_test_fp16
+  results_dir: ./results/amp_test_fp16
+  visualization_dir: ./results/amp_test_fp16/visualizations
