@@ -1,0 +1,212 @@
+experiment:
+  name: batch_test_32k
+  version: v1.0_batch_sweep
+  seed: 42
+  device: cuda
+  precision: float32
+  description: Batch size 掃描實驗 - 32k (4x baseline, N_pde=20000, may OOM)
+  group: profiling_batch_sweep
+  tags:
+  - profiling
+  - batch_sweep
+  - 32k
+  - max_memory
+  experiment_id: BATCH_SWEEP_32K
+reproducibility:
+  deterministic: true
+  benchmark: false
+data:
+  source: kolmogorov_dns
+  dataset: re50_kf4
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns_npy/re50
+    description: Kolmogorov flow (Re=50, k_f=4)
+    resolution:
+      x: 256
+      y: 256
+    time_range:
+    - 15.0
+    - 35.0
+    dt: 0.001
+    variables:
+    - u
+    - v
+    - p
+    physics_params:
+      Re: 50.0
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
+  normalize: true
+  cache_dir: ./data/kolmogorov_dns_cache
+lowfi_prior:
+  enabled: false  # 禁用以避免資料缺失問題
+  data_path: ./data/lowfi_npy/kolmogorov_les/re50
+  data_type: les
+  rans_structure:
+    group_path: /mean_field
+    field_mapping:
+      u: u
+      v: v
+      nu_t: nu_t
+    coord_mapping:
+      x: x
+      y: y
+  interpolation:
+    method: linear
+    extrapolation_mode: nearest
+  consistency_weight: 2.0
+  variable_weights:
+    u: 1.0
+    v: 1.0
+    p: 0.0
+normalization:
+  type: training_data_norm
+  params: {}
+  steady_state:
+    enabled: true
+    time_window:
+    - 15.0
+    - 35.0
+sensors:
+  K: 400
+  selection_method: precomputed
+  sensor_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20.json
+  dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
+model:
+  type: fourier_vs_mlp
+  in_dim: 3
+  out_dim: 3
+  width: 256
+  depth: 6
+  activation: swish
+  block_type: resnet
+  fourier_features:
+    type: hybrid
+    axes:
+      0:
+        type: standard
+        n_modes: 12
+        sigma: 8.0
+        use_2pi: true
+      1:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 8
+      2:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 8
+    trainable_fourier: false
+  initialization:
+    type: siren
+    first_omega_0: 30.0
+    hidden_omega_0: 30.0
+  output_variables:
+  - u
+  - v
+  - p
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.039374
+  rho: 1.0
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
+  domain:
+    x_range:
+    - 0.0
+    - 6.283185307179586
+    y_range:
+    - 0.0
+    - 6.283185307179586
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+losses:
+  data_weight: 10.0
+  momentum_x_weight: 1.0
+  momentum_y_weight: 1.0
+  continuity_weight: 2.0
+  prior_weight: 10.0
+  periodicity_weight: 10.0
+  normalize_losses: false
+  adaptive_weighting: false
+  causal_weighting: true
+  causal_tol: 1.5
+  num_chunks: 20
+training:
+  optimizer:
+    type: adam
+    lr: 0.001
+    betas:
+    - 0.9
+    - 0.999
+    weight_decay: 1.0e-05
+  lr_scheduler:
+    type: warmup_exponential
+    warmup_steps: 2000
+    decay_rate: 0.9
+    decay_steps: 2000
+    min_lr: 1.0e-06
+    staircase: false
+  epochs: 30
+  batch_size: 32000  # ⬆️ BATCH SIZE PARAMETER (4x, 可能 OOM)
+  validation_freq: 0
+  checkpoint_freq: 0
+  log_interval: 10
+  early_stopping:
+    enabled: false
+  sampling:
+    N_pde: 20000  # ⬆️ PDE POINTS (N_pde/batch_size = 0.625)
+    adaptive_sampling: false
+    boundary_points: 200
+  gradient_clip: 1.0
+curriculum:
+  enable: true
+  stages:
+  - name: Stage1_Warmup_ModeratePrior
+    epoch_range:
+    - 0
+    - 30
+    weights:
+      data: 10.0
+      momentum_x: 1.0
+      momentum_y: 1.0
+      continuity: 2.0
+      periodicity: 10.0
+      prior: 2.0
+    lowfi_prior:
+      consistency_weight: 2.0
+    sampling:
+      N_pde: 20000  # ⬆️ 與 training.sampling.N_pde 一致
+      boundary_points: 200
+evaluation:
+  grid_resolution:
+  - 512
+  - 512
+  metrics:
+  - relative_l2
+  - mass_conservation
+  - kinetic_energy
+  - pressure_gradient
+  thresholds:
+    u_l2_error: 0.15
+    p_l2_error: 0.2
+    dpdx_l2_error: 0.3
+logging:
+  log_nonlinearities: false
+  level: info
+  log_freq: 10
+  save_predictions: true
+  wandb: false
+  save_stage_checkpoints: true
+output:
+  checkpoint_dir: ./checkpoints/batch_test_32k
+  results_dir: ./results/batch_test_32k
+  visualization_dir: ./results/batch_test_32k/visualizations
