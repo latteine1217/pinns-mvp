@@ -67,25 +67,24 @@ def setup_output_normalization(
     if norm_cfg.get('type') != 'training_data_norm' or norm_cfg.get('params'):
         return None
     
-    # 從配置讀取變量順序（若未指定，嘗試自動推斷 2D/3D）
-    variable_order = norm_cfg.get('variable_order')
-    variable_source = "config"
-    if not variable_order:
-        model_vars = config.get('model', {}).get('output_variables')
-        data_vars = config.get('data', {}).get('kolmogorov_config', {}).get('variables')
-        physics_type = config.get('physics', {}).get('type')
-        if model_vars:
-            variable_order = model_vars
-            variable_source = "model.output_variables"
-        elif data_vars:
-            variable_order = data_vars
-            variable_source = "data.kolmogorov_config.variables"
-        elif physics_type == 'kolmogorov_flow_2d':
-            variable_order = ['u', 'v', 'p']
-            variable_source = "physics.type=kolmogorov_flow_2d"
-        else:
-            variable_order = ['u', 'v', 'w', 'p']
-            variable_source = "default_3d"
+    # 自動推斷變量順序（優先級：model.output_variables > data.variables > physics.type）
+    model_vars = config.get('model', {}).get('output_variables')
+    data_vars = config.get('data', {}).get('kolmogorov_config', {}).get('variables')
+    physics_type = config.get('physics', {}).get('type')
+
+    if model_vars:
+        variable_order = model_vars
+        variable_source = "model.output_variables"
+    elif data_vars:
+        variable_order = data_vars
+        variable_source = "data.kolmogorov_config.variables"
+    elif physics_type == 'kolmogorov_flow_2d':
+        variable_order = ['u', 'v', 'p']
+        variable_source = "physics.type=kolmogorov_flow_2d"
+    else:
+        variable_order = ['u', 'v', 'w', 'p']
+        variable_source = "default_3d"
+
     logger.info(f"📐 Variable order from {variable_source}: {variable_order}")
     
     # 檢查 sensor data 是否包含實際值
@@ -114,8 +113,8 @@ def setup_output_normalization(
             f"Missing in training_data: {missing_vars}\n"
             f"\n"
             f"Please ensure your data preparation function creates all required '<var>_sensors' fields.\n"
-            f"For 2D problems, set normalization.variable_order: ['u', 'v', 'p']\n"
-            f"For 3D problems, set normalization.variable_order: ['u', 'v', 'w', 'p']\n"
+            f"Variable order is automatically determined from 'model.output_variables'.\n"
+            f"For 2D problems: ['u', 'v', 'p'], For 3D problems: ['u', 'v', 'w', 'p']\n"
         )
     
     # 驗證數據質量

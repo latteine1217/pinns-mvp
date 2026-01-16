@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 import torch
 import torch.nn as nn
-from torch.amp.grad_scaler import GradScaler
 
 
 @dataclass
@@ -36,7 +35,7 @@ class TrainerComponents:
     將 Trainer 所需的所有可選組件集中管理，避免 Trainer.__init__() 參數過多。
 
     組件分類：
-    - 訓練組件：optimizer, scheduler, amp, weight_scheduler
+    - 訓練組件：optimizer, scheduler, weight_scheduler
     - 策略組件：checkpoint, validation
     - 功能組件：prior_loss, fourier, adaptive
     - 監控組件：timer, memory, physics_validator, wandb
@@ -46,7 +45,6 @@ class TrainerComponents:
         # 訓練組件
         optimizer: 優化器
         lr_scheduler: 學習率調度器
-        amp_scaler: 混合精度訓練縮放器
         weight_scheduler: 權重調度器（暫未實現）
 
         # 策略組件
@@ -77,7 +75,6 @@ class TrainerComponents:
     # ========== 訓練組件 ==========
     optimizer: Optional[torch.optim.Optimizer] = None
     lr_scheduler: Optional[Any] = None
-    amp_scaler: Optional[GradScaler] = None
     weight_scheduler: Optional[Any] = None
 
     # ========== 策略組件 ==========
@@ -138,7 +135,6 @@ class TrainerComponents:
             # 訓練組件
             'optimizer': self.optimizer is not None,
             'lr_scheduler': self.lr_scheduler is not None,
-            'amp_scaler': self.amp_scaler is not None,
             'weight_scheduler': self.weight_scheduler is not None,
 
             # 策略組件

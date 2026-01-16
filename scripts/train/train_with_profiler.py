@@ -24,7 +24,6 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from pinnx.physics.gradient_cache_2d import GradientCache2D
 import torch.nn as nn
 
 
@@ -57,12 +56,48 @@ def training_step_with_profiler(model, optimizer, coords, device='cuda'):
             'p': predictions_raw[:, 2:3]
         }
     
-    # 計算梯度
+    # 計算梯度（手動計算以避免與 GradientCache 優化衝突）
     with record_function("## Gradient Computation"):
-        cache = GradientCache2D(device=device)
-        
         with record_function("### compute_all_gradients"):
-            grads = cache.compute_all_gradients(predictions, coords, create_graph=True)
+            # 一階梯度
+            u_x = torch.autograd.grad(predictions['u'], coords, 
+                                     grad_outputs=torch.ones_like(predictions['u']),
+                                     create_graph=True, retain_graph=True)[0][:, 0:1]
+            u_y = torch.autograd.grad(predictions['u'], coords,
+                                     grad_outputs=torch.ones_like(predictions['u']),
+                                     create_graph=True, retain_graph=True)[0][:, 1:2]
+            v_x = torch.autograd.grad(predictions['v'], coords,
+                                     grad_outputs=torch.ones_like(predictions['v']),
+                                     create_graph=True, retain_graph=True)[0][:, 0:1]
+            v_y = torch.autograd.grad(predictions['v'], coords,
+                                     grad_outputs=torch.ones_like(predictions['v']),
+                                     create_graph=True, retain_graph=True)[0][:, 1:2]
+            p_x = torch.autograd.grad(predictions['p'], coords,
+                                     grad_outputs=torch.ones_like(predictions['p']),
+                                     create_graph=True, retain_graph=True)[0][:, 0:1]
+            p_y = torch.autograd.grad(predictions['p'], coords,
+                                     grad_outputs=torch.ones_like(predictions['p']),
+                                     create_graph=True, retain_graph=True)[0][:, 1:2]
+            
+            # 二階梯度
+            u_xx = torch.autograd.grad(u_x, coords,
+                                      grad_outputs=torch.ones_like(u_x),
+                                      create_graph=True, retain_graph=True)[0][:, 0:1]
+            u_yy = torch.autograd.grad(u_y, coords,
+                                      grad_outputs=torch.ones_like(u_y),
+                                      create_graph=True, retain_graph=True)[0][:, 1:2]
+            v_xx = torch.autograd.grad(v_x, coords,
+                                      grad_outputs=torch.ones_like(v_x),
+                                      create_graph=True, retain_graph=True)[0][:, 0:1]
+            v_yy = torch.autograd.grad(v_y, coords,
+                                      grad_outputs=torch.ones_like(v_y),
+                                      create_graph=True, retain_graph=True)[0][:, 1:2]
+            
+            grads = {
+                'u_x': u_x, 'u_y': u_y, 'v_x': v_x, 'v_y': v_y,
+                'p_x': p_x, 'p_y': p_y, 'u_xx': u_xx, 'u_yy': u_yy,
+                'v_xx': v_xx, 'v_yy': v_yy
+            }
     
     # 計算 PDE residual
     with record_function("## PDE Residual"):
@@ -81,7 +116,7 @@ def training_step_with_profiler(model, optimizer, coords, device='cuda'):
     # 反向傳播
     with record_function("## Backward Pass"):
         optimizer.zero_grad()
-        loss.backward(retain_graph=True)
+        loss.backward()
     
     with record_function("## Optimizer Step"):
         optimizer.step()
@@ -219,9 +254,7 @@ def profile_gradient_computation_only(batch_size=7000, device='cuda'):
         record_shapes=True,
         with_stack=False,
     ) as prof:
-        with record_function("GradientCache2D.compute_all_gradients"):
-            cache = GradientCache2D(device=device)
-            
+        with record_function("Gradient Computation - All Gradients"):
             with record_function("First Order - u"):
                 u_grad = torch.autograd.grad(
                     u, coords, 

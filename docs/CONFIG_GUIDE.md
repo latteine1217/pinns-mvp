@@ -116,12 +116,31 @@ VS-PINN 會讀取 `physics.vs_pinn.scaling_factors`：
 ```yaml
 physics:
   type: vs_pinn_channel_flow
+  nu: 5.0e-5  # 運動黏度
+  rho: 1.0    # 流體密度
   vs_pinn:
     scaling_factors:
       N_x: 2.0
       N_y: 12.0
       N_z: 2.0
+  channel_flow:
+    Re_tau: 1000.0  # 摩擦雷諾數（唯一必須配置的參數）
+    # u_tau 和 pressure_gradient 將自動計算
+  domain:
+    x_range: [0.0, 25.13]
+    y_range: [-1.0, 1.0]
+    z_range: [0.0, 9.42]
 ```
+
+**Channel Flow 參數計算**：
+- 只需提供 `Re_tau`（摩擦雷諾數）
+- 其他參數將自動計算：
+  - `u_τ = Re_τ * ν / h`（摩擦速度，h 為通道半高）
+  - `dP/dx = ρ * u_τ² / h`（壓力梯度）
+- ❌ **已移除的參數**（v1.5.0+）：
+  - `Re_bulk`：未被使用，配置時將被忽略
+  - `u_tau`：從 Re_tau 自動計算，配置時將被忽略
+  - `pressure_gradient`：從 Re_tau 自動計算，配置時將被忽略
 
 ### 3. losses（損失項）
 
@@ -399,6 +418,64 @@ training:
 cp configs/my_exp.yml configs/archive/my_exp_20260105.yml
 ```
 
+## 已移除的配置項
+
+以下配置項已從最新版本中移除，不再支援：
+
+### 1. 混合精度訓練 (AMP)
+```yaml
+training:
+  amp:              # ❌ 已移除（v1.4.0）
+    enabled: false
+```
+**移除原因**: 未被實際使用，且增加配置複雜度。如需混合精度訓練，請使用 PyTorch 原生的 `torch.cuda.amp` 功能。
+
+### 2. DataLoader 性能參數
+```yaml
+reproducibility:
+  num_workers: 8           # ❌ 已移除（v1.4.0）
+  pin_memory: true         # ❌ 已移除（v1.4.0）
+  persistent_workers: true # ❌ 已移除（v1.4.0）
+  prefetch_factor: 2       # ❌ 已移除（v1.4.0）
+```
+**移除原因**: 本專案未使用 PyTorch DataLoader，這些參數無實際作用。
+
+### 3. 已棄用的 GradNorm 參數
+```yaml
+losses:
+  grad_norm_normalize: false  # ❌ 已移除（v1.4.0）
+```
+**移除原因**: 該參數在 JaxPI 實現中未使用，保留會造成混淆。
+
+### 4. 未實現的資料增強功能
+```yaml
+normalization:
+  noise_sigma: 0.0      # ❌ 已移除（v1.4.0）
+  dropout_prob: 0.0     # ❌ 已移除（v1.4.0）
+```
+**移除原因**: 僅在註解中提及但從未實現，保留會誤導用戶以為功能可用。如需資料增強，請在資料載入器中自行實現。
+
+### 5. 未實現的權重追蹤功能
+```yaml
+logging:
+  save_weight_evolution: false  # ❌ 已移除（v1.4.0）
+```
+**移除原因**: 配置項存在但功能完全未實現。如需追蹤權重演化，請使用 WandB 或自定義 hook。
+
+### 6. 冗余的變量順序配置
+```yaml
+normalization:
+  variable_order: [u, v, w, p]  # ❌ 已移除（v1.5.0）
+```
+**移除原因**: 變量順序現在自動從 `model.output_variables` 推斷，無需重複配置。配置時將被忽略。
+
+**自動推斷優先級**：
+1. `model.output_variables`（推薦）
+2. `data.kolmogorov_config.variables`（Kolmogorov Flow）
+3. 根據 `physics.type` 自動推斷（2D: [u, v, p], 3D: [u, v, w, p])
+
+**遷移方式**：運行 `python scripts/tools/cleanup_redundant_configs.py` 自動移除所有冗余配置
+
 ## 配置完整參考
 
 **主文件**: [`configs/standard_config_template.yml`](../configs/standard_config_template.yml)
@@ -411,5 +488,5 @@ cp configs/my_exp.yml configs/archive/my_exp_20260105.yml
 
 ---
 
-**最後更新**: 2026-01-13
-**版本**: v1.3.1（DDP 分割與同步補充）
+**最後更新**: 2026-01-15
+**版本**: v1.5.0（配置精簡：移除未使用/未實現的配置項 + 自動計算 Channel Flow 參數 + 自動推斷變量順序）

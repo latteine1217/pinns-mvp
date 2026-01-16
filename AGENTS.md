@@ -97,27 +97,100 @@
 ```
 pinnx/
 ├── constants.py              # 物理常數管理（JHTDB 統計量、參考值）
+├── README.md                 # 模組說明文檔
+│
 ├── models/                   # 神經網路架構
 │   ├── fourier_mlp.py       # 基礎 MLP (Fourier Features + SIREN)
-│   └── axis_selective_fourier.py # 軸向選擇性 Fourier Embedding
+│   ├── axis_selective_fourier.py # 軸向選擇性 Fourier Embedding
+│   ├── hybrid_fourier.py    # 混合 Fourier 架構
+│   ├── resnet.py            # ResNet 架構
+│   └── wrappers.py          # 模型包裝器
+│
 ├── physics/                  # 物理方程式與微分算子
-│   ├── base/                # 基礎微分算子 (Gradient, Laplacian)
-│   └── gradient_cache.py    # 梯度快取優化 (Gradient Caching)
+│   ├── base/                # 基礎微分算子
+│   │   ├── gradient_ops.py  # 梯度算子 (∇u, ∇p)
+│   │   ├── laplacian_ops.py # Laplacian 算子 (∇²u)
+│   │   ├── ns_base.py       # Navier-Stokes 基礎類別
+│   │   └── pde_base.py      # PDE 基礎抽象類別
+│   ├── gradient_cache.py    # 梯度快取優化 (Gradient Caching)
+│   ├── ns_2d.py             # 2D NS 方程（Kolmogorov Flow）
+│   ├── ns_3d_temporal.py    # 3D 時域 NS 方程
+│   ├── kolmogorov_flow_2d.py # Kolmogorov Flow 專用物理
+│   ├── vs_pinn_channel_flow.py # VS-PINN Channel Flow
+│   ├── turbulence.py        # 湍流物理約束
+│   ├── turbulence_utils.py  # 湍流工具函數
+│   └── validators.py        # 物理驗證器
+│
 ├── train/                    # 訓練系統
-│   ├── trainer.py           # 核心 Trainer
+│   ├── trainer.py           # 核心 Trainer（主要訓練邏輯）
 │   ├── trainer_builder.py   # TrainerBuilder (Builder Pattern)
-│   ├── schedulers/          # 學習率與權重調度
-│   └── validation_manager.py # 驗證管理器
+│   ├── trainer_components.py # Trainer 組件
+│   ├── time_window_trainer.py # Time Window 訓練器
+│   ├── training_loop_manager.py # 訓練迴圈管理器
+│   ├── validation_manager.py # 驗證管理器
+│   ├── checkpoint_manager.py # Checkpoint 管理
+│   ├── loss_manager.py      # 損失函數管理
+│   ├── loss_factory.py      # 損失函數工廠
+│   ├── model_physics_factory.py # 模型與物理工廠
+│   ├── weighter_factory.py  # 權重調度器工廠
+│   └── schedulers/          # 學習率與權重調度
+│       ├── warmup_cosine.py # Warmup + Cosine Annealing
+│       ├── warmup_exponential.py # Warmup + Exponential Decay
+│       ├── curriculum.py    # Curriculum Learning
+│       └── staged_weights.py # 階段式權重調度
+│
 ├── losses/                   # 損失函數
+│   ├── residuals.py         # PDE 殘差計算（主版本）
+│   ├── residuals_vectorized.py # 向量化殘差
+│   ├── residuals_vorticity.py # 渦度法殘差
 │   ├── causal_weighter_v2.py # 因果加權 (Causal Weighting)
-│   └── residuals.py         # PDE 殘差計算
+│   ├── priors.py            # Prior 損失（RANS/LES）
+│   ├── weighting.py         # 權重調度策略
+│   └── sdf_weights.py       # SDF 基礎權重
+│
 ├── optim/                    # 優化器
-│   └── soap.py              # SOAP 優化器
+│   ├── soap.py              # SOAP 優化器（主要優化器）
+│   └── soap_utils.py        # SOAP 工具函數
+│
 ├── sensors/                  # 感測器佈點策略
-│   └── qr_pivot/            # QR-Pivot 稀疏採樣
-└── dataio/                   # 資料載入與介面
-    ├── loaders/             # 資料集 Loaders (Kolmogorov, RANS)
-    └── jhtdb_client.py      # JHTDB 資料庫介面
+│   ├── qr_pivot/            # QR-Pivot 稀疏採樣
+│   │   ├── base.py          # QR-Pivot 基礎類別
+│   │   ├── factory.py       # QR-Pivot 工廠
+│   │   ├── features.py      # 特徵提取
+│   │   └── selectors/       # 選點策略
+│   └── adaptive_collocation.py # 自適應配點
+│
+├── dataio/                   # 資料載入與介面
+│   ├── jhtdb_client.py      # JHTDB 資料庫介面
+│   ├── channel_flow_loader.py # Channel Flow 資料載入
+│   ├── jhtdb_cutout_loader.py # JHTDB Cutout 載入
+│   ├── lowfi_loader.py      # Low-fidelity 資料載入
+│   ├── nondimensionalization.py # 無因次化
+│   ├── loaders/             # 資料集 Loaders
+│   │   ├── kolmogorov.py    # Kolmogorov Flow 載入器
+│   │   └── rans_prior.py    # RANS Prior 載入器
+│   └── sampling/            # 採樣策略
+│       ├── boundary.py      # 邊界採樣
+│       └── interior.py      # 內部配點採樣
+│
+├── evals/                    # 評估模組
+│   ├── metrics.py           # 評估指標（L2, RMSE, Conservation）
+│   └── visualizer.py        # 視覺化工具
+│
+└── utils/                    # 工具函數
+    ├── config_loader.py     # 配置載入
+    ├── config_validator.py  # 配置驗證
+    ├── config_snapshot.py   # 配置快照
+    ├── physics_validator.py # 物理驗證
+    ├── evaluation_utils.py  # 評估工具
+    ├── memory_tracker.py    # 記憶體追蹤
+    ├── timer.py             # 計時器
+    ├── training_monitor.py  # 訓練監控
+    └── normalization/       # 正規化模組
+        ├── base_normalizer.py # 基礎正規化器
+        ├── input_transform.py # 輸入轉換
+        ├── output_transform.py # 輸出轉換
+        └── kolmogorov_transform.py # Kolmogorov 專用轉換
 ```
 
 ### 工具腳本 (`scripts/`)
@@ -125,33 +198,108 @@ pinnx/
 ```
 scripts/
 ├── train/
-│   └── train.py             # 訓練主程式 (Entry Point)
-├── evaluate_unified.py      # 🚀 快速評估工具 (訓練中/後驗證)
+│   └── train.py             # 🚀 訓練主程式 (Entry Point)
+│
+├── evaluate_unified.py      # 🔍 快速評估工具 (訓練中/後驗證)
 │   - 用途: Checkpoint 快速檢查 (L2, RMSE, Conservation)
+│   - 支援多模型比較
+│
 ├── evaluate/
 │   ├── comprehensive_evaluation.py # 🔬 進階科學分析 (論文級)
-│   │   - 用途: 能量譜、壁剪應力、速度剖面
+│   │   - 用途: 能量譜、壁剪應力、速度剖面、湍流統計
 │   └── README.md            # 評估指南
+│
 ├── generate/                # 資料生成工具
-│   ├── sensors/             # 感測器佈點生成 (QR-Pivot, Random)
-│   └── dns/                 # DNS/LES 地面真值生成
-└── tools/
-    ├── validate_config.py   # 配置完整性驗證
-    └── validate_config_keys.py # 配置鍵值檢查 (Fail Fast)
+│   ├── dns/                 # DNS/LES 地面真值生成
+│   │   ├── generate_kolmogorov_dns.py # Kolmogorov DNS
+│   │   └── generate_kolmogorov_les.py # Kolmogorov LES
+│   └── sensors/             # 感測器佈點生成
+│       ├── generate_kolmogorov_temporal_qr.py # QR-Pivot 採樣
+│       └── generate_kolmogorov_temporal_random.py # 隨機採樣
+│
+├── tools/                   # 開發工具
+│   ├── validate_config.py   # 配置完整性驗證
+│   ├── validate_config_keys.py # ⚡ 配置鍵值檢查 (Fail Fast)
+│   ├── extract_dns_snapshot.py # DNS 快照提取
+│   ├── convert_h5_to_npy.py # 資料格式轉換
+│   └── batch_update_experiment_configs.py # 批次更新配置
+│
+├── validation/              # 物理與資料驗證
+│   ├── physics_validation.py # 物理守恆驗證
+│   ├── validate_dns_physics.py # DNS 物理驗證
+│   ├── validate_kolmogorov_reynolds.py # Kolmogorov Re 驗證
+│   └── validate_ns_conservation.py # NS 守恆驗證
+│
+├── visualize/               # 視覺化工具
+│   ├── visualize_kolmogorov_dns.py # Kolmogorov DNS 視覺化
+│   └── visualize_kolmogorov_sensors.py # 感測器佈點視覺化
+│
+├── experiments/             # 實驗腳本
+│   ├── run_s1_sensor_sweep_slurm.sh # S1: 感測器策略掃描
+│   ├── run_s2_k_scan_slurm.sh # S2: K 值掃描
+│   └── run_B1_series.sh     # B1: Baseline 系列
+│
+└── calculate/               # 參數計算工具
+    ├── calculate_reynolds_parameters.py # Reynolds 參數計算
+    └── calculate_lowfi_parameters.py # Low-fi 參數計算
 ```
 
 ### 配置與文檔
 
 ```
 configs/                      # 實驗配置文件 (YAML)
+├── standard_config_template.yml # 標準配置模板（必讀）
+├── kolmogorov_re50_kf4_K100.yml # Kolmogorov 標準配置
+├── experiments/             # 實驗配置系列
+│   ├── S1_sensor_strategy/  # 感測器策略實驗
+│   ├── S2_k_scan/           # K 值掃描實驗
+│   ├── A1_ablation_fourier/ # Fourier 消融實驗
+│   ├── A2_ablation_weights/ # 權重消融實驗
+│   ├── C1_prior_comparison/ # Prior 對比實驗
+│   └── M1_model_comparison/ # 模型對比實驗
+└── sweeps/                  # WandB Sweep 配置
+    ├── sweep_s1_sensor_strategy.yaml
+    └── sweep_s2_k_scan.yaml
+
 docs/                         # 完整開發文檔
-├── EVALUATION_GUIDE.md      # 評估策略指南
+├── README.md                # 文檔索引
+├── QUICK_START.md           # 🚀 快速入門
 ├── CONFIG_GUIDE.md          # 配置參數詳解
 ├── TRAINERBUILDER_GUIDE.md  # TrainerBuilder 架構說明
-└── QUICK_START.md           # 快速入門
+├── EVALUATION_GUIDE.md      # 評估策略指南
+├── EXPERIMENT_DESIGN.md     # 實驗設計指南
+├── TIME_WINDOW_TRAINING_GUIDE.md # Time Window 訓練
+├── DDP_GUIDE.md             # 分散式訓練指南
+├── COLAB_QUICK_START.md     # Colab 快速開始
+├── P100_OPTIMIZATION_GUIDE.md # P100 GPU 優化
+├── TROUBLESHOOTING.md       # 故障排除
+└── API_REFERENCE.md         # API 參考文檔
 
-context/
-└── session_logs/            # 會話記錄 (Session Logs & Decision Records)
+context/                      # 會話與技術紀錄
+├── session_logs/            # 會話記錄 (Session Logs & Decision Records)
+├── technical_reviews/       # 技術審查文檔
+├── DDP_INTEGRATION_PLAN.md  # DDP 整合計畫
+└── JAXPI_LR_SCHEDULER_COMPARISON.md # 學習率調度器對比
+
+data/                         # 資料目錄（.gitignore）
+├── jhtdb/                   # JHTDB Channel Flow 資料
+├── kolmogorov/              # Kolmogorov Flow 資料
+│   ├── dns/                 # DNS 地面真值
+│   ├── les/                 # LES 地面真值
+│   └── sensors/             # 感測器佈點
+└── rans/                    # RANS Prior 資料
+
+checkpoints/                  # 模型 Checkpoint（.gitignore）
+results/                      # 實驗結果（.gitignore）
+wandb/                        # WandB 日誌（.gitignore）
+```
+
+### 測試目錄 (`tests/`)
+
+```
+tests/                        # 單元測試與整合測試
+├── test_*.py                # 單元測試檔案
+└── integration/             # 整合測試
 ```
 
 ---

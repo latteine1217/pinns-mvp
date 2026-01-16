@@ -75,7 +75,7 @@ echo ""
 echo "物理設定:"
 echo "  - Re=50, nu=0.039374, k_f=4"
 echo "  - VS-PINN 變分尺度 N=(2,12,2)"
-echo "  - Leith 湍流先驗"
+echo "  - LES 湍流先驗"
 echo ""
 echo "優化策略:"
 echo "  - SOAP optimizer (lr=1e-3)"
@@ -118,7 +118,7 @@ if [ ${TRAIN_EXIT_CODE} -eq 0 ]; then
     echo "✅ 訓練成功！開始評估模型..."
     
     # 尋找最佳模型 checkpoint
-    CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/kolmogorov_re50_kf4_K100_leith_prior"
+    CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/kolmogorov_re50_kf4_K100_les_prior"
     BEST_MODEL="${CHECKPOINT_DIR}/best_model.pth"
     
     if [ -f "${BEST_MODEL}" ]; then
@@ -159,8 +159,8 @@ echo "==========================="
 echo "結果檔案位置"
 echo "==========================="
 echo "工作目錄: ${WORKDIR}"
-echo "Checkpoints: ${PROJECT_DIR}/checkpoints/kolmogorov_re50_kf4_K100_leith_prior/"
-echo "Results: ${PROJECT_DIR}/results/kolmogorov_re50_kf4_K100_leith_prior/"
+echo "Checkpoints: ${PROJECT_DIR}/checkpoints/kolmogorov_re50_kf4_K100_les_prior/"
+echo "Results: ${PROJECT_DIR}/results/kolmogorov_re50_kf4_K100_les_prior/"
 echo "日誌檔案:"
 echo "  - stdout: ${HOME}/logs/pinns_sparse_kflow_${SLURM_JOB_ID}.out"
 echo "  - stderr: ${HOME}/logs/pinns_sparse_kflow_${SLURM_JOB_ID}.err"

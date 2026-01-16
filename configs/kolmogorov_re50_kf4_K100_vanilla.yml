@@ -5,7 +5,7 @@ experiment:
   device: auto
   precision: float32
   description: Re=50 vanilla baseline without turbulence prior or curriculum for comparison
-    with Leith-prior version.
+    with LES prior version.
   group: kflow_baseline
   tags:
   - kflow_re50
@@ -14,10 +14,6 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 8
-  pin_memory: true
-  persistent_workers: true
-  prefetch_factor: 2
 data:
   source: kolmogorov_dns
   dataset: re50_kf4
@@ -47,13 +43,7 @@ lowfi_prior:
   enabled: false
 normalization:
   type: training_data_norm
-  variable_order:
-  - u
-  - v
-  - p
   params: {}
-  noise_sigma: 0.0
-  dropout_prob: 0.0
   steady_state:
     enabled: true
     time_window:
@@ -152,8 +142,6 @@ training:
     adaptive_sampling: false
     boundary_points: 1000
   gradient_clip: 1.0
-  amp:
-    enabled: false
 curriculum:
   enable: false
 evaluation:

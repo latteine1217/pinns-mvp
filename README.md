@@ -88,12 +88,42 @@ MPLCONFIGDIR=./.mplconfig PYTHONPATH=. \
 - **JSON**: 感測器索引與座標（`sensor_file`）
 - **NPZ**: DNS time series values（`dns_values_file`）
 
+## 🚀 效能優化
+
+### TorchScript Kernel Fusion (2026-01-16)
+- **加速效果**: 1.035x（在 Tesla P100 上提升 3.5%）
+- **優化目標**: SiLU/Swish 激活函數的融合優化
+- **狀態**: ✅ 已部署並驗證
+- **使用方式**: 自動啟用（配置 `activation: 'swish'` 時）
+- **詳細說明**: [TORCHSCRIPT_OPTIMIZATION_GUIDE.md](docs/TORCHSCRIPT_OPTIMIZATION_GUIDE.md)
+
+### P100 GPU 優化指南
+- **硬體限制與已驗證方案**
+  - ✅ **有效**: TorchScript kernel fusion（+3.5%）
+  - ❌ **無效**: AMP/FP16（P100 無 Tensor Cores）
+  - ❌ **不支援**: torch.compile()（需 Compute Capability ≥ 7.0）
+- **硬體升級 ROI 分析**（V100 vs A100）
+- **未來優化方向**（Larger batch size, architectural changes）
+- **詳細說明**: [P100_OPTIMIZATION_GUIDE.md](docs/P100_OPTIMIZATION_GUIDE.md)
+
+### 累積優化成果
+| 優化項目 | 效果 | 狀態 |
+|---------|------|------|
+| WandB 同步頻率 | 50x 減少 | ✅ 已部署 |
+| Loss 日誌頻率 | 2x 減少 | ✅ 已部署 |
+| 配置驗證 | ~100x 加速 | ✅ 已部署 |
+| 日誌文件大小 | 6.7x 減少 | ✅ 已完成 |
+| **TorchScript Fusion** | **+3.5% 加速** | ✅ **已部署** |
+| **總體預期** | **~3-5% 更快** | ⏳ **驗證中** |
+
 ## 文檔索引
 
 | 文檔 | 用途 | 讀者 |
 |------|------|------|
 | [QUICK_START.md](docs/QUICK_START.md) | 完整工作流程 | 新用戶 |
 | [DDP_GUIDE.md](docs/DDP_GUIDE.md) | 多 GPU 分散式訓練 🆕 | 效能優化 |
+| [TORCHSCRIPT_OPTIMIZATION_GUIDE.md](docs/TORCHSCRIPT_OPTIMIZATION_GUIDE.md) | TorchScript 優化指南 🚀 | 效能優化 |
+| [P100_OPTIMIZATION_GUIDE.md](docs/P100_OPTIMIZATION_GUIDE.md) | P100 硬體優化策略 🔧 | 效能優化 |
 | [TRAINERBUILDER_GUIDE.md](docs/TRAINERBUILDER_GUIDE.md) | TrainerBuilder 使用指南 ✨ | 開發者 |
 | [CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md) | 配置參數說明與管理 | 配置調整 |
 | [EVALUATION_GUIDE.md](docs/EVALUATION_GUIDE.md) | 評估工具使用指南 🔬 | 所有用戶 |

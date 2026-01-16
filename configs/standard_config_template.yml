@@ -8,10 +8,6 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 8  # 推薦: CPU 核心數 / 6 (48 threads / 6 = 8)
-  pin_memory: true  # 啟用 CUDA 記憶體釘選 (P100/GPU 環境)
-  persistent_workers: true  # 保持 worker 持續運行，減少重啟開銷
-  prefetch_factor: 2  # 每個 worker 預先載入的 batch 數量
 data:
   source: jhtdb
   dataset: channel
@@ -70,8 +66,6 @@ lowfi_prior:
 normalization:
   type: training_data_norm
   params: {}
-  noise_sigma: 0.0
-  dropout_prob: 0.0
   slice_config:
     plane: xy
     z_position: 4.71
@@ -143,10 +137,7 @@ physics:
       boundary_band_width: 0.005
     enable_rans: false
   channel_flow:
-    Re_tau: 1000.0
-    Re_bulk: 39998.0
-    u_tau: 0.04997
-    pressure_gradient: 0.0025
+    Re_tau: 1000.0  # 摩擦雷諾數（核心參數，其他參數將自動計算）
   domain:
     x_range:
     - 0.0
@@ -203,7 +194,6 @@ losses:
   weight_update_freq: 1000            # 權重更新頻率（JaxPI 默認 1000）
   grad_norm_momentum: 0.9             # EMA 平滑係數（對齊 JaxPI，0 表示不使用）
   grad_norm_alpha: 1.5                # 權重更新激進程度（非 JaxPI 參數）
-  grad_norm_normalize: false          # [已棄用/無效] JaxPI 不使用權重正規化（設為 true 會觸發警告）
   grad_norm_min_weight: 0.1           # 相對權重下界比例（10% 下界，v1.1.0+ 相對於 init_weights）
   grad_norm_max_weight: 10.0          # 相對權重上界比例（1000% 上界，v1.1.0+ 相對於 init_weights）
   adaptive_loss_terms:
@@ -285,9 +275,6 @@ training:
   num_time_windows: 1              # 時間窗口數量（1 = 不使用 time window）
   time_window_overlap: 0.0         # 窗口重疊比例（推薦 0.0 無重疊）
   transfer_learning: true          # 是否從前一個窗口載入參數（推薦 true）
-  
-  amp:
-    enabled: false
 fourier_annealing:
   enabled: false
 curriculum:
@@ -327,7 +314,6 @@ logging:
   save_predictions: false
   wandb: true
   save_loss_history: true
-  save_weight_evolution: false
   log_nonlinearities: false
 output:
   checkpoint_dir: ./checkpoints

@@ -10,7 +10,7 @@
 
 **核心能力**：
 - ✅ 稀疏感測器重建 (K ≤ 100)
-- ✅ RANS/Leith 物理先驗融合
+- ✅ RANS/LES 物理先驗融合
 - ✅ DNS 高保真驗證
 - ✅ 2D Kolmogorov Flow 與 3D Channel Flow
 
@@ -114,7 +114,7 @@ docs/
 ## 🔍 關鍵概念速查
 
 ### 物理場景
-- **2D Kolmogorov Flow**: Re=50-100, Leith 模型, 週期邊界
+- **2D Kolmogorov Flow**: Re=50-100, LES 模型, 週期邊界
 - **3D Channel Flow**: Re_τ=1000, RANS k-ε, 壁面+週期邊界
 
 ### 核心技術
@@ -127,7 +127,7 @@ docs/
 ```
 DNS Ground Truth → Sensor Selection (QR-Pivot)
                  ↓
-Low-Fi Prior (RANS/Leith) + Sparse Sensors
+Low-Fi Prior (RANS/LES) + Sparse Sensors
                  ↓
         Physics-Informed Training
                  ↓

@@ -96,24 +96,24 @@ EXPERIMENT_MAPPING = {
     },
     'c1_with_prior': {
         'group': 'kflow_prior',
-        'tags': ['kflow_re50', 'K100', 'full', 'leith_prior'],
+        'tags': ['kflow_re50', 'K100', 'full', 'les_prior'],
         'experiment_id': 'C1',
     },
 
     # C2: Prior weight sweep
     'c2_prior_0.1': {
         'group': 'kflow_prior',
-        'tags': ['kflow_re50', 'K100', 'full', 'leith_prior', 'c2_prior_sweep'],
+        'tags': ['kflow_re50', 'K100', 'full', 'les_prior', 'c2_prior_sweep'],
         'experiment_id': 'C2',
     },
     'c2_prior_0.3': {
         'group': 'kflow_prior',
-        'tags': ['kflow_re50', 'K100', 'full', 'leith_prior', 'c2_prior_sweep'],
+        'tags': ['kflow_re50', 'K100', 'full', 'les_prior', 'c2_prior_sweep'],
         'experiment_id': 'C2',
     },
     'c2_prior_0.5': {
         'group': 'kflow_prior',
-        'tags': ['kflow_re50', 'K100', 'full', 'leith_prior', 'c2_prior_sweep'],
+        'tags': ['kflow_re50', 'K100', 'full', 'les_prior', 'c2_prior_sweep'],
         'experiment_id': 'C2',
     },
 

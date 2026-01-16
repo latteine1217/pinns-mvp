@@ -17,7 +17,6 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 4
 data:
   source: kolmogorov_dns
   dataset: re100_kf4
@@ -49,8 +48,6 @@ lowfi_prior:
 normalization:
   type: training_data_norm
   params: {}
-  noise_sigma: 0.0
-  dropout_prob: 0.0
   steady_state:
     enabled: true
     time_window:
@@ -181,8 +178,6 @@ training:
   gradient_clip: 1.0
   num_time_windows: 3
   time_window_overlap: 0.0
-  amp:
-    enabled: false
 curriculum:
   enable: false
 optimizer_switching:

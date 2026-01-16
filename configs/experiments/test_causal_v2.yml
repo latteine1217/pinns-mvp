@@ -103,7 +103,6 @@ training:
     N_pde: 8000
     N_ic: 128
     N_bc: 128
-  use_amp: false
   gradient_clipping:
     enabled: true
     max_norm: 1.0

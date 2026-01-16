@@ -179,7 +179,7 @@
 | Exp ID | 變因 | 固定參數 | 配置文件 | 預估時間 |
 |--------|-----|---------|---------|---------|
 | **C1.1** | 無 Prior | K=100, Full model | `C1_prior_comparison/c1_no_prior_K100_2d_re50.yml` | 5 h |
-| **C1.2** | Leith Prior (weight=1.0) | K=100, Full model | `C1_prior_comparison/c1_with_prior_K100_2d_re50.yml` | 6 h |
+| **C1.2** | LES Prior (weight=1.0) | K=100, Full model | `C1_prior_comparison/c1_with_prior_K100_2d_re50.yml` | 6 h |
 
 **對比指標**：
 - 全場 $L_2$ 改善
@@ -558,8 +558,8 @@ wandb agent <entity>/<project>/<sweep_id>                  # 啟動 agent
 ### Chapter 4: Experiments and Results
 
 #### 4.1 2D Kolmogorov Flow
-- **Fig. 4.1**: Leith 模型誤差 vs Reynolds 數（已有：`result_figures/kolmogorov/fig_leith_error_scaling.png`）
-- **Fig. 4.2**: Leith vs DNS 能譜對比（已有：`result_figures/kolmogorov/leith_dns_spectrum_re50.png`）
+- **Fig. 4.1**: LES 模型誤差 vs Reynolds 數（已有：`result_figures/kolmogorov/fig_les_error_scaling.png`）
+- **Fig. 4.2**: LES vs DNS 能譜對比（已有：`result_figures/kolmogorov/les_dns_spectrum_re50.png`）
 - **Fig. 4.3**: Vanilla vs Soft Prior 場重建對比 → **實驗 C1**
   - 生成自：`C1_prior_comparison/` 結果
   - 包含：$u$, $v$, $p$, $\omega_z$, $|\mathbf{u}|$, $|\nabla p|$

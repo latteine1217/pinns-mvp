@@ -15,7 +15,6 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 4
 data:
   source: kolmogorov_dns
   dataset: re50_kf4
@@ -44,8 +43,8 @@ data:
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
   enabled: false
-  data_path: ./data/lowfi_npy/kolmogorov_leith/re50
-  data_type: leith
+  data_path: ./data/lowfi_npy/kolmogorov_les/re50
+  data_type: les
   rans_structure:
     group_path: /mean_field
     field_mapping:
@@ -71,8 +70,6 @@ lowfi_prior:
 normalization:
   type: training_data_norm
   params: {}
-  noise_sigma: 0.0
-  dropout_prob: 0.0
   steady_state:
     enabled: true
     time_window:
@@ -179,8 +176,6 @@ training:
     adaptive_sampling: false
     boundary_points: 1000
   gradient_clip: 1.0
-  amp:
-    enabled: false
 curriculum:
   enable: false
 optimizer_switching:

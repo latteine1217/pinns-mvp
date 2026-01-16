@@ -8,10 +8,6 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 8
-  pin_memory: true
-  persistent_workers: true
-  prefetch_factor: 2
 data:
   source: jhtdb
   dataset: channel
@@ -34,19 +30,12 @@ data:
     - p
   normalize: true
   cache_dir: ./data/jhtdb/channel_flow_re1000
-  noise_sigma: 0.0
-  dropout_prob: 0.0
   slice_config:
     plane: xy
     z_position: 4.71
     steady_state: true
 normalization:
   type: training_data_norm
-  variable_order:
-  - u
-  - v
-  - w
-  - p
   params: {}
 sensors:
   K: 400
@@ -146,9 +135,6 @@ physics:
       N_z: 2.0
   channel_flow:
     Re_tau: 1000.0
-    Re_bulk: 39998.0
-    u_tau: 0.04997
-    pressure_gradient: 0.0025
   domain:
     x_range:
     - 0
@@ -350,16 +336,3 @@ logging:
   log_dir: ./log
   wandb: false
   log_level: INFO
-task_008_gates:
-  gate_1_stability:
-    no_nan_inf: true
-    stage_transition_loss_change: 0.2
-  gate_2_convergence:
-    relative_l2: 0.15
-    wall_shear_stress_error: 0.08
-  gate_3_efficiency:
-    training_time_hours: 8
-    convergence_speedup: 0.2
-  gate_4_physics:
-    spectrum_rmse: 0.25
-    velocity_profile_log_layer_error: 0.15

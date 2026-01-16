@@ -6,7 +6,7 @@
 
 ### 🔄 Changed - Kolmogorov LES & Sensor Pipeline (2026-01-13)
 
-- **Kolmogorov Prior**: 2D Leith → 2D LES（hyperviscosity + 線性摩擦）
+- **Kolmogorov Prior**: 2D LES（hyperviscosity + 線性摩擦）
 - **Sensor Data**: 改為 JSON + DNS values `.npz` 雙檔輸入（`dns_values_file`）
 - **Configs**: 預設 K=400，sensor 檔案統一指向 `data/kolmogorov_sensors/re100/`
 
@@ -287,7 +287,7 @@ torchrun --nproc_per_node=2 scripts/train/train.py --cfg configs/main.yml
 
 ### 🎯 Strategy
 - **聚焦核心**: 僅支援 2 個核心場景
-  - 2D Kolmogorov Flow (u, v, nu_t) + Leith 模型
+  - 2D Kolmogorov Flow (u, v, nu_t) + LES 模型
   - 3D Channel Flow Re_τ=1000 (u, v, w, p, k, ε, nu_t) + RANS k-ε
 
 ### ❌ Removed

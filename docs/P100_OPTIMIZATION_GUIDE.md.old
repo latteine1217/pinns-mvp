@@ -1,0 +1,519 @@
+# P100 GPU 優化指南
+**最後更新**: 2026-01-16  
+**硬體**: 2× Tesla P100-PCIE-16GB (Compute Capability 6.0)  
+**目標**: 在 P100 限制下最大化訓練性能  
+**狀態**: ✅ TorchScript 優化已部署，實測 3.5% 加速
+
+---
+
+## 🔍 P100 硬體特性
+
+### 規格
+```
+架構: Pascal (2016)
+Compute Capability: 6.0
+CUDA Cores: 3584
+記憶體: 16 GB HBM2
+記憶體頻寬: 732 GB/s
+FP32 性能: 9.3 TFLOPS
+FP16 性能: 18.7 TFLOPS (理論 2x FP32)
+Tensor Core: ❌ 無（需要 Volta+ 架構）
+最高時鐘: 1328 MHz (SM), 715 MHz (Memory)
+```
+
+### 關鍵限制
+1. ❌ **不支援 `torch.compile()`**（需要 CC ≥ 7.0）
+2. ❌ **無 Tensor Core**（AMP 無實際加速，測試證實）
+3. ⚠️ **FP16 無硬體加速**（僅靠 CUDA Core，實測 0.73-0.98x）
+4. ⚠️ **雙 GPU 透過 SYS 連接**（無 NVLink，通訊慢）
+
+---
+
+## ✅ 可行的優化方案（已測試驗證）
+
+### Priority 1: TorchScript Kernel Fusion ⭐⭐⭐⭐⭐
+**狀態**: ✅ 已部署  
+**實測加速**: 1.035x (3.5%)  
+**風險**: 零（數值等價，誤差 < 5e-7）
+
+#### 實測性能（Job 2711）
+```
+GPU: Tesla P100-PCIE-16GB
+Batch Size: 4096
+Model: 8×256 MLP (478K 參數)
+
+結果:
+- Baseline (F.silu):     0.939 ± 0.001 ms
+- Fused (fused_silu):    0.907 ± 0.000 ms
+- Speedup:               1.035x (3.5% faster)
+- Numerical error:       4.77e-07 (< 1e-5)
+```
+
+#### 已實施的優化
+
+**文件**: `pinnx/models/fourier_mlp.py`
+
+```python
+# 核心實現（已整合）
+@torch.jit.script
+def fused_silu(x: torch.Tensor) -> torch.Tensor:
+    """TorchScript 優化的 SiLU (Swish) 激活函數"""
+    return x * torch.sigmoid(x)
+
+class FusedSiLU(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return fused_silu(x)
+
+# 自動替換（用戶無感知）
+if activation == 'swish':
+    self.activation = FusedSiLU()  # 自動使用優化版本
+```
+
+**使用方式**:
+```yaml
+# configs/your_config.yml
+model:
+  activation: swish  # ← 自動啟用 FusedSiLU 優化
+```
+
+**詳細文檔**: 見 [TORCHSCRIPT_OPTIMIZATION_GUIDE.md](./TORCHSCRIPT_OPTIMIZATION_GUIDE.md)
+
+---
+
+## ❌ 不可行的優化方案（已測試驗證）
+
+### ❌ 混合精度訓練 (AMP)
+**狀態**: ❌ 已測試，不推薦  
+**實測結果**: 0.73-0.98x (變慢或持平)  
+**測試任務**: Jobs 2708, 2709
+
+#### 測試結果（Job 2709 - 改進版）
+
+```
+GPU: Tesla P100-PCIE-16GB
+PyTorch: 2.7.1+cu118
+GPU 暖身: 5 秒（1189 MHz → 1328 MHz）
+
+| Batch Size | FP32 (ms) | FP16 (ms) | 加速比 | 結論 |
+|-----------|-----------|----------|--------|------|
+| 1024      | 1.521 ± 0.019 | 2.077 ± 0.016 | 0.732x | ❌ 慢 36% |
+| 4096      | 2.847 ± 0.003 | 2.909 ± 0.001 | 0.979x | ⚠️ 持平 |
+```
+
+**為何 P100 的 AMP 無效？**
+
+1. **無 Tensor Core**
+   - V100/A100 的 AMP 加速主要來自 Tensor Core（8-16x FP16 vs FP32）
+   - P100 只有 CUDA Core，FP16 與 FP32 使用相同硬體單元
+
+2. **Type Casting 開銷**
+   - FP32 ↔ FP16 轉換需要時間（~5-10 μs/次）
+   - 小模型（<1M 參數）overhead > 計算加速
+
+3. **記憶體頻寬並非瓶頸**
+   - Profiler 顯示 GEMM 是計算受限（compute-bound）
+   - 減少記憶體使用無助於加速
+
+**結論**: ❌ **P100 不應使用 AMP**
+
+**詳細測試報告**: `context/session_logs/2026-01-16_torchscript_optimization/AMP_TEST_RESULTS_P100_2026-01-16.md`
+
+---
+
+### ❌ torch.compile()
+**狀態**: ❌ 硬體不支援  
+**原因**: 需要 CC ≥ 7.0（P100 是 6.0）
+
+```python
+# 會報錯
+model = torch.compile(model, mode='max-autotune')
+# RuntimeError: Compute Capability 6.0 not supported
+```
+
+---
+
+### ❌ DataLoader 優化
+**狀態**: ❌ 不適用  
+**原因**: PINNs 不使用 PyTorch DataLoader
+
+**架構分析**:
+```python
+# PINNs 訓練方式（固定點集）
+training_data = prepare_training_data(config, device)  # 一次性載入
+for epoch in range(max_epochs):
+    loss = train_step(training_data)  # 每個 epoch 使用相同點
+
+# 標準深度學習（mini-batch sampling）
+dataloader = DataLoader(dataset, batch_size=32, ...)
+for batch in dataloader:  # 每次不同 mini-batch
+    loss = train_step(batch)
+```
+
+**Profiler 驗證**: CPU→GPU 傳輸 < 1% CUDA 時間（無瓶頸）
+
+**詳細分析**: `context/session_logs/SESSION_SUMMARY_2026-01-16_DATALOADER_ANALYSIS.md`（本次會話）
+
+---
+
+## 📊 Profiler 分析（Job 2703 Baseline）
+
+### 訓練瓶頸分布
+
+| 瓶頸 | CUDA 時間 | 佔比 | 優化方案 | 狀態 |
+|-----|----------|------|---------|------|
+| **GEMM** | 249.14 ms | 43.08% | AMP | ❌ 不可用 |
+| **Element-wise** | 174.59 ms | 30.19% | TorchScript | ✅ **已完成** |
+| **Gradient Comp** | 152.45 ms | 26.36% | 架構改變 | ⏳ 未來工作 |
+| **DDP 通訊** | < 1 ms | 0.08% | 無需優化 | - |
+
+### 關鍵發現
+
+1. **GEMM 是最大瓶頸（43%）**
+   - P100 上唯一加速方法：硬體升級（V100/A100）
+   - V100 Tensor Core 可提供 5-8x 加速
+   - A100 Tensor Core 可提供 10-16x 加速
+
+2. **Element-wise 操作（30%）**
+   - ✅ TorchScript 融合減少 3.5%（已完成）
+   - 進一步優化需要自訂 CUDA kernel（成本高）
+
+3. **梯度計算（26%）**
+   - 高階導數（VS-PINN N=(2,12,2)）是主因
+   - 減少計算頻率會影響訓練結果
+   - JAX 可能提供 1.5-2x 加速（未測試）
+
+4. **DDP 通訊不是瓶頸（0.08%）**
+   - 模型極小（1.51 MB，396K 參數）
+   - 梯度計算時間長（30.5 ms），給予充足異步通訊時間
+
+**完整 Profiler 報告**: `context/session_logs/2026-01-16_torchscript_optimization/PROFILER_OPTIMIZATION_REPORT_2026-01-16.md`
+
+---
+    self.scaler.unscale_(self.optimizer)
+    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+    
+    self.scaler.step(self.optimizer)
+    self.scaler.update()
+```
+
+**Step 3: 配置選項**
+```yaml
+# config.yml
+training:
+  amp:
+    enabled: true
+    physics_loss_fp32: true  # 物理損失使用 FP32
+    gradient_clipping: 1.0   # 梯度裁剪（防止爆炸）
+```
+
+#### 驗收標準
+```python
+# 測試腳本
+# 1. 訓練 100 epochs，對比 FP32 vs AMP
+# 2. 檢查 Loss 曲線是否一致（允許 <5% 差異）
+# 3. 檢查最終精度（L2 error）是否一致
+
+# 預期結果：
+# - 訓練時間: 減少 30-50%
+# - 記憶體使用: 減少 40%
+# - 最終精度: 差異 <2%
+```
+
+---
+
+### Priority 2: 手動 Kernel 融合 (TorchScript) ⭐⭐⭐
+**推薦指數**: 中  
+**預期加速**: 5-15%  
+**風險**: 低
+
+#### 原理
+使用 `@torch.jit.script` 融合 Element-wise 操作，減少 kernel launch 開銷
+
+#### 實施範例
+
+**融合 SiLU 激活函數**
+```python
+import torch
+import torch.jit
+
+@torch.jit.script
+def fused_silu(x: torch.Tensor) -> torch.Tensor:
+    """
+    融合 SiLU: x * sigmoid(x)
+    避免產生中間張量
+    """
+    return x * torch.sigmoid(x)
+
+@torch.jit.script
+def fused_silu_backward(x: torch.Tensor, grad_output: torch.Tensor) -> torch.Tensor:
+    """
+    融合 SiLU 反向傳播
+    grad = grad_output * (sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x)))
+    """
+    sigmoid_x = torch.sigmoid(x)
+    return grad_output * (sigmoid_x + x * sigmoid_x * (1.0 - sigmoid_x))
+
+# 在 model 中使用
+class FourierMLP(nn.Module):
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+            x = fused_silu(x)  # 替換 F.silu(x)
+        return x
+```
+
+**融合 Fourier Features**
+```python
+@torch.jit.script
+def fused_fourier_features(
+    x: torch.Tensor,
+    freq: torch.Tensor,
+    sigma: float
+) -> torch.Tensor:
+    """
+    融合 Fourier Features 計算
+    避免多次 kernel launch
+    """
+    # x @ freq -> sin/cos -> concat
+    proj = torch.matmul(x, freq.T) * sigma
+    return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+```
+
+#### 預期提升
+- Element-wise ops (30%) × 0.5 = 15% → 節省 15%
+- **總加速**: ~1.15x (15% 提升)
+
+---
+
+### Priority 3: 記憶體優化 (Gradient Checkpointing) ⭐⭐
+**推薦指數**: 低（僅在需要更大 batch 時）  
+**預期效果**: 記憶體 -60%，速度 -20%  
+**風險**: 低
+
+#### 何時使用？
+- 當前記憶體使用: 13.62 GB / 16 GB (85%)
+- 若需要更大 batch size 或更複雜模型
+
+#### 實施方式
+```python
+from torch.utils.checkpoint import checkpoint
+
+class FourierMLP(nn.Module):
+    def forward(self, x):
+        # 每兩層使用 checkpoint
+        for i in range(0, len(self.layers), 2):
+            if i + 1 < len(self.layers):
+                x = checkpoint(self._two_layer_block, x, i)
+            else:
+                x = self.layers[i](x)
+        return x
+    
+    def _two_layer_block(self, x, start_idx):
+        x = self.layers[start_idx](x)
+        x = F.silu(x)
+        x = self.layers[start_idx + 1](x)
+        x = F.silu(x)
+        return x
+```
+
+#### Trade-off
+- 記憶體: 13.62 GB → ~6 GB
+- 速度: 161 ms/iter → ~193 ms/iter (-20%)
+- **僅在 OOM 時使用**
+
+---
+
+### Priority 4: 數據載入優化 ⭐⭐⭐
+**推薦指數**: 中  
+**預期加速**: 5-10%  
+**風險**: 零
+
+#### 檢查當前瓶頸
+```python
+# 在訓練循環中加入計時
+import time
+
+for epoch in range(num_epochs):
+    data_time = 0
+    compute_time = 0
+    
+    for batch in dataloader:
+        t0 = time.time()
+        batch = {k: v.cuda() for k, v in batch.items()}
+        data_time += time.time() - t0
+        
+        t0 = time.time()
+        loss = train_step(batch)
+        compute_time += time.time() - t0
+    
+    print(f"Data: {data_time:.2f}s, Compute: {compute_time:.2f}s")
+    # 若 data_time > compute_time * 0.1，則需優化
+```
+
+#### 優化方法
+```python
+# 1. 增加 DataLoader workers
+dataloader = DataLoader(
+    dataset,
+    batch_size=batch_size,
+    num_workers=4,  # 原本可能是 0 或 1
+    pin_memory=True,  # 加速 CPU → GPU 傳輸
+    persistent_workers=True  # 避免 worker 重啟開銷
+)
+
+# 2. 使用 prefetch
+from torch.utils.data import DataLoader
+dataloader = DataLoader(..., prefetch_factor=2)
+```
+
+---
+
+## ❌ 不可行的優化（P100 限制）
+
+### ❌ torch.compile()
+**原因**: P100 Compute Capability 6.0 < 7.0（最低要求）
+
+**錯誤訊息**:
+```python
+model = torch.compile(model)
+# RuntimeError: Attempting to use Inductor on GPU with compute capability 6.0,
+# but it requires at least 7.0 (Volta architecture or newer)
+```
+
+**替代方案**: 使用 `torch.jit.script` 手動融合
+
+---
+
+### ❌ Tensor Core 加速
+**原因**: P100 無 Tensor Core 硬體
+
+**影響**:
+- AMP 的 FP16 GEMM 加速僅 2x（vs V100 的 8x, A100 的 16x）
+- 無法使用 `torch.backends.cuda.matmul.allow_tf32`
+
+---
+
+### ❌ Flash Attention
+**原因**: Flash Attention 需要 Ampere+ 架構 (CC ≥ 8.0)
+
+**替代方案**: 本專案不使用 Attention，無影響
+
+---
+
+## 🎯 推薦實施順序
+
+### Phase 1: 低風險高回報（立即執行）
+1. **混合精度訓練 (AMP)** - 30-50% 加速
+   - 時間: 1 小時實施 + 2 小時驗證
+   - 風險: 中（需測試物理損失穩定性）
+   - ROI: ⭐⭐⭐⭐⭐
+
+2. **數據載入優化** - 5-10% 加速
+   - 時間: 15 分鐘
+   - 風險: 零
+   - ROI: ⭐⭐⭐
+
+### Phase 2: 進階優化（可選）
+3. **手動 Kernel 融合 (TorchScript)** - 5-15% 加速
+   - 時間: 2-3 小時
+   - 風險: 低
+   - ROI: ⭐⭐⭐
+
+4. **Gradient Checkpointing** - 記憶體優化
+   - 時間: 1 小時
+   - 風險: 低
+   - ROI: ⭐⭐（僅在需要時）
+
+---
+
+## 📊 預期總體提升
+
+### 樂觀估算（所有優化）
+```
+Baseline: 161 ms/iter
+
+Phase 1:
+- AMP (1.4x): 161 / 1.4 = 115 ms
+- Data Loading (1.1x): 115 / 1.1 = 105 ms
+
+Phase 2:
+- TorchScript (1.1x): 105 / 1.1 = 95 ms
+
+總加速: 161 / 95 = 1.69x (69% 提升)
+```
+
+### 保守估算（僅 AMP）
+```
+Baseline: 161 ms/iter
+AMP (1.3x): 161 / 1.3 = 124 ms/iter
+
+總加速: 1.3x (30% 提升)
+```
+
+---
+
+## 🔧 實施 Checklist
+
+### AMP 實施前檢查
+- [ ] PyTorch 版本 ≥ 1.6（支援 `torch.cuda.amp`）
+- [ ] 確認 P100 支援 FP16（`torch.cuda.get_device_capability() >= (6, 0)`）
+- [ ] 備份當前模型和配置
+- [ ] 準備對比實驗（FP32 baseline）
+
+### AMP 實施步驟
+- [ ] 修改 `trainer.py`，加入 `GradScaler`
+- [ ] 使用 `autocast()` 包裝 Forward Pass
+- [ ] 物理損失選擇性使用 FP32
+- [ ] 加入 Gradient Clipping（防止數值不穩定）
+- [ ] 測試 100 epochs，對比 Loss 曲線
+- [ ] 檢查最終精度（L2 error）
+- [ ] 測量訓練時間和記憶體使用
+
+### 驗收標準
+- [ ] 訓練時間減少 ≥ 25%
+- [ ] 記憶體使用減少 ≥ 30%
+- [ ] 最終精度差異 ≤ 5%
+- [ ] 無 NaN / Inf 出現
+
+---
+
+## 📚 參考資料
+
+### P100 文檔
+- [P100 Whitepaper](https://images.nvidia.com/content/pdf/tesla/whitepaper/pascal-architecture-whitepaper.pdf)
+- [CUDA Compute Capability](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities)
+
+### AMP 最佳實踐
+- [PyTorch AMP Tutorial](https://pytorch.org/docs/stable/amp.html)
+- [NVIDIA Apex (Legacy)](https://github.com/NVIDIA/apex)
+- [Mixed Precision Training for PINNs](https://arxiv.org/abs/2109.01876)
+
+### TorchScript
+- [TorchScript Documentation](https://pytorch.org/docs/stable/jit.html)
+- [Performance Tuning Guide](https://pytorch.org/tutorials/recipes/recipes/tuning_guide.html)
+
+---
+
+## 🎓 經驗總結
+
+### P100 的優勢
+1. ✅ 大記憶體 (16 GB) - 足夠處理中型模型
+2. ✅ 高記憶體頻寬 (732 GB/s) - 適合記憶體密集型任務
+3. ✅ 支援 FP16 - 可使用 AMP 加速
+
+### P100 的劣勢
+1. ❌ 無 Tensor Core - AMP 加速受限（僅 2x vs 8x）
+2. ❌ 舊架構 (2016) - 不支援現代優化技術
+3. ❌ 低 FP32 性能 (9.3 TFLOPS) - 不如現代 GPU
+
+### 何時考慮升級硬體？
+若以下任一條件成立，建議升級至 V100/A100：
+- [ ] AMP 優化後仍需更快速度
+- [ ] 需要訓練更大模型（>1B 參數）
+- [ ] 需要使用 `torch.compile()` 或 Flash Attention
+- [ ] 預算允許（V100 ~$2000, A100 ~$10000）
+
+---
+
+**文檔撰寫**: OpenCode Agent  
+**最後更新**: 2026-01-16 22:45 UTC+8

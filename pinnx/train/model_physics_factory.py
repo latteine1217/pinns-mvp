@@ -1067,6 +1067,40 @@ def _verify_model_scaling(model: nn.Module, config: Dict[str, Any]) -> None:
         'rho': lambda x: x > 0 if isinstance(x, (int, float)) else True
     }
 )
+def _compute_channel_flow_parameters(
+    Re_tau: float,
+    nu: float,
+    rho: float = 1.0,
+    channel_half_height: float = 1.0
+) -> Dict[str, float]:
+    """
+    從 Re_tau 和 nu 計算 Channel Flow 的其他參數
+
+    物理關係：
+    - Re_τ = u_τ * h / ν
+    - u_τ = Re_τ * ν / h
+    - dP/dx = -ρ * u_τ² / h
+
+    Args:
+        Re_tau: 摩擦雷諾數
+        nu: 運動黏度
+        rho: 流體密度（預設 1.0）
+        channel_half_height: 通道半高（預設 1.0）
+
+    Returns:
+        包含 u_tau 和 pressure_gradient 的字典
+    """
+    u_tau = Re_tau * nu / channel_half_height
+    pressure_gradient = -rho * (u_tau ** 2) / channel_half_height
+
+    # 注意：pressure_gradient 為負值（壓力遞減方向）
+    # 但在配置中通常取絕對值
+    return {
+        'u_tau': u_tau,
+        'pressure_gradient': abs(pressure_gradient)
+    }
+
+
 def _create_vs_pinn_channel_flow_physics(
     config: Dict[str, Any],
     device: torch.device
@@ -1075,28 +1109,53 @@ def _create_vs_pinn_channel_flow_physics(
     physics_cfg = config['physics']
     vs_pinn_cfg = physics_cfg.get('vs_pinn', {})
     scaling_cfg = vs_pinn_cfg.get('scaling_factors', {})
-    
+
     # 物理參數（兼容多種配置格式）
     channel_flow_cfg = physics_cfg.get('channel_flow', {})
-    
+
     # 域配置
     domain_cfg = physics_cfg.get('domain', {})
     if not domain_cfg:
         raise ValueError(
             "VS-PINN requires 'domain' configuration with x/y/z_range"
         )
-    
+
     domain_bounds = {
         'x': domain_cfg.get('x_range', [0.0, 25.13]),
         'y': domain_cfg.get('y_range', [-1.0, 1.0]),
         'z': domain_cfg.get('z_range', [0.0, 9.42]),
     }
-    
-    # 提取物理參數
-    nu = physics_cfg.get('nu', channel_flow_cfg.get('u_tau', 5e-5))
-    dP_dx = channel_flow_cfg.get('pressure_gradient',
-                                  physics_cfg.get('dP_dx', 0.0025))
+
+    # 提取基本物理參數
+    nu = physics_cfg.get('nu', 5e-5)
     rho = physics_cfg.get('rho', 1.0)
+
+    # 從 Re_tau 計算衍生參數（必須提供 Re_tau）
+    if 'Re_tau' not in channel_flow_cfg:
+        raise ValueError(
+            "Channel Flow 配置必須提供 'Re_tau'。"
+            "其他參數（u_tau, pressure_gradient, Re_bulk）將自動計算。"
+        )
+
+    Re_tau = channel_flow_cfg['Re_tau']
+    channel_half_height = (domain_bounds['y'][1] - domain_bounds['y'][0]) / 2.0
+
+    computed_params = _compute_channel_flow_parameters(
+        Re_tau=Re_tau,
+        nu=nu,
+        rho=rho,
+        channel_half_height=channel_half_height
+    )
+
+    u_tau = computed_params['u_tau']
+    dP_dx = computed_params['pressure_gradient']
+
+    logging.info(
+        f"   Channel Flow 參數（從 Re_τ={Re_tau:.1f} 計算）:"
+    )
+    logging.info(f"     ν = {nu:.2e}")
+    logging.info(f"     u_τ = {u_tau:.6f}")
+    logging.info(f"     dP/dx = {dP_dx:.6f}")
     
     # RANS 配置
     enable_rans = vs_pinn_cfg.get('enable_rans', False)

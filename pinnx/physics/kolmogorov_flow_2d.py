@@ -121,6 +121,9 @@ class KolmogorovFlow2D(NavierStokesBase):
         # === Momentum Merging 參數 ===
         self.merge_momentum = (loss_config or {}).get('merge_momentum', False)
 
+        # === 🚀 向量化殘差計算（Wave 3 優化）===
+        self.use_vectorized_residual = (loss_config or {}).get('use_vectorized_residual', False)
+
         # 驗證配置
         self._verify_configuration()
 
@@ -235,6 +238,22 @@ class KolmogorovFlow2D(NavierStokesBase):
         Returns:
             殘差字典 {'momentum_x', 'momentum_y', 'continuity'}
         """
+        # === 🚀 Wave 3 優化：向量化殘差計算（早期返回）===
+        if gradients is None and self.use_vectorized_residual:
+            from pinnx.losses.residuals_vectorized import ns_residual_2d_vectorized
+            forcing_x = self.compute_forcing_term(coords)
+            source = torch.cat([forcing_x, torch.zeros_like(forcing_x)], dim=1)
+            return ns_residual_2d_vectorized(
+                coords=coords,
+                velocity=predictions[:, :2],
+                pressure=predictions[:, 2:3],
+                source=source,
+                nu=float(self.nu),
+                time_coords=time,
+                density=float(self.rho),
+                merge_momentum=self.merge_momentum
+            )
+
         # 提取速度與壓力
         u, v, p = self.parse_velocity_pressure(predictions)
 

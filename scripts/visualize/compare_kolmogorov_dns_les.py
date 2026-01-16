@@ -103,7 +103,7 @@ def plot_vorticity_comparison(
     x: np.ndarray,
     y: np.ndarray,
     dns: np.ndarray,
-    leith: np.ndarray,
+    les: np.ndarray,
     output_path: Path,
     title: str,
 ) -> None:
@@ -112,12 +112,12 @@ def plot_vorticity_comparison(
     fig.suptitle(title, fontsize=13, fontweight="bold")
 
     X, Y = np.meshgrid(x, y, indexing="ij")
-    error = np.abs(leith - dns)
+    error = np.abs(les - dns)
     norm = build_signed_norm(dns)
 
     panels = [
         (dns, "DNS vorticity", "RdBu_r", norm),
-        (leith, "LES vorticity", "RdBu_r", norm),
+        (les, "LES vorticity", "RdBu_r", norm),
         (error, "|Error|", "magma", None),
     ]
 
@@ -138,7 +138,7 @@ def plot_speed_comparison(
     x: np.ndarray,
     y: np.ndarray,
     dns: np.ndarray,
-    leith: np.ndarray,
+    les: np.ndarray,
     output_path: Path,
     title: str,
 ) -> None:
@@ -147,13 +147,13 @@ def plot_speed_comparison(
     fig.suptitle(title, fontsize=13, fontweight="bold")
 
     X, Y = np.meshgrid(x, y, indexing="ij")
-    error = np.abs(leith - dns)
-    vmin = float(min(dns.min(), leith.min()))
-    vmax = float(max(dns.max(), leith.max()))
+    error = np.abs(les - dns)
+    vmin = float(min(dns.min(), les.min()))
+    vmax = float(max(dns.max(), les.max()))
 
     panels = [
         (dns, "DNS |u|", "viridis", vmin, vmax),
-        (leith, "LES |u|", "viridis", vmin, vmax),
+        (les, "LES |u|", "viridis", vmin, vmax),
         (error, "|Error|", "magma", None, None),
     ]
 
@@ -280,7 +280,7 @@ def compare_single_re(
 ) -> None:
     """Run DNS/model comparison for a single Reynolds number."""
     dns_path = Path(f"data/kolmogorov_dns/kolmogorov_dns_{re_val}.npy")
-    default_model_path = Path(f"data/kolmogorov_leith/kolmogorov_leith_re{re_val}.npy")
+    default_model_path = Path(f"data/kolmogorov_les/kolmogorov_les_re{re_val}.npy")
     model_path = model_path or default_model_path
 
     if not dns_path.exists():
@@ -427,7 +427,7 @@ def main() -> None:
         "--model-path",
         type=str,
         default=None,
-        help="LES 檔案路徑（預設使用 Leith）。",
+        help="LES 檔案路徑（預設使用 LES）。",
     )
     parser.add_argument(
         "--model-label",

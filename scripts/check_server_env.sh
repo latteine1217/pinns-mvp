@@ -175,14 +175,14 @@ else
     echo "❌ DNS 資料缺失: ${DNS_FILE}"
 fi
 
-# 檢查 Leith 先驗資料
-LEITH_FILE="${DATA_DIR}/lowfi/kolmogorov_leith/rans_re50_kf4_leith.h5"
-if [ -f "${LEITH_FILE}" ]; then
-    echo "✅ Leith 先驗: ${LEITH_FILE}"
-    SIZE=$(du -h "${LEITH_FILE}" | cut -f1)
+# 檢查 LES 先驗資料
+LES_FILE="${DATA_DIR}/lowfi/kolmogorov_les/rans_re50_kf4_les.h5"
+if [ -f "${LES_FILE}" ]; then
+    echo "✅ LES 先驗: ${LES_FILE}"
+    SIZE=$(du -h "${LES_FILE}" | cut -f1)
     echo "   大小: ${SIZE}"
 else
-    echo "⚠️  Leith 先驗缺失: ${LEITH_FILE}"
+    echo "⚠️  LES 先驗缺失: ${LES_FILE}"
 fi
 
 # 檢查感測器配置

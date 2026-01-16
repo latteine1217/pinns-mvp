@@ -37,9 +37,9 @@ def load_rans_prior_data(
         return {}
     
     rans_path = Path(rans_path)
-    logging.info(f"📂 載入 Leith 先驗資料（NPY mmap）: {rans_path}")
+    logging.info(f"📂 載入 LES 先驗資料（NPY mmap）: {rans_path}")
     
-    # 讀取 Leith 資料（NPY 格式）
+    # 讀取 LES 資料（NPY 格式）
     rans_structure = lowfi_cfg.get('rans_structure', {})
     group_path = rans_structure.get('group_path', 'mean_field')
     
@@ -56,48 +56,48 @@ def load_rans_prior_data(
         )
     
     # ========================================================
-    # ✅ 讀取 Leith 1D 座標格式（memory-mapped）
+    # ✅ 讀取 LES 1D 座標格式（memory-mapped）
     # ========================================================
-    # Leith 模型使用 1D 陣列: x[N], y[N]
+    # LES 模型使用 1D 陣列: x[N], y[N]
     x_file = mean_field_dir / 'x.npy'
     y_file = mean_field_dir / 'y.npy'
     
     if not x_file.exists() or not y_file.exists():
         raise FileNotFoundError(
-            f"Leith 資料格式錯誤！需要 1D 座標 'x.npy' 和 'y.npy'，但找到: {list(mean_field_dir.glob('*.npy'))}"
+            f"LES 資料格式錯誤！需要 1D 座標 'x.npy' 和 'y.npy'，但找到: {list(mean_field_dir.glob('*.npy'))}"
         )
     
     x_rans_1d = np.load(x_file, mmap_mode='r')
     y_rans_1d = np.load(y_file, mmap_mode='r')
-    logging.info(f"   ✅ 讀取 Leith 1D 座標: x[{len(x_rans_1d)}], y[{len(y_rans_1d)}]")
+    logging.info(f"   ✅ 讀取 LES 1D 座標: x[{len(x_rans_1d)}], y[{len(y_rans_1d)}]")
     
     # 讀取速度場（memory-mapped，零拷貝）
     u_rans = np.load(mean_field_dir / 'u.npy', mmap_mode='r')  # [N, N]
     v_rans = np.load(mean_field_dir / 'v.npy', mmap_mode='r')
     
     # ========================================================
-    # ✅ FIX: Leith 無壓力場，設置無效標記
+    # ✅ FIX: LES 無壓力場，設置無效標記
     # ========================================================
-    # Leith 是診斷模型，不求解壓力場
+    # LES 是診斷模型，不求解壓力場
     # 建立零壓力陣列（用於插值器，但不用於 loss）
     p_rans = np.zeros_like(u_rans)
     p_valid = False
-    logging.warning("   ⚠️  Leith 模型無壓力場，將在 loss 計算中跳過壓力項")
+    logging.warning("   ⚠️  LES 模型無壓力場，將在 loss 計算中跳過壓力項")
     
     # ========================================================
-    # ✅ 讀取 Leith 渦流黏度 (nu_t)
+    # ✅ 讀取 LES 渦流黏度 (nu_t)
     # ========================================================
     nu_t_file = mean_field_dir / 'nu_t.npy'
     if not nu_t_file.exists():
         raise FileNotFoundError(
-            f"Leith 資料缺少 'nu_t.npy' 場！找到: {list(mean_field_dir.glob('*.npy'))}"
+            f"LES 資料缺少 'nu_t.npy' 場！找到: {list(mean_field_dir.glob('*.npy'))}"
         )
     
     nu_t_rans = np.load(nu_t_file, mmap_mode='r')
-    logging.info(f"   ✅ 讀取 Leith 渦流黏度: nu_t 範圍=[{nu_t_rans.min():.2e}, {nu_t_rans.max():.2e}]")
+    logging.info(f"   ✅ 讀取 LES 渦流黏度: nu_t 範圍=[{nu_t_rans.min():.2e}, {nu_t_rans.max():.2e}]")
     
-    logging.info(f"   Leith 解析度: {u_rans.shape}")
-    logging.info(f"   Leith 座標範圍: x=[{x_rans_1d.min():.3f}, {x_rans_1d.max():.3f}], "
+    logging.info(f"   LES 解析度: {u_rans.shape}")
+    logging.info(f"   LES 座標範圍: x=[{x_rans_1d.min():.3f}, {x_rans_1d.max():.3f}], "
                  f"y=[{y_rans_1d.min():.3f}, {y_rans_1d.max():.3f}]")
     
     # 建立插值器
@@ -180,13 +180,13 @@ def load_rans_prior_data(
         # ✅ 添加 metadata 標記壓力無效
         'metadata': {
             'pressure_valid': p_valid,
-            'model_type': 'leith',
+            'model_type': 'les',
             'n_extrapolated': int(n_extrap),
             'extrapolation_ratio': float(n_extrap / len(coords_pde))
         }
     }
     
-    logging.info(f"✅ Leith 先驗插值完成 (NPY mmap):")
+    logging.info(f"✅ LES 先驗插值完成 (NPY mmap):")
     logging.info(f"   PDE 配點: {len(u_prior_pde)} 個")
     logging.info(f"   感測點: {len(u_prior_sensors)} 個")
     logging.info(f"   u 統計: min={u_prior_pde.min():.4f}, max={u_prior_pde.max():.4f}, mean={u_prior_pde.mean():.4f}")

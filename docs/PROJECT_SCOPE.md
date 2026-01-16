@@ -11,7 +11,7 @@
 
 **核心能力**：
 - ✅ 稀疏感測器數據 (K ≤ 100) 的全場重建
-- ✅ 低保真物理先驗 (RANS/Leith) 融合
+- ✅ 低保真物理先驗 (RANS/LES) 融合
 - ✅ 高保真參考數據 (JHTDB DNS) 驗證
 - ✅ 物理一致性保證 (守恆律、邊界條件)
 
@@ -28,23 +28,23 @@
 - 強迫：Kolmogorov forcing (kf = 4)
 
 **Low-Fidelity Prior**：
-- 模型：Leith turbulence model
+- 模型：LES turbulence model
 - 變數：`u`, `v`, `nu_t` (無壓力場)
-- 資料格式：HDF5 (.h5)
-- 特點：診斷模型，適合 2D 逆能量級串
+- 資料格式：NPY 目錄（memory-mapped）
+- 特點：大尺度統計穩定，適合 2D 逆能量級串
 
 **配置範例**：
 ```yaml
 # configs/kolmogorov_re50_kf4_K100.yml
 lowfi_prior:
   enabled: true
-  data_path: ./data/lowfi/kolmogorov_rans/rans_re50_kf4_leith.h5
-  data_type: leith
+  data_path: ./data/lowfi_npy/kolmogorov_les/re50
+  data_type: les
 ```
 
 **參考文件**：
-- `docs/archive/experiments/LEITH_PARAMETER_SELECTION_CRITERIA.md`（歷史參考）
-- `scripts/generate/dns/generate_kolmogorov_leith.py`
+- `docs/archive/experiments/LES_PARAMETER_SELECTION_CRITERIA.md`（歷史參考）
+- `scripts/generate/dns/generate_kolmogorov_les.py`
 
 ---
 
@@ -89,12 +89,11 @@ lowfi_prior:
 **pinnx/dataio/lowfi_loader.py**:
 - ❌ `NetCDFReader` - 專案僅使用 HDF5 格式
 - ❌ `DownsampledDNSProcessor` - 不進行 DNS 下採樣
-- ❌ `LESReader` - LES 模型不在專案範圍
+- ❌ `LESReader` - LES 使用 NPY pipeline，reader 不再需要
 
 ### 不支援的場景
 
 **湍流模型**：
-- ❌ LES (Large Eddy Simulation)
 - ❌ DES (Detached Eddy Simulation)
 - ❌ DNS 下採樣作為 prior
 
@@ -157,10 +156,10 @@ rans_data.h5
 │   └── z [Nz] or Z [Nx, Ny, Nz]  # (3D only)
 ```
 
-### HDF5 結構 (Leith Prior)
+### HDF5 結構 (LES Prior)
 
 ```
-leith_data.h5
+les_data.h5
 ├── /mean_field
 │   ├── u [Nx, Ny]      # 速度 u 分量
 │   ├── v [Nx, Ny]      # 速度 v 分量
@@ -170,7 +169,7 @@ leith_data.h5
 ```
 
 **⚠️ 注意**：
-- 壓力場 `p` 在 Leith 資料中可能不存在或為零
+- 壓力場 `p` 在 LES 資料中可能不存在或為零
 - 座標可以是 1D 或 2D meshgrid
 - 所有變數必須為 float32 或 float64
 
@@ -244,7 +243,7 @@ pytest tests/ -v --cov=pinnx
    - Physics-guided CNNs
 
 **但目前專案僅專注於**：
-- ✅ 2D Kolmogorov + Leith
+- ✅ 2D Kolmogorov + LES
 - ✅ 3D Channel + RANS k-ε
 
 ---

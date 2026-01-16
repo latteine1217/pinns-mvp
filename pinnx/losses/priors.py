@@ -5,7 +5,7 @@
 這是實現「少量資料 × 物理先驗」框架的關鍵組件。
 
 === 支援的模型 (SUPPORTED MODELS) ===
-✅ 2D Kolmogorov Flow → Leith turbulence model (no pressure field)
+✅ 2D Kolmogorov Flow → LES turbulence model (no pressure field)
 ✅ 3D Channel Flow → RANS k-ε turbulence model (full fields including pressure)
 
 主要功能:

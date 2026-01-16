@@ -39,7 +39,6 @@ import os
 import logging
 from typing import Dict, Any, Optional, cast
 from pathlib import Path
-from torch.amp.grad_scaler import GradScaler
 import wandb
 
 import pinnx  # 需要存取 pinnx.Config
@@ -144,12 +143,12 @@ class TrainerBuilder:
 
     def _create_training_components(self) -> Dict[str, Any]:
         """
-        創建訓練組件：optimizer, lr_scheduler, amp_scaler, weight_scheduler
+        創建訓練組件：optimizer, lr_scheduler, weight_scheduler
 
-        從 Trainer._setup_optimizer, _setup_amp, _setup_schedulers 遷移
+        從 Trainer._setup_optimizer, _setup_schedulers 遷移
 
         Returns:
-            Dict 包含: optimizer, lr_scheduler, amp_scaler, weight_scheduler
+            Dict 包含: optimizer, lr_scheduler, weight_scheduler
         """
         from pinnx.train.factories import create_optimizer, create_scheduler
 
@@ -182,78 +181,14 @@ class TrainerBuilder:
 
         lr_scheduler = create_scheduler(optimizer, scheduler_cfg)
 
-        # 3. 創建 AMP Scaler
-        amp_scaler, use_amp = self._create_amp_scaler(optimizer, train_cfg)
-
-        # 4. 權重調度器（暫未實現）
+        # 3. 權重調度器（暫未實現）
         weight_scheduler = None
 
         return {
             'optimizer': optimizer,
             'lr_scheduler': lr_scheduler,
-            'amp_scaler': amp_scaler,
-            'weight_scheduler': weight_scheduler,
-            'use_amp': use_amp
+            'weight_scheduler': weight_scheduler
         }
-
-    def _create_amp_scaler(self, optimizer: torch.optim.Optimizer, train_cfg: Dict[str, Any]):
-        """
-        創建 AMP Scaler（從 Trainer._setup_amp 遷移）
-
-        Returns:
-            (scaler, use_amp): GradScaler 和是否啟用 AMP
-        """
-        amp_cfg = train_cfg.get('amp', {})
-        use_amp = amp_cfg.get('enabled', False)
-
-        # AMP 支援檢查
-        is_adam = isinstance(optimizer, torch.optim.Adam)
-        is_cuda = self.device.type == 'cuda'
-        is_mps = self.device.type == 'mps'
-
-        if use_amp and not is_adam:
-            logging.warning(
-                f"⚠️ AMP 僅支援 Adam 優化器，當前使用 {type(optimizer).__name__}，已禁用 AMP"
-            )
-            use_amp = False
-
-        if use_amp and is_mps:
-            logging.warning(
-                "⚠️ MPS 後端的 GradScaler 存在已知問題（不支援 float64）\n"
-                "   建議：(1) 使用 CUDA 設備，或 (2) 關閉 AMP\n"
-                "   已自動禁用 AMP"
-            )
-            use_amp = False
-
-        if use_amp and not is_cuda:
-            logging.warning(
-                f"⚠️ AMP 僅在 CUDA 環境完全支援，當前設備為 {self.device}，已禁用 AMP"
-            )
-            use_amp = False
-
-        # 創建 GradScaler
-        if use_amp:
-            scaler = GradScaler(
-                'cuda',
-                init_scale=2.0**16,
-                growth_factor=2.0,
-                backoff_factor=0.5,
-                growth_interval=2000,
-                enabled=True
-            )
-            logging.info(
-                f"✅ AMP 已啟用（Forward: FP32, Backward: FP16）\n"
-                f"   - 優化器: {type(optimizer).__name__}\n"
-                f"   - 設備: {self.device} (CUDA)\n"
-                f"   - GradScaler 初始 scale: {scaler.get_scale():.0f}"
-            )
-        else:
-            device_type = 'cuda' if is_cuda else 'cpu'
-            scaler = GradScaler(device_type, enabled=False)
-            if amp_cfg.get('enabled', False):
-                logging.info("ℹ️ AMP 配置已禁用（不符合啟用條件）")
-
-        return scaler, use_amp
 
     def _create_strategy_components(self) -> Dict[str, Any]:
         """
@@ -732,7 +667,6 @@ class TrainerBuilder:
             # 訓練組件
             optimizer=training['optimizer'],
             lr_scheduler=training['lr_scheduler'],
-            amp_scaler=training['amp_scaler'],
             weight_scheduler=training['weight_scheduler'],
 
             # 策略組件

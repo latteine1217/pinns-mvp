@@ -122,7 +122,6 @@ training:
     enabled: true
     num_chunks: 16
     causal_tol: 1.0
-  use_amp: false
   gradient_clipping:
     enabled: true
     max_norm: 0.5

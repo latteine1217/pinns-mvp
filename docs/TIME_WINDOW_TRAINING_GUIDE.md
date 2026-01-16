@@ -147,7 +147,7 @@ training:
     causal_tol: 1.0  # 因果容忍度
 ```
 
-### 低保真先驗（RANS/Leith）
+### 低保真先驗（RANS/LES）
 
 時間窗口訓練會依照 `lowfi_prior` 設定，在每個窗口重新插值先驗到該窗口的 PDE 配點。
 若 `lowfi_prior.enabled: true`，請確保 `data_path` 正確，並注意 prior loss 只會在
@@ -156,7 +156,7 @@ training:
 ```yaml
 lowfi_prior:
   enabled: true
-  data_path: ./data/kolmogorov/leith_prior.h5
+  data_path: ./data/lowfi_npy/kolmogorov_les/re50
 ```
 
 ---

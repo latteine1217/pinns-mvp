@@ -42,15 +42,40 @@ class GradientCache2D:
         >>> cache.clear_cache()  # 釋放記憶體
     """
     
-    def __init__(self, device: str = 'cuda'):
+    def __init__(self, device: str = 'cuda', batch_size: Optional[int] = None):
         """
         初始化 2D 梯度快取
-        
+
         Args:
             device: 計算設備 ('cuda', 'cpu', 'mps')
+            batch_size: 🚀 可選的預分配批次大小（減少記憶體分配開銷）
         """
         self.device = device
         self._cache: Optional[Dict[str, torch.Tensor]] = None
+        self._batch_size = batch_size
+        self._output_buffer: Optional[Dict[str, torch.Tensor]] = None
+
+    def _ensure_buffer_allocated(self, batch_size: int, dtype: torch.dtype):
+        """
+        確保輸出緩衝區已分配且大小正確
+
+        Args:
+            batch_size: 當前批次大小
+            dtype: 張量數據類型
+        """
+        if (self._output_buffer is not None and
+            self._output_buffer['u_x'].shape[0] == batch_size and
+            self._output_buffer['u_x'].dtype == dtype):
+            return  # 已分配且大小、類型正確
+
+        # 分配新緩衝區
+        buffer_keys = ['u_x', 'u_y', 'u_xx', 'u_yy',
+                       'v_x', 'v_y', 'v_xx', 'v_yy',
+                       'p_x', 'p_y']
+        self._output_buffer = {
+            key: torch.empty(batch_size, 1, device=self.device, dtype=dtype)
+            for key in buffer_keys
+        }
     
     def compute_all_gradients(
         self,
@@ -123,28 +148,50 @@ class GradientCache2D:
             v_grads, coords, create_graph, retain_graph=keep_graph
         )  # [N, 2]
         
-        # 組裝字典（分割為單獨的列以符合物理模組期望）
-        gradients = {
-            # U 的梯度
-            'u_x': u_grads[:, 0:1],   # ∂u/∂x
-            'u_y': u_grads[:, 1:2],   # ∂u/∂y
-            'u_xx': u_grads_2[:, 0:1],  # ∂²u/∂x²
-            'u_yy': u_grads_2[:, 1:2],  # ∂²u/∂y²
-            
-            # V 的梯度
-            'v_x': v_grads[:, 0:1],   # ∂v/∂x
-            'v_y': v_grads[:, 1:2],   # ∂v/∂y
-            'v_xx': v_grads_2[:, 0:1],  # ∂²v/∂x²
-            'v_yy': v_grads_2[:, 1:2],  # ∂²v/∂y²
-            
-            # P 的梯度
-            'p_x': p_grads[:, 0:1],   # ∂p/∂x
-            'p_y': p_grads[:, 1:2],   # ∂p/∂y
-        }
-        
-        # 快取結果
-        self._cache = gradients
-        return gradients
+        # 🚀 優化：使用預分配緩衝區（如果可用）
+        batch_size = u.shape[0]
+        if self._batch_size is not None:
+            # 確保緩衝區已分配
+            self._ensure_buffer_allocated(batch_size, u.dtype)
+
+            # 使用 copy_() 避免創建新張量（保留梯度追蹤）
+            self._output_buffer['u_x'].copy_(u_grads[:, 0:1])
+            self._output_buffer['u_y'].copy_(u_grads[:, 1:2])
+            self._output_buffer['u_xx'].copy_(u_grads_2[:, 0:1])
+            self._output_buffer['u_yy'].copy_(u_grads_2[:, 1:2])
+            self._output_buffer['v_x'].copy_(v_grads[:, 0:1])
+            self._output_buffer['v_y'].copy_(v_grads[:, 1:2])
+            self._output_buffer['v_xx'].copy_(v_grads_2[:, 0:1])
+            self._output_buffer['v_yy'].copy_(v_grads_2[:, 1:2])
+            self._output_buffer['p_x'].copy_(p_grads[:, 0:1])
+            self._output_buffer['p_y'].copy_(p_grads[:, 1:2])
+
+            # 注意：返回緩衝區引用，調用者不應修改！
+            self._cache = self._output_buffer
+            return self._output_buffer
+        else:
+            # 原始模式：每次創建新字典
+            gradients = {
+                # U 的梯度
+                'u_x': u_grads[:, 0:1],   # ∂u/∂x
+                'u_y': u_grads[:, 1:2],   # ∂u/∂y
+                'u_xx': u_grads_2[:, 0:1],  # ∂²u/∂x²
+                'u_yy': u_grads_2[:, 1:2],  # ∂²u/∂y²
+
+                # V 的梯度
+                'v_x': v_grads[:, 0:1],   # ∂v/∂x
+                'v_y': v_grads[:, 1:2],   # ∂v/∂y
+                'v_xx': v_grads_2[:, 0:1],  # ∂²v/∂x²
+                'v_yy': v_grads_2[:, 1:2],  # ∂²v/∂y²
+
+                # P 的梯度
+                'p_x': p_grads[:, 0:1],   # ∂p/∂x
+                'p_y': p_grads[:, 1:2],   # ∂p/∂y
+            }
+
+            # 快取結果
+            self._cache = gradients
+            return gradients
     
     def _compute_first_order(
         self, 

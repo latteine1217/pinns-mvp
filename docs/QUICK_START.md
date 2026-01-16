@@ -69,7 +69,7 @@ python scripts/generate_kolmogorov_rans.py \
 # Baseline（no prior）
 python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100_vanilla.yml
 
-# With Leith prior（推薦）
+# With LES prior（推薦）
 python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 
 # 啟用 Causal Training（推薦，2026-01-03）

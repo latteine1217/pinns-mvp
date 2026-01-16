@@ -36,10 +36,10 @@ parameters:
     value: true
 
   lowfi_prior.data_path:
-    value: ./data/lowfi_npy/kolmogorov_leith/re50
+    value: ./data/lowfi_npy/kolmogorov_les/re50
 
   lowfi_prior.data_type:
-    value: leith
+    value: les
 
   # 實驗組織
   experiment.name:
@@ -49,7 +49,7 @@ parameters:
     value: "kflow_prior"
 
   experiment.tags:
-    value: ["kflow_re50", "qr_pivot", "K100", "full", "leith_prior", "c2_prior_sweep"]
+    value: ["kflow_re50", "qr_pivot", "K100", "full", "les_prior", "c2_prior_sweep"]
 
   experiment.experiment_id:
     value: "C2"

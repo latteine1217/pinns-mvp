@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Leith 數據驗證腳本
-檢查 Leith 湍流模型數據文件是否存在且格式正確
+LES 數據驗證腳本
+檢查 LES 湍流模型數據文件是否存在且格式正確
 """
 
 import os
@@ -9,26 +9,26 @@ import sys
 import h5py
 import numpy as np
 
-def check_leith_field():
-    """檢查 Leith 場數據文件"""
-    leith_file = 'data/lowfi/kolmogorov_rans/rans_re50_kf4_leith.h5'
+def check_les_field():
+    """檢查 LES 場數據文件"""
+    les_file = 'data/lowfi/kolmogorov_rans/rans_re50_kf4_les.h5'
     
     print("=" * 70)
-    print("📊 檢查 Leith 場數據")
+    print("📊 檢查 LES 場數據")
     print("=" * 70)
     
-    if not os.path.exists(leith_file):
-        print(f"❌ 文件不存在: {leith_file}")
+    if not os.path.exists(les_file):
+        print(f"❌ 文件不存在: {les_file}")
         print("\n💡 建議：")
-        print("   運行 Leith 場生成腳本創建數據文件")
+        print("   運行 LES 場生成腳本創建數據文件")
         return False
     
-    print(f"✅ 文件存在: {leith_file}")
-    print(f"   大小: {os.path.getsize(leith_file) / 1e6:.2f} MB\n")
+    print(f"✅ 文件存在: {les_file}")
+    print(f"   大小: {os.path.getsize(les_file) / 1e6:.2f} MB\n")
     
     # 檢查 HDF5 結構
     try:
-        with h5py.File(leith_file, 'r') as f:
+        with h5py.File(les_file, 'r') as f:
             # 檢查群組
             if 'mean_field' not in f:
                 print("❌ 缺少必要群組: /mean_field")
@@ -100,7 +100,7 @@ def check_leith_field():
             found_forbidden = [var for var in forbidden_vars if var in mean_field]
             if found_forbidden:
                 print(f"⚠️  發現 k-ε 變量: {', '.join(found_forbidden)}")
-                print("   Leith 模型不應包含這些變量\n")
+                print("   LES 模型不應包含這些變量\n")
             else:
                 print("✅ 無 k-ε 殘留變量\n")
             
@@ -111,12 +111,12 @@ def check_leith_field():
     return True
 
 
-def check_leith_sensors():
-    """檢查 Leith Sensor 文件"""
-    sensor_file = 'data/lowfi/kolmogorov_rans/sensors_K100_leith.npz'
+def check_les_sensors():
+    """檢查 LES Sensor 文件"""
+    sensor_file = 'data/lowfi/kolmogorov_rans/sensors_K100_les.npz'
     
     print("=" * 70)
-    print("📍 檢查 Leith Sensor 數據")
+    print("📍 檢查 LES Sensor 數據")
     print("=" * 70)
     
     if not os.path.exists(sensor_file):
@@ -177,9 +177,9 @@ def check_leith_sensors():
         print()
         
         # 檢查 source 標識
-        if 'leith' not in source.lower():
-            print(f"⚠️  Source 不包含 'leith': {source}")
-            print("   建議確認是否為 Leith 模型生成\n")
+        if 'les' not in source.lower():
+            print(f"⚠️  Source 不包含 'les': {source}")
+            print("   建議確認是否為 LES 模型生成\n")
         else:
             print("✅ Source 標識正確\n")
             
@@ -193,18 +193,18 @@ def check_leith_sensors():
 def main():
     """主檢查流程"""
     print("\n" + "=" * 70)
-    print("🔍 Leith 數據驗證工具")
+    print("🔍 LES 數據驗證工具")
     print("=" * 70)
-    print("檢查 Kolmogorov Flow Leith 湍流模型數據的完整性與格式\n")
+    print("檢查 Kolmogorov Flow LES 湍流模型數據的完整性與格式\n")
     
-    field_ok = check_leith_field()
-    sensor_ok = check_leith_sensors()
+    field_ok = check_les_field()
+    sensor_ok = check_les_sensors()
     
     print("=" * 70)
     print("📋 驗證總結")
     print("=" * 70)
-    print(f"Leith 場數據:   {'✅ 通過' if field_ok else '❌ 失敗'}")
-    print(f"Leith Sensor:   {'✅ 通過' if sensor_ok else '❌ 失敗'}")
+    print(f"LES 場數據:   {'✅ 通過' if field_ok else '❌ 失敗'}")
+    print(f"LES Sensor:   {'✅ 通過' if sensor_ok else '❌ 失敗'}")
     print("=" * 70)
     
     if field_ok and sensor_ok:
@@ -218,16 +218,16 @@ def main():
     else:
         print("\n⚠️  驗證失敗，請先生成必要的數據文件。")
         print("\n📝 數據生成步驟（示例）：")
-        print("   1. 生成 Leith 場：")
-        print("      python scripts/generate/generate_leith_field.py \\")
+        print("   1. 生成 LES 場：")
+        print("      python scripts/generate/generate_les_field.py \\")
         print("        --Re 50 --kf 4 \\")
-        print("        --output data/lowfi/kolmogorov_rans/rans_re50_kf4_leith.h5")
+        print("        --output data/lowfi/kolmogorov_rans/rans_re50_kf4_les.h5")
         print()
         print("   2. 生成 QR Sensor：")
-        print("      python scripts/generate/sensors/generate_sensors_qr_leith.py \\")
-        print("        --leith-file data/lowfi/kolmogorov_rans/rans_re50_kf4_leith.h5 \\")
+        print("      python scripts/generate/sensors/generate_sensors_qr_les.py \\")
+        print("        --les-file data/lowfi/kolmogorov_rans/rans_re50_kf4_les.h5 \\")
         print("        --K 100 \\")
-        print("        --output data/lowfi/kolmogorov_rans/sensors_K100_leith.npz")
+        print("        --output data/lowfi/kolmogorov_rans/sensors_K100_les.npz")
         print()
         return 1
 

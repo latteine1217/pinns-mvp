@@ -16,7 +16,7 @@
 """
 
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import torch
 import torch.nn as nn
 import inspect
@@ -82,7 +82,48 @@ class LossManager:
         # 緩存標誌（避免重複日誌）
         self._weights_logged = False
         self._debug_printed = False
-    
+
+    def _batch_compute_mse_losses(
+        self,
+        residuals: Dict[str, torch.Tensor],
+        keys: List[str],
+        weights: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        """
+        批次化計算 MSE 損失（減少 kernel 啟動）
+
+        策略：使用 torch.stack() 批量計算，單次 pow(2) 和 mean()
+
+        Args:
+            residuals: 殘差字典
+            keys: 需要計算的鍵名列表
+            weights: 可選點權重 [N, 1]
+
+        Returns:
+            各項 MSE 損失字典
+        """
+        # 過濾存在的鍵
+        valid_keys = [k for k in keys if k in residuals]
+        if not valid_keys:
+            return {k: torch.tensor(0.0, device=self.device) for k in keys}
+
+        # 🚀 批次化：單次 stack + pow + mean
+        stacked = torch.stack([residuals[k].flatten() for k in valid_keys], dim=0)  # [K, N]
+        squared = stacked.pow(2)  # 單次 pow kernel
+
+        if weights is not None:
+            weights_flat = weights.flatten()
+            squared = squared * weights_flat.unsqueeze(0)  # 廣播 [K, N]
+
+        means = squared.mean(dim=1)  # 單次 mean kernel，輸出 [K]
+
+        # 填充不存在的鍵
+        result = {k: torch.tensor(0.0, device=self.device) for k in keys}
+        for i, k in enumerate(valid_keys):
+            result[k] = means[i]
+
+        return result
+
     def _compute_momentum_losses(
         self,
         residuals: Dict[str, torch.Tensor],
@@ -114,28 +155,32 @@ class LossManager:
             momentum_x_loss = momentum_loss  # 合併後只有一個 momentum loss
             momentum_y_loss = torch.tensor(0.0, device=self.device)
         else:
-            # 標準模式：分開的 momentum_x 和 momentum_y
-            momentum_x_sq = residuals['momentum_x'].pow(2)
-            momentum_y_sq = residuals['momentum_y'].pow(2)
-            
-            if weights is not None:
-                momentum_x_loss = torch.mean(weights * momentum_x_sq)
-                momentum_y_loss = torch.mean(weights * momentum_y_sq)
+            # 🚀 優化：批次化計算所有標準模式損失
+            # 原始實現需要 6+ 次 kernel 啟動，批次化後只需 3 次
+            loss_keys = ['momentum_x', 'momentum_y', 'continuity']
+            if is_vs_pinn:
+                loss_keys.append('momentum_z')
+
+            batch_losses = self._batch_compute_mse_losses(residuals, loss_keys, weights)
+
+            momentum_x_loss = batch_losses['momentum_x']
+            momentum_y_loss = batch_losses['momentum_y']
+            momentum_z_loss = batch_losses.get('momentum_z', torch.tensor(0.0, device=self.device))
+            continuity_loss = batch_losses['continuity']
+
+        # 合併模式下仍需計算 continuity（如果上面進入了 if 分支）
+        if 'momentum' in residuals:
+            # z 動量（僅 3D VS-PINN）
+            if is_vs_pinn and 'momentum_z' in residuals:
+                momentum_z_sq = residuals['momentum_z'].pow(2)
+                momentum_z_loss = torch.mean(weights * momentum_z_sq) if weights is not None else torch.mean(momentum_z_sq)
             else:
-                momentum_x_loss = torch.mean(momentum_x_sq)
-                momentum_y_loss = torch.mean(momentum_y_sq)
-        
-        # z 動量（僅 3D VS-PINN）
-        if is_vs_pinn and 'momentum_z' in residuals:
-            momentum_z_sq = residuals['momentum_z'].pow(2)
-            momentum_z_loss = torch.mean(weights * momentum_z_sq) if weights is not None else torch.mean(momentum_z_sq)
-        else:
-            momentum_z_loss = torch.tensor(0.0, device=self.device)
-        
-        # 連續方程
-        continuity_sq = residuals['continuity'].pow(2)
-        continuity_loss = torch.mean(weights * continuity_sq) if weights is not None else torch.mean(continuity_sq)
-        
+                momentum_z_loss = torch.tensor(0.0, device=self.device)
+
+            # 連續方程
+            continuity_sq = residuals['continuity'].pow(2)
+            continuity_loss = torch.mean(weights * continuity_sq) if weights is not None else torch.mean(continuity_sq)
+
         return momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss
     
     def compute_pde_loss(
@@ -522,7 +567,7 @@ class LossManager:
             lowfi_prior = data_batch.get('lowfi_prior', {})
             
             # ========================================================
-            # ✅ FIX: 檢查壓力有效性（Leith 模型無壓力）
+            # ✅ FIX: 檢查壓力有效性（LES 模型無壓力）
             # ========================================================
             lowfi_metadata = lowfi_prior.get('metadata', {})
             pressure_valid = lowfi_metadata.get('pressure_valid', True)
@@ -552,7 +597,7 @@ class LossManager:
                         raise ValueError(f"不支援的模型輸出維度: {u_pred_pde_physical.shape[1]}")
                     
                 else:
-                    # ✅ Leith 模型：僅兩變數 (u, v)，跳過壓力
+                    # ✅ LES 模型：僅兩變數 (u, v)，跳過壓力
                     lowfi_data = torch.cat([
                         lowfi_prior['u_pde'],
                         lowfi_prior['v_pde']
@@ -566,7 +611,7 @@ class LossManager:
                     ], dim=1)
                     
                     if epoch == 0:
-                        logging.info("⚠️  Leith 模型：跳過壓力項，僅使用 u, v 計算先驗損失")
+                        logging.info("⚠️  LES 模型：跳過壓力項，僅使用 u, v 計算先驗損失")
                 
                 # 計算先驗一致性損失
                 prior_losses = self.prior_loss_manager.low_fidelity_loss(

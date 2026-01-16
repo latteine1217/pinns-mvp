@@ -1,10 +1,10 @@
 experiment:
-  name: kolmogorov_re50_kf4_K100_leith_prior
-  version: v3.1_leith_prior
+  name: kolmogorov_re50_kf4_K100_les_prior
+  version: v3.1_les_prior
   seed: 42
   device: auto
   precision: float32
-  description: Re=50 with Leith turbulence prior (適合 2D 湍流，無 k/epsilon). Enhanced
+  description: Re=50 with LES turbulence prior (適合 2D 湍流，無 k/epsilon). Enhanced
     with L-BFGS fine-tuning.
   group: kflow_baseline
   tags:
@@ -14,10 +14,6 @@ experiment:
 reproducibility:
   deterministic: true
   benchmark: false
-  num_workers: 8  # 推薦: CPU 核心數 / 6 (48 threads / 6 = 8)
-  pin_memory: true  # 啟用 CUDA 記憶體釘選 (P100/GPU 環境)
-  persistent_workers: true  # 保持 worker 持續運行，減少重啟開銷
-  prefetch_factor: 2  # 每個 worker 預先載入的 batch 數量
 data:
   source: kolmogorov_dns
   dataset: re50_kf4
@@ -45,8 +41,8 @@ data:
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
   enabled: true
-  data_path: ./data/lowfi_npy/kolmogorov_leith/re50
-  data_type: leith
+  data_path: ./data/lowfi_npy/kolmogorov_les/re50
+  data_type: les
   rans_structure:
     group_path: /mean_field
     field_mapping:
@@ -66,13 +62,7 @@ lowfi_prior:
     p: 0.0
 normalization:
   type: training_data_norm
-  variable_order:
-  - u
-  - v
-  - p
   params: {}
-  noise_sigma: 0.0
-  dropout_prob: 0.0
   steady_state:
     enabled: true
     time_window:
@@ -85,23 +75,28 @@ sensors:
   dns_values_file: ./data/kolmogorov_sensors/re100/sensors_temporal_K400_N256_t0-20_dns_values.npz
 model:
   type: fourier_vs_mlp
-  in_dim: 3  # [t, x, y]
-  out_dim: 3  # [u, v, p]
+  in_dim: 3
+  out_dim: 3
   width: 256
   depth: 6
   activation: swish
   block_type: resnet
-  
-  # ========== Fourier Features 配置 ==========
-  # 可選配置方式：
-  # 
-  # 方式 1: 標準 Fourier（當前使用，需要 periodicity_weight 軟約束）
   fourier_features:
     type: hybrid
     axes:
-      0: {type: standard, n_modes: 12, sigma: 8.0, use_2pi: true}
-      1: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
-      2: {type: periodic, domain_size: 6.283185307179586, n_modes: 8}
+      0:
+        type: standard
+        n_modes: 12
+        sigma: 8.0
+        use_2pi: true
+      1:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 8
+      2:
+        type: periodic
+        domain_size: 6.283185307179586
+        n_modes: 8
     trainable_fourier: false
   initialization:
     type: siren
@@ -132,14 +127,13 @@ physics:
   boundary_conditions:
     periodic_x: true
     periodic_y: true
-# ========== 損失函數配置 ==========
 losses:
   data_weight: 10.0
   momentum_x_weight: 1.0
   momentum_y_weight: 1.0
   continuity_weight: 2.0
   prior_weight: 10.0
-  periodicity_weight: 10.0  # 使用 type: standard 時需要；使用 type: hybrid 時設為 0
+  periodicity_weight: 10.0
   normalize_losses: false
   adaptive_weighting: false
   causal_weighting: true
@@ -154,12 +148,12 @@ training:
     - 0.999
     weight_decay: 1.0e-05
   lr_scheduler:
-    type: warmup_exponential  # JAXpi 風格（推薦）
-    warmup_steps: 2000        # Warmup 步數
-    decay_rate: 0.9           # 每 decay_steps 乘以此係數
-    decay_steps: 2000         # 衰減週期
-    min_lr: 1.0e-6            # 最小學習率
-    staircase: false          # 平滑衰減
+    type: warmup_exponential
+    warmup_steps: 2000
+    decay_rate: 0.9
+    decay_steps: 2000
+    min_lr: 1.0e-06
+    staircase: false
   epochs: 10000
   batch_size: 20000
   validation_freq: 50
@@ -172,8 +166,6 @@ training:
     adaptive_sampling: false
     boundary_points: 1000
   gradient_clip: 1.0
-  amp:
-    enabled: false
 curriculum:
   enable: true
   stages:
@@ -246,6 +238,6 @@ logging:
   wandb: true
   save_stage_checkpoints: true
 output:
-  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_leith_prior
-  results_dir: ./results/kolmogorov_re50_kf4_K100_leith_prior
-  visualization_dir: ./results/kolmogorov_re50_kf4_K100_leith_prior/visualizations
+  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_les_prior
+  results_dir: ./results/kolmogorov_re50_kf4_K100_les_prior
+  visualization_dir: ./results/kolmogorov_re50_kf4_K100_les_prior/visualizations
