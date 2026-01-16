@@ -20,12 +20,12 @@ import numpy as np
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
-from pinnx.models.fourier_mlp import FourierVS_MLP
+from pinnx.models.fourier_mlp import PINNNet
 
 
 def create_test_model(device):
     """創建測試模型（與 S2_K200 配置一致）"""
-    model = FourierVS_MLP(
+    model = PINNNet(
         in_dim=3,  # (x, y, t)
         out_dim=3,  # (u, v, p)
         width=768,
