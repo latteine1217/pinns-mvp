@@ -10,6 +10,7 @@
 
 # 環境設定
 export PYTHONPATH="${HOME}/pinns-sparse-flow:${PYTHONPATH}"
+export WANDB_MODE=disabled  # 強制禁用 WandB 以避免初始化超時
 
 # 項目目錄
 cd ~/pinns-sparse-flow
@@ -28,9 +29,14 @@ echo "=========================================="
 python3 --version
 echo "=========================================="
 
-# 複製配置文件並修改 epochs
+# 複製配置文件並修改 epochs + 確保 wandb 禁用
 cp configs/profiling_test.yml /tmp/profiling_simple_$SLURM_JOB_ID.yml
 sed -i 's/epochs:.*/epochs: 10/' /tmp/profiling_simple_$SLURM_JOB_ID.yml
+sed -i 's/wandb:.*/wandb: false/g' /tmp/profiling_simple_$SLURM_JOB_ID.yml
+
+echo "配置文件檢查 (確認 wandb 已禁用):"
+grep -E 'wandb:|epochs:' /tmp/profiling_simple_$SLURM_JOB_ID.yml
+echo ""
 
 # 運行標準訓練腳本
 echo "🔍 運行效能分析（10 epochs）..."
