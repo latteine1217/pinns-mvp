@@ -39,7 +39,7 @@ data:
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
-  enabled: true
+  enabled: false  # 禁用以避免資料缺失問題
   data_path: ./data/lowfi_npy/kolmogorov_les/re50
   data_type: les
   rans_structure:
