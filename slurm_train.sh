@@ -33,6 +33,9 @@ echo "==========================="
 
 # 環境變數設定
 export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH}"
+export WANDB_MODE=offline
+export MASTER_ADDR=$(hostname)
+export MASTER_PORT=29500
 
 # WandB 配置（從專案 .wandb_config 讀取或手動設置）
 if [ -f "${PROJECT_DIR}/.wandb_config" ]; then
@@ -44,7 +47,6 @@ fi
 
 # WandB 模式：offline（訓練完手動同步）或 online（即時上傳）
 # 推薦長時間訓練使用 offline，避免網路問題
-export WANDB_MODE=offline
 
 cd ${PROJECT_DIR}
 
@@ -95,7 +97,7 @@ START_TIME=$(date +%s)
 
 # 開始訓練
 echo "🚀 開始訓練..."
-srun python3 scripts/train/train.py --cfg ${CONFIG_FILE}
+torchrun --nproc_per_node=2 scripts/train/train.py --cfg ${CONFIG_FILE}
 
 TRAIN_EXIT_CODE=$?
 END_TIME=$(date +%s)
