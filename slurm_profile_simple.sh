@@ -30,7 +30,17 @@ python3 --version
 echo "=========================================="
 
 # 複製配置文件並修改 epochs + 確保 wandb 禁用
-cp configs/profiling_test.yml /tmp/profiling_simple_$SLURM_JOB_ID.yml
+# 支援環境變數 CONFIG，預設使用 profiling_test.yml
+CONFIG_FILE="${CONFIG:-configs/profiling_test.yml}"
+
+echo "使用配置文件: $CONFIG_FILE"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "❌ 錯誤: 配置文件不存在 - $CONFIG_FILE"
+    exit 1
+fi
+
+cp "$CONFIG_FILE" /tmp/profiling_simple_$SLURM_JOB_ID.yml
 sed -i 's/epochs:.*/epochs: 10/' /tmp/profiling_simple_$SLURM_JOB_ID.yml
 sed -i 's/wandb:.*/wandb: false/g' /tmp/profiling_simple_$SLURM_JOB_ID.yml
 
