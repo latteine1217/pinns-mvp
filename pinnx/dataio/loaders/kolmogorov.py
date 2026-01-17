@@ -30,11 +30,20 @@ def _load_kolmogorov_payload(data_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _set_from_payload(target: Dict[str, Any], key: str, value: Any, label: str, updated: list) -> None:
+def _set_from_payload(
+    target: Dict[str, Any],
+    key: str,
+    value: Any,
+    label: str,
+    updated: list,
+    override: bool = True
+) -> None:
     """以 NPY 內容覆蓋設定，保留 YAML 僅作缺值備援。"""
     if value is None:
-        return
+        raise ValueError(f"Kolmogorov DNS payload 缺少必要欄位: {label}")
     if key in target and target[key] not in (None, '', {}) and target[key] != value:
+        if not override:
+            return
         logging.warning(
             f"⚠️  kolmogorov_config.{label} YAML={target[key]} 覆寫為 NPY={value}"
         )
@@ -42,64 +51,70 @@ def _set_from_payload(target: Dict[str, Any], key: str, value: Any, label: str, 
     updated.append(label)
 
 
-def _backfill_kolmogorov_config(kol_cfg: Dict[str, Any], payload: Dict[str, Any]) -> None:
+def _backfill_kolmogorov_config(
+    kol_cfg: Dict[str, Any],
+    payload: Dict[str, Any],
+    prefer_config_time_range: bool = False
+) -> None:
     """從資料檔 config 回填 kolmogorov_config（NPY 優先，YAML 作輔助）。"""
     if not isinstance(payload, dict):
-        return
-    file_cfg = payload.get('config', {})
+        raise ValueError("Kolmogorov DNS payload 必須是 dict")
+    file_cfg = payload.get('config')
     if not isinstance(file_cfg, dict):
-        return
-
+        raise ValueError("Kolmogorov DNS payload 缺少 config 欄位")
+    if 'time' not in payload:
+        raise ValueError("Kolmogorov DNS payload 缺少 time 欄位")
+    if not any(var in payload for var in ('u', 'v', 'p')):
+        raise ValueError("Kolmogorov DNS payload 缺少 u/v/p 資料")
+    
     required_physics = ['nu', 'k_f', 'A', 'L']
     missing_physics = [key for key in required_physics if file_cfg.get(key) is None]
     if missing_physics:
-        logging.warning(
-            f"⚠️  NPY config 缺少物理參數: {', '.join(missing_physics)}，將嘗試從 YAML 補齊"
+        raise ValueError(
+            f"Kolmogorov DNS payload 缺少物理參數: {', '.join(missing_physics)}"
         )
+
 
     updated_keys = []
 
     _set_from_payload(kol_cfg, 'dt', file_cfg.get('dt'), 'dt', updated_keys)
     _set_from_payload(kol_cfg, 'L', file_cfg.get('L'), 'L', updated_keys)
+    
+    time_vals = payload['time']
+    time_arr = np.asarray(time_vals)
+    if time_arr.size == 0:
+        raise ValueError("Kolmogorov DNS payload time 軸為空")
+    _set_from_payload(
+        kol_cfg,
+        'time_range',
+        [float(time_arr.min()), float(time_arr.max())],
+        'time_range',
+        updated_keys,
+        override=not prefer_config_time_range
+    )
 
-    if not kol_cfg.get('time_range'):
-        time_vals = payload.get('time')
-        if time_vals is not None:
-            time_arr = np.asarray(time_vals)
-            if time_arr.size > 0:
-                _set_from_payload(
-                    kol_cfg,
-                    'time_range',
-                    [float(time_arr.min()), float(time_arr.max())],
-                    'time_range',
-                    updated_keys,
-                )
-        elif file_cfg.get('T_end') is not None:
-            _set_from_payload(
-                kol_cfg,
-                'time_range',
-                [0.0, float(file_cfg['T_end'])],
-                'time_range',
-                updated_keys,
-            )
 
     n_val = file_cfg.get('N')
     if n_val is None:
-        u_data = payload.get('u')
-        if isinstance(u_data, np.ndarray) and u_data.ndim >= 2:
-            n_val = u_data.shape[-1]
-    if n_val is not None:
-        _set_from_payload(
-            kol_cfg,
-            'resolution',
-            {'x': int(n_val), 'y': int(n_val)},
-            'resolution',
-            updated_keys,
-        )
+        for key in ('u', 'v', 'p'):
+            data_arr = payload.get(key)
+            if isinstance(data_arr, np.ndarray) and data_arr.ndim >= 2:
+                n_val = data_arr.shape[-1]
+                break
+    if n_val is None:
+        raise ValueError("Kolmogorov DNS payload 缺少解析度 N")
+    _set_from_payload(
+        kol_cfg,
+        'resolution',
+        {'x': int(n_val), 'y': int(n_val)},
+        'resolution',
+        updated_keys,
+    )
 
     vars_from_payload = [var for var in ['u', 'v', 'p'] if var in payload]
-    if vars_from_payload:
-        _set_from_payload(kol_cfg, 'variables', vars_from_payload, 'variables', updated_keys)
+    if not vars_from_payload:
+        raise ValueError("Kolmogorov DNS payload 缺少變量 (u/v/p)")
+    _set_from_payload(kol_cfg, 'variables', vars_from_payload, 'variables', updated_keys)
 
     physics_params = kol_cfg.get('physics_params') or {}
     if 'physics_params' not in kol_cfg:
@@ -144,7 +159,7 @@ def _validate_kolmogorov_config(kol_cfg: Dict[str, Any]) -> None:
 
     if missing:
         raise ValueError(
-            "Kolmogorov 訓練參數不足，請確認 NPY config 或 YAML 已提供："
+            "Kolmogorov DNS 參數不足，請確認 NPY payload 已提供："
             f" {', '.join(missing)}"
         )
 
@@ -273,13 +288,18 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     data_path = Path(kol_cfg['data_path'])
 
     payload = None
-    if data_path.is_file():
-        payload = _load_kolmogorov_payload(data_path)
-        if payload is not None:
-            _backfill_kolmogorov_config(kol_cfg, payload)
-            _validate_kolmogorov_config(kol_cfg)
-        else:
-            raise ValueError(f"無法從 NPY 回填配置: {data_path}")
+    if not data_path.is_file():
+        raise ValueError(f"Kolmogorov DNS 檔案不存在: {data_path}")
+    payload = _load_kolmogorov_payload(data_path)
+    if payload is None:
+        raise ValueError(f"無法從 NPY 回填配置: {data_path}")
+    prefer_config_time_range = bool(kol_cfg.get('time_range'))
+    _backfill_kolmogorov_config(
+        kol_cfg,
+        payload,
+        prefer_config_time_range=prefer_config_time_range
+    )
+    _validate_kolmogorov_config(kol_cfg)
 
     time_range = kol_cfg['time_range']
     t_start, t_end = time_range
@@ -635,7 +655,7 @@ def prepare_time_window_data(
     config: Dict[str, Any],
     device: torch.device,
     window_idx: int,
-    num_windows: int,
+    num_windows: int | None,
     prev_window_ic: Dict[str, torch.Tensor] | None = None
 ) -> Dict[str, Any]:
     """
@@ -680,18 +700,31 @@ def prepare_time_window_data(
     """
     # ========== 1. 計算當前窗口的時間範圍 ==========
     kol_cfg = config['data']['kolmogorov_config']
+    data_path = Path(kol_cfg['data_path'])
+    payload = _load_kolmogorov_payload(data_path) if data_path.is_file() else None
+    prefer_config_time_range = bool(kol_cfg.get('time_range'))
+    if payload is not None:
+        _backfill_kolmogorov_config(
+            kol_cfg,
+            payload,
+            prefer_config_time_range=prefer_config_time_range
+        )
     t_total_start, t_total_end = kol_cfg['time_range']
-    
-    # 窗口劃分（無重疊）
-    window_duration = (t_total_end - t_total_start) / num_windows
-    t_window_start = t_total_start + window_idx * window_duration
-    t_window_end = t_window_start + window_duration
-    
+
+    if num_windows is None:
+        num_windows = 3
+        logging.info("ℹ️  num_time_windows 未設定，預設使用 3 個時間窗口")
+
     # 檢查窗口索引有效性
     if window_idx < 0 or window_idx >= num_windows:
         raise ValueError(
             f"Invalid window_idx={window_idx}. Must be in [0, {num_windows-1}]"
         )
+
+    # 窗口劃分（無重疊）
+    window_duration = (t_total_end - t_total_start) / num_windows
+    t_window_start = t_total_start + window_idx * window_duration
+    t_window_end = t_window_start + window_duration
     
     logging.info(f"{'='*70}")
     logging.info(f"🪟 準備時間窗口資料")

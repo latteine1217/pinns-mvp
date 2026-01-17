@@ -1359,7 +1359,12 @@ def main():
         weighters = create_weighters(config, model, device, physics=physics)
         
         # 🆕 檢查是否啟用時間窗口訓練（改進判斷邏輯）
-        num_windows = config['training'].get('num_time_windows', 1)
+        training_cfg = config.get('training', {})
+        if 'num_time_windows' not in training_cfg or training_cfg.get('num_time_windows') is None:
+            training_cfg['num_time_windows'] = 3
+            logger.info("ℹ️  num_time_windows 未設定，預設使用 3 個時間窗口")
+        num_windows = training_cfg.get('num_time_windows', 3)
+        config['training'] = training_cfg
         
         # 驗證 time window 配置完整性
         use_time_window = False

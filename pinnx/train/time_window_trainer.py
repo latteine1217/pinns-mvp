@@ -19,6 +19,7 @@ import logging
 import os
 import numpy as np
 from typing import Dict, List, Tuple, Optional
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +85,12 @@ class TimeWindowTrainer:
         self.data_normalizer = data_normalizer
         
         # 提取時間窗口配置
-        self.num_windows = config['training'].get('num_time_windows', 1)
-        self.overlap_ratio = config['training'].get('time_window_overlap', 0.0)  # Physics Review: 使用 0.0（無重疊）
+        training_cfg = config.get('training', {})
+        if 'num_time_windows' not in training_cfg or training_cfg.get('num_time_windows') is None:
+            training_cfg['num_time_windows'] = 3
+            logger.info("ℹ️  num_time_windows 未設定，預設使用 3 個時間窗口")
+        self.num_windows = training_cfg.get('num_time_windows', 3)
+        self.overlap_ratio = training_cfg.get('time_window_overlap', 0.0)  # Physics Review: 使用 0.0（無重疊）
         self.t_range = self._extract_time_range(config)
         
         # 生成窗口劃分
@@ -113,7 +118,26 @@ class TimeWindowTrainer:
         - JHTDB: config['data']['jhtdb_config']['time_range']
         """
         if 'kolmogorov_config' in config['data'] and config['data']['kolmogorov_config'].get('enabled', False):
-            return tuple(config['data']['kolmogorov_config']['time_range'])
+            kol_cfg = config['data']['kolmogorov_config']
+            time_range = kol_cfg.get('time_range')
+            if time_range:
+                return tuple(time_range)
+
+            data_path = kol_cfg.get('data_path')
+            if not data_path:
+                raise ValueError("Kolmogorov DNS 必須提供 data_path")
+            from pinnx.dataio.loaders.kolmogorov import _load_kolmogorov_payload, _backfill_kolmogorov_config
+            payload = _load_kolmogorov_payload(Path(data_path))
+            if not isinstance(payload, dict):
+                raise ValueError("Kolmogorov DNS payload 必須是 dict")
+            _backfill_kolmogorov_config(
+                kol_cfg,
+                payload,
+                prefer_config_time_range=True
+            )
+            if not kol_cfg.get('time_range'):
+                raise ValueError("Kolmogorov DNS payload 缺少 time_range")
+            return tuple(kol_cfg['time_range'])
         elif 'jhtdb_config' in config['data'] and config['data']['jhtdb_config'].get('enabled', False):
             return tuple(config['data']['jhtdb_config']['time_range'])
         else:
