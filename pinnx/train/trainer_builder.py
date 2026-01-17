@@ -331,23 +331,22 @@ class TrainerBuilder:
             return None
 
     def _create_early_stopping_config(self) -> Dict[str, Any]:
-        """創建 Early Stopping Config（從 Trainer._setup_early_stopping 遷移）"""
+        """創建 Early Stopping Config（目標值機制）"""
         train_cfg = self.config['training']
         early_stopping_cfg = train_cfg.get('early_stopping', {})
 
         config = {
             'enabled': early_stopping_cfg.get('enabled', False),
-            'patience': early_stopping_cfg.get('patience', 50),
-            'min_delta': early_stopping_cfg.get('min_delta', 1e-6),
             'convergence_threshold': early_stopping_cfg.get('convergence_threshold', None),
             'monitor': early_stopping_cfg.get('monitor', 'total_loss'),  # 監控指標
             'restore_best_weights': early_stopping_cfg.get('restore_best_weights', True)  # 是否恢復最佳模型
         }
 
         if config['enabled']:
-            logging.info(f"✅ 早停機制啟用（patience={config['patience']}, min_delta={config['min_delta']}, monitor={config['monitor']}）")
-        if config['convergence_threshold'] is not None:
-            logging.info(f"✅ 快速收斂檢查啟用（threshold={config['convergence_threshold']:.2e}）")
+            if config['convergence_threshold'] is not None:
+                logging.info(f"✅ 早停機制啟用（目標值: {config['convergence_threshold']:.2e}, 監控指標: {config['monitor']}）")
+            else:
+                logging.warning(f"⚠️  早停已啟用但未設定 convergence_threshold，將訓練至 max_epochs")
 
         return config
 

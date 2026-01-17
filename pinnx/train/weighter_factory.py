@@ -133,13 +133,13 @@ def create_weighters(config: Dict[str, Any], model: nn.Module, device: torch.dev
                     initial_weights[mapped] = float(value)
         
         # JaxPI 對齊參數（2026-01-08 更新）
-        # - update_frequency: 500 (折衷值：JaxPI 每步更新，但 PINNs 用低頻減少開銷)
+        # - update_frequency: 1000 (JaxPI 默認值)
         # - momentum: 0.95 (JaxPI 默認值，較高的平滑係數提升穩定性)
         # - min/max_weight: [0.1, 10.0] (相對範圍，防止極端值)
         weighters['gradnorm'] = GradNormWeighter(
             model=model,
             loss_names=adaptive_terms,
-            update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 500)),  # 推薦: 500
+            update_frequency=weight_cfg.get('update_every_steps', loss_cfg.get('weight_update_freq', 1000)),  # JaxPI 默認: 1000
             momentum=weight_cfg.get('momentum', loss_cfg.get('grad_norm_momentum', 0.95)),  # JaxPI 推薦: 0.95
             initial_weights=initial_weights,
             device=str(device),

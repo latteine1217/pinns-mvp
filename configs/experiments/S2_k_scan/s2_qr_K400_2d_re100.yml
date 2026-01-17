@@ -23,15 +23,24 @@ data:
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
-    description: Kolmogorov flow (Re=100, k_f=4, 2D periodic, weak turbulence) [物理參數由
-      DNS NPY 自動同步]
+    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
+    resolution:
+      x: 256
+      y: 256
     time_range:
     - 15.0
     - 35.0
+    dt: 0.001
     variables:
     - u
     - v
     - p
+    physics_params:
+      Re: 50.0
+      Re_definition: Musacchio_Boffetta_2014
+      nu: 0.039374
+      k_f: 4
+      forcing_amplitude: 1.0
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
@@ -59,8 +68,8 @@ model:
   type: fourier_vs_mlp
   in_dim: 3
   out_dim: 3
-  width: 768
-  depth: 2
+  width: 384  # 使用 4×384 架構
+  depth: 4   # 使用 4×384 架構
   activation: swish
   block_type: piratenet
   use_rwf: true
@@ -86,8 +95,15 @@ model:
   - p
 physics:
   type: kolmogorov_flow_2d
+  nu: 0.039374
   rho: 1.0
-  forcing: {}
+  forcing:
+    k_f: 4
+    amplitude: 1.0
+  kolmogorov_flow:
+    Re: 50.0
+    k_f: 4
+    forcing_amplitude: 1.0
   domain:
     x_range:
     - 0.0
@@ -146,17 +162,17 @@ training:
     decay_steps: 2000
     min_lr: 1.0e-06
     staircase: false
-  epochs: 300000
-  batch_size: 8000
+  epochs: 60000  # 3 time windows × 20000 epochs each
+  batch_size: 12000  # Full batch optimization (涵蓋 90%+ 數據點)
   validation_freq: 100
-  checkpoint_freq: 2000
+  checkpoint_freq: 1000  # 更頻繁地保存 checkpoint
   log_interval: 20
   early_stopping:
     enabled: true
-    patience: 2000
+    patience: 1000  # 降低 patience 以配合較短的訓練
     min_delta: 1.0e-06
   sampling:
-    N_pde: 6000
+    N_pde: 9000  # 配合 batch_size=12000 保持 3:4 比例
     adaptive_sampling: false
     boundary_points: 500
   gradient_clip: 1.0
@@ -225,13 +241,4 @@ test_acceptance:
   baseline:
   - training_converged: true
   - no_feature_engineering: true
-usage_notes: "⚠️ 極高風險實驗配置 ⚠️\n\n\U0001F52C 實驗目的：\n  - 測試極限感測器數量 (K=400) 的行為\n  - 驗證\
-  \ condition number > 5e8 是否可訓練\n  - 探索數值穩定性的絕對極限\n\n⚠️ 風險警告：\n  - Condition number\
-  \ > 5×10⁸ 極高（超出 float32 精度極限）\n  - 極高概率出現數值不穩定（NaN/Inf）\n  - 幾乎不可能收斂或結果無意義\n  -\
-  \ 不建議用於任何實際用途\n\n\U0001F6E1️ 穩定性措施：\n  - 降低學習率：1e-3 → 3e-4\n  - 加強梯度裁剪：5.0 → 1.0\n\
-  \  - 啟用權重衰減：1e-5\n  - 增加 L2 正則化\n\n\U0001F680 執行指令：\n  python scripts/train/train.py\
-  \ --cfg configs/experiments/S2_k_scan/s2_qr_K400_2d_re100.yml --device cuda\n\n\U0001F4CA\
-  \ 預期結果：\n  - 訓練時間：可能在幾小時內失敗\n  - 成功率：< 10%（極可能失敗）\n  - 如果成功：性能可能不如 K=50/K=100/K=200\n\
-  \  - 如果失敗：驗證了 K=400 不可行\n\n\U0001F50D 監控重點：\n  - 前 100 epochs：梯度是否爆炸/消失\n  - Loss\
-  \ 曲線：是否震盪或發散\n  - NaN/Inf 出現頻率\n  - Checkpoint 品質\n\n\U0001F4A1 建議：\n  - 僅用於理論研究目的\n\
-  \  - 如果前 500 epochs 出現 NaN → 立即中止\n  - 優先使用 K=50/K=100 作為生產配置\n  - 此實驗主要用於驗證理論分析正確性\n"
+usage_notes: "⚠️ 極高風險實驗配置 ⚠️\n\n🔬 實驗目的：\n  - 測試極限感測器數量 (K=400) 的行為\n  - 驗證 condition number > 5e8 是否可訓練\n  - 探索數值穩定性的絕對極限\n\n⚠️ 風險警告：\n  - Condition number > 5×10⁸ 極高（超出 float32 精度極限）\n  - 極高概率出現數值不穩定（NaN/Inf）\n  - 幾乎不可能收斂或結果無意義\n  - 不建議用於任何實際用途\n\n🛡️ 穩定性措施：\n  - 降低學習率：1e-3 → 3e-4\n  - 加強梯度裁剪：5.0 → 1.0\n  - 啟用權重衰減：1e-5\n  - 增加 L2 正則化\n\n🚀 執行指令：\n  python scripts/train/train.py --cfg configs/experiments/S2_k_scan/s2_qr_K400_2d_re100.yml --device cuda\n\n📊 預期結果：\n  - 訓練時間：可能在幾小時內失敗\n  - 成功率：< 10%（極可能失敗）\n  - 如果成功：性能可能不如 K=50/K=100/K=200\n  - 如果失敗：驗證了 K=400 不可行\n\n🔍 監控重點：\n  - 前 100 epochs：梯度是否爆炸/消失\n  - Loss 曲線：是否震盪或發散\n  - NaN/Inf 出現頻率\n  - Checkpoint 品質\n\n💡 建議：\n  - 僅用於理論研究目的\n  - 如果前 500 epochs 出現 NaN → 立即中止\n  - 優先使用 K=50/K=100 作為生產配置\n  - 此實驗主要用於驗證理論分析正確性\n"

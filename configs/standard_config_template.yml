@@ -265,9 +265,10 @@ training:
   checkpoint_freq: 100
   log_interval: 10
   early_stopping:
-    enabled: false
-    patience: 100
-    min_delta: 1.0e-06
+    enabled: false                         # 是否啟用早停
+    convergence_threshold: 1.0e-6          # 目標 loss 值（達到此值則停止訓練）
+    monitor: 'total_loss'                  # 監控指標名稱
+    restore_best_weights: true             # 是否恢復最佳模型權重
   sampling:
     N_pde: 8000
     boundary_points: 2000

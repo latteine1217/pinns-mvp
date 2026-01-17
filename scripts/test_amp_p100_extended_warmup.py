@@ -122,7 +122,7 @@ def benchmark_mode(
             if scaler:
                 scaler.scale(loss).backward()
                 model.zero_grad()
-                scaler.update()
+                # Note: scaler.update() 不需要呼叫，因為沒有 optimizer.step()
         else:
             output = model(x)
             loss = criterion(output, y)
@@ -155,7 +155,7 @@ def benchmark_mode(
                 if scaler:
                     scaler.scale(loss).backward()
                     model.zero_grad()
-                    scaler.update()
+                    # Note: scaler.update() 不需要呼叫，因為沒有 optimizer.step()
             else:
                 output = model(x)
                 loss = criterion(output, y)

@@ -98,6 +98,39 @@ def reduce_loss_dict(
     return reduced
 
 
+def average_tensor_dict(
+    tensor_dict: Dict[str, Any],
+    average: bool = True
+) -> Dict[str, Any]:
+    """
+    在所有 rank 間同步並平均 Tensor 字典（All-Reduce）。
+
+    Args:
+        tensor_dict: 包含 Tensor 的字典
+        average: 是否取平均
+
+    Returns:
+        同步後的字典
+    """
+    if not _dist_ready():
+        return tensor_dict
+
+    world_size = dist.get_world_size()
+    reduced: Dict[str, Any] = {}
+
+    for key, value in tensor_dict.items():
+        if isinstance(value, torch.Tensor):
+            reduced_value = value.detach().clone()
+            dist.all_reduce(reduced_value, op=dist.ReduceOp.SUM)
+            if average:
+                reduced_value = reduced_value / world_size
+            reduced[key] = reduced_value
+        else:
+            reduced[key] = value
+
+    return reduced
+
+
 def verify_data_split(data_dict: Dict[str, Any], rank: int | None = None, world_size: int | None = None) -> None:
     """輸出分割後的資料形狀（診斷用）"""
     rank, world_size = _resolve_rank_world_size(rank, world_size)

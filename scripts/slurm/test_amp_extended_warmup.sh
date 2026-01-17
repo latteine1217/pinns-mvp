@@ -20,8 +20,13 @@ echo "Start time: $(date)"
 echo ""
 
 # 啟動虛擬環境
-source ~/miniforge3/etc/profile.d/conda.sh
-conda activate pinn
+if [ -f "${HOME}/python/bin/activate" ]; then
+    source "${HOME}/python/bin/activate"
+    export PATH="${HOME}/bin:${HOME}/python/bin:${PATH}"
+else
+    echo "❌ 找不到 Python 環境: ${HOME}/python/bin/activate"
+    exit 1
+fi
 
 # 顯示環境資訊
 echo "Python: $(which python)"

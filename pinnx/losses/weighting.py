@@ -96,6 +96,7 @@ class GradNormWeighter(LossWeighter):
         self.max_weight_ratio = float(max_weight)
         self.momentum = float(momentum)
         self.eps = _EPS
+        self.gradnorm_eps = 1e-5
         
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -284,8 +285,8 @@ class GradNormWeighter(LossWeighter):
             # 考慮 target_distribution（不同損失項的相對重要性）
             distribution_scale = self.target_distribution.get(name, 1.0) if hasattr(self, 'target_distribution') else 1.0
             
-            # JaxPI 公式: w_i = Ḡ / (G_i + ε·Ḡ) × distribution_scale
-            eps_adjusted = self.eps * mean_grad
+            # JaxPI 公式: w_i = Ḡ / (G_i + 1e-5 * Ḡ) × distribution_scale
+            eps_adjusted = self.gradnorm_eps * mean_grad
             new_weight = (mean_grad / (grad_norm + eps_adjusted)) * distribution_scale
             
             # 應用 EMA 平滑（對齊 JaxPI）

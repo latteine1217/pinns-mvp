@@ -25,6 +25,7 @@ from pinnx.train.loop import apply_point_weights_to_loss
 from pinnx.losses.priors import PriorLossManager
 from pinnx.losses.weighting import GradNormWeighter, CausalWeighter
 from pinnx.physics.turbulence_utils import preprocess_rans_prior_from_config  # type: ignore
+from pinnx.utils.ddp_utils import average_tensor_dict  # type: ignore
 
 
 class LossManager:
@@ -141,6 +142,11 @@ class LossManager:
         Returns:
             (momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss)
         """
+        momentum_x_loss = torch.tensor(0.0, device=self.device)
+        momentum_y_loss = torch.tensor(0.0, device=self.device)
+        momentum_z_loss = torch.tensor(0.0, device=self.device)
+        continuity_loss = torch.tensor(0.0, device=self.device)
+
         # 檢查是否使用 momentum merging
         if 'momentum' in residuals:
             # 合併模式：momentum 是 [N, 1, 2] 向量
@@ -270,6 +276,12 @@ class LossManager:
                         )
             # =========================================
         
+        # 預設值（避免靜態分析誤判）
+        momentum_x_loss = torch.tensor(0.0, device=self.device)
+        momentum_y_loss = torch.tensor(0.0, device=self.device)
+        momentum_z_loss = torch.tensor(0.0, device=self.device)
+        continuity_loss = torch.tensor(0.0, device=self.device)
+
         # 計算物理殘差
         try:
             if is_vs_pinn and hasattr(self.physics, 'compute_momentum_residuals'):
@@ -347,41 +359,63 @@ class LossManager:
             # 應用點權重（如果存在）
             pde_point_weights = data_batch.get('pde_point_weights', None)
             
-            # Causal Training: 計算並應用時間因果權重
+            # Causal Training: 計算並應用時間因果權重（JaxPI 對齊）
             causal_weighter = self.weighters.get('causal')
             final_weights = pde_point_weights
+            weighted_residual_losses = None
             
             if causal_weighter is not None and t_pde is not None:
-                # 1. 匯總每個點的殘差平方和
-                total_res_sq = torch.zeros_like(t_pde)
-                for r in residuals.values():
-                    r_sq = r.detach().pow(2)
-                    if r_sq.dim() > 1:
-                        r_sq = r_sq.view(r_sq.shape[0], -1).sum(dim=1, keepdim=True)
-                    total_res_sq += r_sq
+                if hasattr(causal_weighter, 'apply_weights_to_losses'):
+                    # JaxPI 分量級策略：對每個殘差分量計算 gamma，取最小值
+                    component_keys = [
+                        key for key in ['momentum_x', 'momentum_y', 'momentum_z', 'continuity']
+                        if key in residuals
+                    ]
+                    weighted_losses = causal_weighter.apply_weights_to_losses(
+                        residual_dict=residuals,
+                        time_coords=t_pde,
+                        component_keys=component_keys,
+                        return_details=True
+                    )
+                    weighted_residual_losses = weighted_losses
+                    causal_weights = weighted_losses.get('causal_gamma')
+                else:
+                    # 備援：點級因果權重
+                    total_res_sq = torch.zeros_like(t_pde)
+                    for r in residuals.values():
+                        r_sq = r.detach().pow(2)
+                        if r_sq.dim() > 1:
+                            r_sq = r_sq.view(r_sq.shape[0], -1).sum(dim=1, keepdim=True)
+                        total_res_sq += r_sq
 
-                # 2. 計算權重 w(t)（使用統一的 PointWeighter 接口）
-                causal_weights = causal_weighter.compute_weights(
-                    residuals=total_res_sq,
-                    coords=t_pde,
-                    context={'return_pointwise': True}
-                )
-                
-                # 3. 記錄權重統計（調試）
-                if epoch % 100 == 0 and epoch > 0:
+                    causal_weights = causal_weighter.compute_weights(
+                        residuals=total_res_sq,
+                        coords=t_pde,
+                        context={'return_pointwise': True}
+                    )
+
+                # 記錄權重統計（調試）
+                if epoch % 100 == 0 and epoch > 0 and causal_weights is not None:
                     logging.debug(
                         f"Causal Weights: min={causal_weights.min():.4f}, "
                         f"max={causal_weights.max():.4f}, mean={causal_weights.mean():.4f}"
                     )
-                
-                # 4. 合併因果權重與點權重
-                final_weights = causal_weights if pde_point_weights is None else (causal_weights * pde_point_weights)
-            
-            # 統一計算動量與連續方程損失（消除三重重複邏輯）
-            momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss = self._compute_momentum_losses(
-                residuals, is_vs_pinn, final_weights
-            )
-        
+
+                # 合併因果權重與點權重（僅在點級權重存在時）
+                if causal_weights is not None and causal_weights.dim() > 1:
+                    final_weights = causal_weights if pde_point_weights is None else (causal_weights * pde_point_weights)
+
+            if weighted_residual_losses is not None:
+                momentum_x_loss = weighted_residual_losses.get('momentum_x', momentum_x_loss)
+                momentum_y_loss = weighted_residual_losses.get('momentum_y', momentum_y_loss)
+                momentum_z_loss = weighted_residual_losses.get('momentum_z', momentum_z_loss)
+                continuity_loss = weighted_residual_losses.get('continuity', continuity_loss)
+            else:
+                # 統一計算動量與連續方程損失（消除三重重複邏輯）
+                momentum_x_loss, momentum_y_loss, momentum_z_loss, continuity_loss = self._compute_momentum_losses(
+                    residuals, is_vs_pinn, final_weights
+                )
+
         except Exception as e:
             logging.error(f"🚨 物理殘差計算失敗: {e}")
             logging.error(f"coords_pde_physical shape: {coords_pde_physical.shape}, requires_grad: {coords_pde_physical.requires_grad}")
@@ -797,6 +831,20 @@ class LossManager:
             'total_loss': None  # GradNorm 當前實現未使用 total_loss
         }
         gradnorm_weights = gradnorm_weighter.update_weights(available_losses, context)
+
+        if gradnorm_weights is not None:
+            try:
+                import torch.distributed as dist
+
+                if dist.is_available() and dist.is_initialized():
+                    tensor_weights = {
+                        key: torch.tensor(value, device=self.device)
+                        for key, value in gradnorm_weights.items()
+                    }
+                    averaged = average_tensor_dict(tensor_weights, average=True)
+                    gradnorm_weights = {key: float(value.item()) for key, value in averaged.items()}
+            except Exception as e:
+                logging.debug(f"GradNorm weight sync skipped: {e}")
         initial_values = getattr(gradnorm_weighter, 'initial_weight_values', {})
         eps = float(getattr(gradnorm_weighter, 'eps', 1e-12))
         

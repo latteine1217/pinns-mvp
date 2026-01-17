@@ -12,7 +12,7 @@ from .boundary_constraints import (
     HardConstraintApplicator,
     create_channel_flow_hard_constraint,
 )
-from .ddp_utils import split_data_by_rank, reduce_loss_dict, verify_data_split
+from .ddp_utils import split_data_by_rank, reduce_loss_dict, average_tensor_dict, verify_data_split
 
 __all__ = [
     'InputTransform',
@@ -28,5 +28,6 @@ __all__ = [
     'create_channel_flow_hard_constraint',
     'split_data_by_rank',
     'reduce_loss_dict',
+    'average_tensor_dict',
     'verify_data_split',
 ]

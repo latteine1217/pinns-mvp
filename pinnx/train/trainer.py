@@ -234,8 +234,6 @@ class Trainer:
         es_cfg = components.early_stopping_config
         self.early_stopping_cfg = es_cfg  # 保存完整配置字典
         self.early_stopping_enabled = es_cfg.get('enabled', False)
-        self.patience = es_cfg.get('patience', 50)
-        self.min_delta = es_cfg.get('min_delta', 1e-6)
         self.convergence_threshold = es_cfg.get('convergence_threshold', None)
 
         # 5. 監控組件
@@ -279,7 +277,6 @@ class Trainer:
         self.validation_data = components.validation_data
         self.best_val_loss = float('inf')
         self.best_epoch = -1
-        self.patience_counter = 0
         self.best_model_state: Optional[Dict[str, torch.Tensor]] = None
 
         # 8. 初始化 LossManager（依賴多個組件）
@@ -1872,7 +1869,9 @@ class Trainer:
     
     def check_early_stopping(self, val_loss: float) -> bool:
         """
-        檢查是否應該早停
+        檢查是否應該早停（基於目標值）
+        
+        機制：當 loss 達到或低於 convergence_threshold 時停止訓練
         
         Args:
             val_loss: 驗證損失
@@ -1883,27 +1882,34 @@ class Trainer:
         if not self.early_stopping_enabled:
             return False
         
-        if val_loss < self.best_val_loss - self.min_delta:
+        # 檢查是否達到目標值
+        convergence_threshold = self.early_stopping_cfg.get('convergence_threshold', None)
+        if convergence_threshold is None:
+            # 如果未設定目標值，不觸發早停（訓練至 max_epochs）
+            return False
+        
+        # 更新最佳模型（無論是否達標）
+        if val_loss < self.best_val_loss:
             self.best_val_loss = val_loss
             self.best_epoch = self.epoch
-            self.patience_counter = 0
             
-            # 保存最佳模型狀態（如果配置啟用）
+            # 保存最佳模型狀態
             if self.early_stopping_cfg.get('restore_best_weights', True):
                 self.best_model_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
             
-            # 🆕 立即保存最佳模型到磁碟（防止訓練中斷導致遺失）
+            # 立即保存最佳模型到磁碟
             metrics = {'val_loss': val_loss, 'best_epoch': self.best_epoch}
             self.save_checkpoint(self.epoch, metrics, is_best=True)
             
             logging.info(f"🎯 新最佳指標: {self.best_val_loss:.6f}（epoch {self.best_epoch}）")
-            return False
-        else:
-            self.patience_counter += 1
-            if self.patience_counter >= self.patience:
-                logging.info(f"🛑 早停觸發（patience={self.patience}）")
-                return True
-            return False
+        
+        # 檢查是否達到目標值
+        if val_loss <= convergence_threshold:
+            logging.info(f"🎯 達到目標值停止: {val_loss:.2e} <= {convergence_threshold:.2e}")
+            logging.info(f"   訓練完成於 epoch {self.epoch}")
+            return True
+        
+        return False
     
     def get_current_lr(self) -> float:
         """獲取當前學習率"""

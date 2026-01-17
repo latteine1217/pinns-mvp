@@ -24,18 +24,33 @@
 - 收斂速度提升 ≥ 30%
 
 # 專案重要規則
-- 本專案將在伺服器上運行，使用指令 `ssh junyi@140.114.120.128` 來登入伺服器
-- 使用的伺服器環境為：
+- 本專案將在伺服器上運行，使用指令 `ssh junyi@140.114.120.128` 來登入伺服器（headnode）
+- 使用Slurm腳本提交任務
+- 使用的node環境為：
     - #SBATCH --time=14-00:00:00
     - #SBATCH --partition=r740
     - #SBATCH --mem=108G
     - #SBATCH --gres=gpu:2 (兩張Nvidia P100)
 
+## SLURM 腳本模板
+1. 設置環境變數（BEFORE source activate）
+export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH}"
+export WANDB_MODE=offline
+export MASTER_ADDR=$(hostname)
+2. 激活虛擬環境
+source ~/python/bin/activate
+export PATH="${HOME}/bin:${HOME}/python/bin:${PATH}"
+3. 使用 torchrun 啟動 DDP
+torchrun --nproc_per_node=2 scripts/train/train.py --cfg ${CONFIG_FILE}
+
+- torch.compile 不支援 Nvidia P100
+- 伺服器AMP效果差
+
 ## 技術規範（摘要版）
 
-- 架構：8×256 MLP + Fourier (m=12, σ=4.0) + RWF
+- 架構：2 x 768 MLP + Fourier (m=12, σ=4.0) + RWF
 - 優化：SOAP → L-BFGS
-- 物理：VS-PINN N=(2,12,2) + Source Term + 無因次化
+- 物理：VS-PINN N=(2,12,2) + 無因次化
 
 ## 🔄 標準工程流程（Canonical Workflow）
 
