@@ -21,24 +21,15 @@ data:
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns_npy/re50
-    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
-    resolution:
-      x: 256
-      y: 256
+    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence) [物理參數由
+      DNS NPY 自動同步]
     time_range:
     - 15.0
     - 35.0
-    dt: 0.001
     variables:
     - u
     - v
     - p
-    physics_params:
-      Re: 50.0
-      Re_definition: Musacchio_Boffetta_2014
-      nu: 0.039374
-      k_f: 4
-      forcing_amplitude: 1.0
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
@@ -115,13 +106,7 @@ physics:
   type: kolmogorov_flow_2d
   nu: 0.039374
   rho: 1.0
-  forcing:
-    k_f: 4
-    amplitude: 1.0
-  kolmogorov_flow:
-    Re: 50.0
-    k_f: 4
-    forcing_amplitude: 1.0
+  forcing: {}
   domain:
     x_range:
     - 0.0

@@ -700,7 +700,7 @@ class Trainer:
         coord_dim = data_batch['coords_pde_spatial'].shape[1]
         has_3d_coords = coord_dim >= 3
         is_vs_pinn = has_3d_coords and hasattr(self.physics, 'compute_momentum_residuals')
-        is_2d_flow = coord_dim == 2 and hasattr(self.physics, 'residual')
+        is_2d_flow = coord_dim in (2, 3) and hasattr(self.physics, 'residual')
 
         # 處理 3 類點（消除重複！）
         pde_batch = self._process_point_batch(

@@ -282,19 +282,13 @@ class KolmogorovFlow2D(NavierStokesBase):
         time_deriv_v = torch.zeros_like(v)
 
         if time is not None and time.requires_grad:
-            # 使用 torch.autograd.grad 直接對時間求導
-            time_deriv_u = torch.autograd.grad(
-                u, time, 
-                grad_outputs=torch.ones_like(u),
-                create_graph=True, 
-                retain_graph=True
-            )[0]
-            time_deriv_v = torch.autograd.grad(
-                v, time, 
-                grad_outputs=torch.ones_like(v),
-                create_graph=True, 
-                retain_graph=True
-            )[0]
+            if gradients is None or 'u_t' not in gradients or 'v_t' not in gradients:
+                raise RuntimeError(
+                    "Time Window 需要時間導數，但 gradients 未提供 u_t/v_t。"
+                    "請確認 GradientCache2D 已啟用並計算時間導數。"
+                )
+            time_deriv_u = gradients['u_t']
+            time_deriv_v = gradients['v_t']
 
         # === 組裝動量方程殘差 ===
         # x 方向動量方程（含正弦強迫項）

@@ -55,23 +55,30 @@ class GradientCache2D:
         self._batch_size = batch_size
         self._output_buffer: Optional[Dict[str, torch.Tensor]] = None
 
-    def _ensure_buffer_allocated(self, batch_size: int, dtype: torch.dtype):
+    def _ensure_buffer_allocated(self, batch_size: int, dtype: torch.dtype, include_time: bool):
         """
         確保輸出緩衝區已分配且大小正確
 
         Args:
             batch_size: 當前批次大小
             dtype: 張量數據類型
+            include_time: 是否包含時間導數緩衝區
         """
-        if (self._output_buffer is not None and
-            self._output_buffer['u_x'].shape[0] == batch_size and
-            self._output_buffer['u_x'].dtype == dtype):
-            return  # 已分配且大小、類型正確
+        if self._output_buffer is not None:
+            has_time = 'u_t' in self._output_buffer
+            if (
+                self._output_buffer['u_x'].shape[0] == batch_size
+                and self._output_buffer['u_x'].dtype == dtype
+                and has_time == include_time
+            ):
+                return  # 已分配且大小、類型正確
 
         # 分配新緩衝區
         buffer_keys = ['u_x', 'u_y', 'u_xx', 'u_yy',
                        'v_x', 'v_y', 'v_xx', 'v_yy',
                        'p_x', 'p_y']
+        if include_time:
+            buffer_keys.extend(['u_t', 'v_t'])
         self._output_buffer = {
             key: torch.empty(batch_size, 1, device=self.device, dtype=dtype)
             for key in buffer_keys
@@ -90,8 +97,9 @@ class GradientCache2D:
         - 速度場 u, v 的一階梯度: ∂u/∂x, ∂u/∂y (共4個)
         - 速度場 u, v 的二階對角梯度: ∂²u/∂x², ∂²u/∂y² (共4個)
         - 壓力場 p 的一階梯度: ∂p/∂x, ∂p/∂y (共2個)
+        - Time Window 時額外計算 u_t, v_t (共2個)
         
-        總計: 10 個梯度張量
+        總計: 10 個梯度張量（Time Window 為 12 個）
         
         Args:
             predictions: 包含 'u', 'v', 'p' 的字典，每個 shape [N, 1]
@@ -105,7 +113,8 @@ class GradientCache2D:
                     'u_xx': ∂²u/∂x² [N, 1], 'u_yy': ∂²u/∂y² [N, 1],
                     'v_x': ∂v/∂x [N, 1], 'v_y': ∂v/∂y [N, 1],
                     'v_xx': ∂²v/∂x² [N, 1], 'v_yy': ∂²v/∂y² [N, 1],
-                    'p_x': ∂p/∂x [N, 1], 'p_y': ∂p/∂y [N, 1]
+                    'p_x': ∂p/∂x [N, 1], 'p_y': ∂p/∂y [N, 1],
+                    'u_t': ∂u/∂t [N, 1], 'v_t': ∂v/∂t [N, 1] (Time Window)
                 }
         
         Raises:
@@ -128,6 +137,7 @@ class GradientCache2D:
         if coord_dim not in [2, 3]:
             raise ValueError(f"coords must be 2D or 3D, got shape {coords.shape}")
 
+        include_time = coord_dim == 3
         keep_graph = coord_dim == 3
         
         # 提取預測值
@@ -140,6 +150,13 @@ class GradientCache2D:
         v_grads = self._compute_first_order(v, coords, create_graph, retain_graph=True)  # [N, 2]
         p_grads = self._compute_first_order(p, coords, create_graph=False, retain_graph=True)  # [N, 2] 壓力不需要二階
         
+        # 時間導數（僅 Time Window）
+        u_t = None
+        v_t = None
+        if include_time and coords.requires_grad:
+            u_t = self._compute_time_derivative(u, coords, create_graph, retain_graph=True)
+            v_t = self._compute_time_derivative(v, coords, create_graph, retain_graph=keep_graph)
+        
         # 二階梯度 (4 個：u, v 各 2 個對角線項)
         u_grads_2 = self._compute_second_order_diagonal(
             u_grads, coords, create_graph, retain_graph=True
@@ -150,9 +167,12 @@ class GradientCache2D:
         
         # 🚀 優化：使用預分配緩衝區（如果可用）
         batch_size = u.shape[0]
+        if include_time and (u_t is None or v_t is None):
+            u_t = torch.zeros_like(u)
+            v_t = torch.zeros_like(v)
         if self._batch_size is not None:
             # 確保緩衝區已分配
-            self._ensure_buffer_allocated(batch_size, u.dtype)
+            self._ensure_buffer_allocated(batch_size, u.dtype, include_time)
 
             # 使用 copy_() 避免創建新張量（保留梯度追蹤）
             self._output_buffer['u_x'].copy_(u_grads[:, 0:1])
@@ -165,6 +185,9 @@ class GradientCache2D:
             self._output_buffer['v_yy'].copy_(v_grads_2[:, 1:2])
             self._output_buffer['p_x'].copy_(p_grads[:, 0:1])
             self._output_buffer['p_y'].copy_(p_grads[:, 1:2])
+            if include_time:
+                self._output_buffer['u_t'].copy_(u_t)
+                self._output_buffer['v_t'].copy_(v_t)
 
             # 注意：返回緩衝區引用，調用者不應修改！
             self._cache = self._output_buffer
@@ -188,6 +211,9 @@ class GradientCache2D:
                 'p_x': p_grads[:, 0:1],   # ∂p/∂x
                 'p_y': p_grads[:, 1:2],   # ∂p/∂y
             }
+            if include_time:
+                gradients['u_t'] = u_t
+                gradients['v_t'] = v_t
 
             # 快取結果
             self._cache = gradients
@@ -237,6 +263,42 @@ class GradientCache2D:
         spatial_grad = full_grad[:, :2]  # [N, 2]
         
         return spatial_grad  # [N, 2]
+    
+    def _compute_time_derivative(
+        self,
+        field: torch.Tensor,
+        coords: torch.Tensor,
+        create_graph: bool,
+        retain_graph: bool = True
+    ) -> torch.Tensor:
+        """
+        計算時間導數 ∂field/∂t（僅 Time Window）
+        
+        Args:
+            field: 標量場 [N, 1]
+            coords: 座標 [N, 3] (x, y, t)
+            create_graph: 是否保留計算圖
+        
+        Returns:
+            time_grad: [N, 1] 時間導數
+        """
+        full_grad = torch.autograd.grad(
+            outputs=field,
+            inputs=coords,
+            grad_outputs=torch.ones_like(field),
+            create_graph=create_graph,
+            retain_graph=retain_graph,
+            allow_unused=True
+        )[0]
+
+        if full_grad is None:
+            raise RuntimeError(
+                f"時間導數計算失敗：field 似乎不依賴於 coords。\n"
+                f"coords shape: {coords.shape}, field shape: {field.shape}"
+            )
+
+        time_grad = full_grad[:, 2:3]
+        return time_grad
     
     def _compute_second_order_diagonal(
         self, 

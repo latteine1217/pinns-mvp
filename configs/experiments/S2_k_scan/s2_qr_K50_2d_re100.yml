@@ -22,24 +22,15 @@ data:
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
-    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
-    resolution:
-      x: 256
-      y: 256
+    description: Kolmogorov flow (Re=100, k_f=4, 2D periodic, weak turbulence) [物理參數由
+      DNS NPY 自動同步]
     time_range:
     - 15.0
     - 35.0
-    dt: 0.001
     variables:
     - u
     - v
     - p
-    physics_params:
-      Re: 50.0
-      Re_definition: Musacchio_Boffetta_2014
-      nu: 0.039374
-      k_f: 4
-      forcing_amplitude: 1.0
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
@@ -93,15 +84,8 @@ model:
   - p
 physics:
   type: kolmogorov_flow_2d
-  nu: 0.039374
   rho: 1.0
-  forcing:
-    k_f: 4
-    amplitude: 1.0
-  kolmogorov_flow:
-    Re: 50.0
-    k_f: 4
-    forcing_amplitude: 1.0
+  forcing: {}
   domain:
     x_range:
     - 0.0
@@ -161,7 +145,7 @@ training:
     min_lr: 1.0e-06
     staircase: false
   epochs: 300000
-  batch_size: 8000  # 提升 2 倍以利用雙 GPU 記憶體（避免梯度計算 OOM）
+  batch_size: 8000
   validation_freq: 100
   checkpoint_freq: 2000
   log_interval: 20
@@ -170,7 +154,7 @@ training:
     patience: 2000
     min_delta: 1.0e-06
   sampling:
-    N_pde: 6000  # 提升 2 倍以匹配 batch_size 比例 (4:3)
+    N_pde: 6000
     adaptive_sampling: false
     boundary_points: 500
   gradient_clip: 1.0
@@ -239,30 +223,13 @@ test_acceptance:
   baseline:
   - training_converged: true
   - no_feature_engineering: true
-usage_notes: "\U0001F52C \u5BE6\u9A57\u8A2D\u8A08\uFF1A\n  - \u76EE\u6A19\uFF1A\u5EFA\
-  \u7ACB Vanilla PINNs \u57FA\u7DDA\uFF08\u7121\u9032\u968E\u7279\u5FB5\uFF09\n  -\
-  \ \u7B56\u7565\uFF1A\u7D14\u6578\u64DA\u9A45\u52D5 + NS \u65B9\u7A0B\u7D04\u675F\
-  \n  - \u7279\u5FB5\uFF1A\u6A19\u6E96 MLP (tanh) + \u56FA\u5B9A\u6B0A\u91CD + \u56FA\
-  \u5B9A\u5B78\u7FD2\u7387\n  - \u512A\u5316\u5668\uFF1AAdam (lr=1e-3, \u7121\u8ABF\
-  \u5EA6)\n  - \u7528\u9014\uFF1A\u4F5C\u70BA\u5C0D\u7167\u7D44\u8A55\u4F30\u9032\u968E\
-  \u7279\u5FB5\u7684\u8CA2\u737B\n\n\U0001F680 \u57F7\u884C\u6307\u4EE4\uFF1A\n  python\
-  \ scripts/train/train.py --cfg configs/kolmogorov_re100_kf4_K100_vanilla_1k.yml --device\
-  \ cuda\n\n\U0001F4CA \u9810\u671F\u7D50\u679C\uFF08\u57FA\u7DDA\u6027\u80FD\uFF09\
-  \uFF1A\n  - \u8A13\u7DF4\u6642\u9593\uFF1A3-5 \u5C0F\u6642\uFF0810000 epochs, GPU\uFF09\
-  \n  - \u611F\u6E2C\u9EDE L2\uFF1A5-10%\n  - \u5168\u5834 u/v L2\uFF1A20-30%\uFF08\
-  \u8F03\u9032\u968E\u7248\u672C\u5DEE\uFF09\n  - \u58D3\u529B\u5834\uFF1A\u53EF\u80FD\
-  \u8F03\u96E3\u91CD\u5EFA\n\n\U0001F50D \u5C0D\u6BD4\u7528\u9014\uFF1A\n  - vs RANS\
-  \ Prior \u7248\uFF1A\u91CF\u5316 RANS \u5F15\u5C0E\u7684\u6539\u5584\n  - vs Fourier\
-  \ \u7248\uFF1A\u91CF\u5316 Fourier Features \u7684\u8CA2\u737B\n  - vs SIREN \u7248\
-  \uFF1A\u91CF\u5316 SIREN \u521D\u59CB\u5316\u7684\u5F71\u97FF\n  - vs \u81EA\u9069\
-  \u61C9\u6B0A\u91CD\u7248\uFF1A\u91CF\u5316\u52D5\u614B\u6B0A\u91CD\u7684\u6548\u679C\
-  \n\n\U0001F4DD \u8AD6\u6587\u6D88\u878D\u5BE6\u9A57\uFF1A\n  - \u57FA\u7DDA\uFF08\
-  \u672C\u914D\u7F6E\uFF09\uFF1A\u7121\u4EFB\u4F55\u9032\u968E\u7279\u5FB5\n  - +Fourier\uFF1A\
-  \u52A0\u5165 Fourier Features\n  - +SIREN\uFF1A\u52A0\u5165 SIREN \u521D\u59CB\u5316\
-  \n  - +\u81EA\u9069\u61C9\uFF1A\u52A0\u5165 GradNorm \u52D5\u614B\u6B0A\u91CD\n\
-  \  - +RANS Prior\uFF1A\u52A0\u5165\u4F4E\u4FDD\u771F\u5F15\u5C0E\uFF08\u5B8C\u6574\
-  \u7248\uFF09\n  \n\u26A0\uFE0F \u6CE8\u610F\uFF1A\n  - Vanilla \u7248\u672C\u6536\
-  \u6582\u8F03\u6162\uFF0C\u53EF\u80FD\u9700\u8981\u66F4\u591A epochs\n  - \u58D3\u529B\
-  \u5834\u91CD\u5EFA\u6548\u679C\u53EF\u80FD\u4E0D\u4F73\uFF08\u7528\u65BC\u5C0D\u6BD4\
-  \uFF09\n  - \u5EFA\u8B70\u5148\u8A13\u7DF4\u6B64\u57FA\u7DDA\uFF0C\u518D\u8A13\u7DF4\
-  \u9032\u968E\u7248\u672C\u9032\u884C\u5C0D\u6BD4\n"
+usage_notes: "\U0001F52C 實驗設計：\n  - 目標：建立 Vanilla PINNs 基線（無進階特徵）\n  - 策略：純數據驅動 +\
+  \ NS 方程約束\n  - 特徵：標準 MLP (tanh) + 固定權重 + 固定學習率\n  - 優化器：Adam (lr=1e-3, 無調度)\n  -\
+  \ 用途：作為對照組評估進階特徵的貢獻\n\n\U0001F680 執行指令：\n  python scripts/train/train.py --cfg configs/kolmogorov_re100_kf4_K100_vanilla_1k.yml\
+  \ --device cuda\n\n\U0001F4CA 預期結果（基線性能）：\n  - 訓練時間：3-5 小時（10000 epochs, GPU）\n\
+  \  - 感測點 L2：5-10%\n  - 全場 u/v L2：20-30%（較進階版本差）\n  - 壓力場：可能較難重建\n\n\U0001F50D 對比用途：\n\
+  \  - vs RANS Prior 版：量化 RANS 引導的改善\n  - vs Fourier 版：量化 Fourier Features 的貢獻\n \
+  \ - vs SIREN 版：量化 SIREN 初始化的影響\n  - vs 自適應權重版：量化動態權重的效果\n\n\U0001F4DD 論文消融實驗：\n\
+  \  - 基線（本配置）：無任何進階特徵\n  - +Fourier：加入 Fourier Features\n  - +SIREN：加入 SIREN 初始化\n\
+  \  - +自適應：加入 GradNorm 動態權重\n  - +RANS Prior：加入低保真引導（完整版）\n  \n⚠️ 注意：\n  - Vanilla\
+  \ 版本收斂較慢，可能需要更多 epochs\n  - 壓力場重建效果可能不佳（用於對比）\n  - 建議先訓練此基線，再訓練進階版本進行對比\n"

@@ -142,6 +142,42 @@ physics:
   - `u_tau`：從 Re_tau 自動計算，配置時將被忽略
   - `pressure_gradient`：從 Re_tau 自動計算，配置時將被忽略
 
+**Kolmogorov Flow 2D 參數自動同步**：
+
+當使用 `type: kolmogorov_flow_2d` 時，**強烈建議**使用 DNS NPY 自動同步參數，無需在 `physics` 區段重複配置。
+
+**✅ 推薦配置**（最小化，參數從 DNS NPY 自動同步）：
+```yaml
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.01    # ⚠️ 可選：若省略則從 DNS NPY 讀取
+  rho: 1.0    # 密度（DNS NPY 不提供，必須在此配置）
+  forcing: {} # ✂️ 空字典（k_f 和 amplitude 從 DNS NPY 自動同步）
+  domain:
+    x_range: [0.0, 6.283185307179586]
+    y_range: [0.0, 6.283185307179586]
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
+```
+
+**參數來源優先級**：
+1. **DNS NPY**（最高優先）← 從 `data.kolmogorov_config.physics_params` 讀取
+2. **YAML config**（次優先）← 從 `physics.forcing` 等讀取
+3. **預設值**（最低優先）
+
+**自動同步的參數**：
+- `nu`（運動黏度）
+- `k_f`（強迫波數）
+- `forcing_amplitude`（強迫振幅）
+- `L`（域大小，用於 domain range）
+
+詳細說明請參閱：[Kolmogorov Flow 參數自動同步](#kolmogorov-flow-參數自動同步dns-npy--physics-module)
+
+**❌ 已簡化/移除的區段**（v2.0+）：
+- `physics.kolmogorov_flow`：重複配置，已移除
+- `physics.forcing.{k_f, amplitude}`：從 DNS NPY 自動同步，可省略
+
 ### 3. losses（損失項）
 
 - 必須是 `losses`（複數）
@@ -261,23 +297,113 @@ data:
 - ❌ Kolmogorov Flow 未啟用: "Time Window mode requires Kolmogorov Flow enabled"
 - ⚠️ 窗口過短: "窗口持續時間過短：建議減少窗口數量"
 
-#### Kolmogorov data_path 自動回填
+#### Kolmogorov Flow 參數自動同步（DNS NPY → Physics Module）
 
-當 `data.kolmogorov_config.data_path` 指向單一 NPY 檔（包含 `config` 欄位）時，系統會自動回填缺失參數：
-- `dt`, `resolution`
-- `physics_params.nu`, `physics_params.k_f`, `physics_params.forcing_amplitude`
-- `variables`, `L`
+**🎯 設計原則：單一真相來源（Single Source of Truth）**
 
-`time_range` 仍以 YAML 為準（訓練期間需求），其餘欄位 NPY 優先、YAML 補缺。若 NPY 缺少必要物理參數會警告。
+當 `data.kolmogorov_config.data_path` 指向 DNS NPY 檔案時，系統實現**完全自動化的參數同步**，無需在 YAML 中重複配置物理參數。
 
+##### 自動回填機制
+
+系統會從 DNS NPY 的 `config` 欄位自動回填以下參數到 `config['data']['kolmogorov_config']`：
+
+**資料參數**：
+- `dt`（時間步長）
+- `L`（域大小）
+- `resolution`（網格解析度：`{x: N, y: N}`）
+- `variables`（變數列表）
+
+**物理參數**（回填至 `physics_params`）：
+- `nu`（運動黏度）
+- `k_f`（強迫波數）
+- `forcing_amplitude`（強迫振幅）
+
+##### 三層優先級系統
+
+物理模塊創建時，參數來源優先級為：**DNS NPY > YAML 配置 > 預設值**
+
+```python
+# 參數讀取流程
+config['data']['kolmogorov_config']['physics_params']  # ← DNS NPY 自動回填
+    ↓
+create_physics() 讀取順序：
+    ① DNS NPY（最高優先，來自 physics_params）
+    ② YAML config（次優先，來自 physics.*）
+    ③ Default values（最低優先，程式內建）
+```
+
+##### 簡化後的配置格式（v2.0+）
+
+**✅ 推薦配置**（最小化，單一來源）：
 ```yaml
 data:
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
-    time_range: [15.0, 35.0]  # 訓練時間窗必填
-    # 其餘欄位可省略，若 NPY 缺值再由 YAML 補齊
+    time_range: [15.0, 35.0]  # 訓練時間窗（必填）
+    description: "Kolmogorov flow (Re=100, k_f=4) [物理參數由 DNS NPY 自動同步]"
+    # ✂️ 以下參數已移除（DNS NPY 自動提供）：
+    #   - physics_params（整個字典）
+    #   - resolution
+    #   - dt
+    #   - L
+
+physics:
+  type: kolmogorov_flow_2d
+  nu: 0.01    # ⚠️ 可選：若省略則從 DNS NPY 讀取
+  rho: 1.0    # 密度（DNS NPY 不提供，需 YAML 配置）
+  forcing: {} # ✂️ 空字典（DNS NPY 自動同步 k_f 和 amplitude）
+  # ✂️ 已移除的冗餘區段：
+  #   - kolmogorov_flow（重複配置）
+  domain:
+    x_range: [0.0, 6.283185307179586]  # 終點從 DNS NPY L 自動推導
+    y_range: [0.0, 6.283185307179586]
+  boundary_conditions:
+    periodic_x: true
+    periodic_y: true
 ```
+
+**🔍 參數來源驗證**（訓練日誌會顯示）：
+```
+✅ 使用 Kolmogorov Flow 2D 求解器
+   強迫參數: A=0.100 (DNS NPY), k_f=4 (DNS NPY)
+   物理參數: ν=1.00e-02 (DNS NPY), ρ=1.0 (YAML)
+   域範圍: L=6.2832 (DNS NPY)
+   🔁 已從 DNS NPY 自動同步參數: amplitude, k_f, nu, L
+```
+
+##### 批量簡化工具
+
+使用以下腳本批量簡化舊版配置文件：
+
+```bash
+# 預覽修改（試運行）
+python scripts/tools/simplify_kolmogorov_configs.py --dry-run
+
+# 執行簡化（帶備份）
+python scripts/tools/simplify_kolmogorov_configs.py --backup
+
+# 只處理特定目錄
+python scripts/tools/simplify_kolmogorov_configs.py --dir configs/experiments
+```
+
+##### 向後相容性
+
+- **舊配置仍可使用**：若 YAML 中仍有 `physics_params`，系統會優先使用 DNS NPY 值並發出提示
+- **無縫遷移**：使用批量簡化工具可自動移除冗餘參數
+- **參數衝突警告**：若 DNS NPY 與 YAML 參數不一致，系統會發出警告
+
+##### 時間範圍配置
+
+⚠️ **唯一必須在 YAML 手動配置的參數**：
+
+```yaml
+data:
+  kolmogorov_config:
+    time_range: [15.0, 35.0]  # ✅ 訓練時間窗（必填，DNS NPY 不控制）
+```
+
+原因：DNS NPY 包含完整時間序列，但訓練時需指定使用哪個時間段。
 
 #### DDP Multi-GPU 訓練
 

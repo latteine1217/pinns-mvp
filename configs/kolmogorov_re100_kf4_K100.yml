@@ -1,57 +1,38 @@
 experiment:
-  name: kolmogorov_re50_kf4_K100_les_prior
+  name: kolmogorov_re100_kf4_K100_les_prior
   version: v3.1_les_prior
   seed: 42
   device: auto
   precision: float32
-  description: Re=50 with LES turbulence prior (適合 2D 湍流，無 k/epsilon). Enhanced
-    with L-BFGS fine-tuning.
+  description: Re=100 with LES turbulence prior. Enhanced with L-BFGS fine-tuning.
   group: kflow_baseline
   tags:
-  - kflow_re50
+  - kflow_re100
   - K100
-  experiment_id: BASELINE_2D
+  experiment_id: BASELINE_2D_RE100
 reproducibility:
   deterministic: true
   benchmark: false
 data:
   source: kolmogorov_dns
-  dataset: re50_kf4
+  dataset: re100_kf4
   kolmogorov_config:
     enabled: true
-    data_path: ./data/kolmogorov_dns_npy/re50
-    description: Kolmogorov flow (Re=50, k_f=4)
-    resolution:
-      x: 256
-      y: 256
+    data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
+    description: Kolmogorov flow (Re=100, k_f=4) [物理參數由 DNS NPY 自動同步]
     time_range:
     - 15.0
     - 35.0
-    dt: 0.001
     variables:
     - u
     - v
     - p
-    physics_params:
-      Re: 50.0
-      nu: 0.039374
-      k_f: 4
-      forcing_amplitude: 1.0
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
   enabled: true
-  data_path: ./data/lowfi_npy/kolmogorov_les/re50
+  data_path: ./data/kolmogorov_les/kolmogorov_les_re100.npy
   data_type: les
-  rans_structure:
-    group_path: /mean_field
-    field_mapping:
-      u: u
-      v: v
-      nu_t: nu_t
-    coord_mapping:
-      x: x
-      y: y
   interpolation:
     method: linear
     extrapolation_mode: nearest
@@ -108,15 +89,9 @@ model:
   - p
 physics:
   type: kolmogorov_flow_2d
-  nu: 0.039374
+  nu: 0.01
   rho: 1.0
-  forcing:
-    k_f: 4
-    amplitude: 1.0
-  kolmogorov_flow:
-    Re: 50.0
-    k_f: 4
-    forcing_amplitude: 1.0
+  forcing: {}
   domain:
     x_range:
     - 0.0
@@ -238,6 +213,6 @@ logging:
   wandb: true
   save_stage_checkpoints: true
 output:
-  checkpoint_dir: ./checkpoints/kolmogorov_re50_kf4_K100_les_prior
-  results_dir: ./results/kolmogorov_re50_kf4_K100_les_prior
-  visualization_dir: ./results/kolmogorov_re50_kf4_K100_les_prior/visualizations
+  checkpoint_dir: ./checkpoints/kolmogorov_re100_kf4_K100_les_prior
+  results_dir: ./results/kolmogorov_re100_kf4_K100_les_prior
+  visualization_dir: ./results/kolmogorov_re100_kf4_K100_les_prior/visualizations

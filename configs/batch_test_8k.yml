@@ -20,27 +20,18 @@ data:
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns_npy/re50
-    description: Kolmogorov flow (Re=50, k_f=4)
-    resolution:
-      x: 256
-      y: 256
+    description: Kolmogorov flow (Re=50, k_f=4) [物理參數由 DNS NPY 自動同步]
     time_range:
     - 15.0
     - 35.0
-    dt: 0.001
     variables:
     - u
     - v
     - p
-    physics_params:
-      Re: 50.0
-      nu: 0.039374
-      k_f: 4
-      forcing_amplitude: 1.0
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
-  enabled: false  # 禁用以避免資料缺失問題
+  enabled: false
   data_path: ./data/lowfi_npy/kolmogorov_les/re50
   data_type: les
   rans_structure:
@@ -110,13 +101,7 @@ physics:
   type: kolmogorov_flow_2d
   nu: 0.039374
   rho: 1.0
-  forcing:
-    k_f: 4
-    amplitude: 1.0
-  kolmogorov_flow:
-    Re: 50.0
-    k_f: 4
-    forcing_amplitude: 1.0
+  forcing: {}
   domain:
     x_range:
     - 0.0
@@ -155,14 +140,14 @@ training:
     min_lr: 1.0e-06
     staircase: false
   epochs: 30
-  batch_size: 8000  # ⬆️ BATCH SIZE PARAMETER
+  batch_size: 8000
   validation_freq: 0
   checkpoint_freq: 0
   log_interval: 10
   early_stopping:
     enabled: false
   sampling:
-    N_pde: 5000  # ⬆️ PDE POINTS (N_pde/batch_size = 0.625)
+    N_pde: 5000
     adaptive_sampling: false
     boundary_points: 200
   gradient_clip: 1.0
@@ -183,7 +168,7 @@ curriculum:
     lowfi_prior:
       consistency_weight: 2.0
     sampling:
-      N_pde: 5000  # ⬆️ 與 training.sampling.N_pde 一致
+      N_pde: 5000
       boundary_points: 200
 evaluation:
   grid_resolution:

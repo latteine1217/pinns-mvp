@@ -3,7 +3,7 @@ experiment:
   version: v1.0_profiling
   seed: 42
   device: auto
-  precision: float16  # 使用 FP16 AMP
+  precision: float16
   description: 'AMP Profiling Test: FP16 Mixed Precision (10 epochs)'
   group: amp_profiling
   tags:
@@ -20,24 +20,15 @@ data:
   kolmogorov_config:
     enabled: true
     data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
-    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence)
-    resolution:
-      x: 256
-      y: 256
+    description: Kolmogorov flow (Re=50, k_f=4, 2D periodic, weak turbulence) [物理參數由
+      DNS NPY 自動同步]
     time_range:
     - 15.0
     - 35.0
-    dt: 0.001
     variables:
     - u
     - v
     - p
-    physics_params:
-      Re: 50.0
-      Re_definition: Musacchio_Boffetta_2014
-      nu: 0.039374
-      k_f: 4
-      forcing_amplitude: 1.0
   normalize: true
   cache_dir: ./data/kolmogorov_dns_cache
 lowfi_prior:
@@ -88,13 +79,7 @@ physics:
   type: kolmogorov_flow_2d
   nu: 0.039374
   rho: 1.0
-  forcing:
-    k_f: 4
-    amplitude: 1.0
-  kolmogorov_flow:
-    Re: 50.0
-    k_f: 4
-    forcing_amplitude: 1.0
+  forcing: {}
   domain:
     x_range:
     - 0.0
@@ -120,7 +105,7 @@ losses:
   merge_momentum: true
 training:
   optimizer:
-    type: adam  # 使用 Adam 以簡化測試
+    type: adam
     lr: 0.001
     betas:
     - 0.9
@@ -133,7 +118,7 @@ training:
     decay_steps: 1000
     min_lr: 1.0e-06
     staircase: false
-  epochs: 10  # 縮短到 10 epochs 用於快速測試
+  epochs: 10
   batch_size: 8000
   validation_freq: 0
   checkpoint_freq: 0
@@ -145,8 +130,8 @@ training:
     adaptive_sampling: false
     boundary_points: 500
   gradient_clip: 1.0
-  use_amp: true  # 啟用 AMP
-  amp_dtype: float16  # 明確指定 FP16
+  use_amp: true
+  amp_dtype: float16
 curriculum:
   enable: false
 optimizer_switching:

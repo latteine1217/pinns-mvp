@@ -1231,45 +1231,134 @@ def _create_kolmogorov_flow_2d_physics(
     config: Dict[str, Any],
     device: torch.device
 ):
-    """創建 Kolmogorov Flow 2D 求解器"""
+    """創建 Kolmogorov Flow 2D 求解器
+
+    參數優先級：DNS NPY（自動回填）> YAML 配置 > 預設值
+
+    DNS NPY 參數會在資料載入時自動回填至：
+        config['data']['kolmogorov_config']['physics_params']
+
+    此函數會優先使用 DNS NPY 回填的參數，確保物理一致性。
+    """
     from pinnx.physics.kolmogorov_flow_2d import KolmogorovFlow2D
-    
+
     physics_cfg = config['physics']
-    
-    # 強迫參數
+
+    # ========================================================
+    # ✨ 參數自動同步：優先從 DNS NPY 回填的參數讀取
+    # ========================================================
+    # DNS NPY 在資料載入時會自動回填至 kolmogorov_config.physics_params
+    kol_cfg = config.get('data', {}).get('kolmogorov_config', {})
+    dns_params = kol_cfg.get('physics_params', {})
+
+    # 追蹤參數來源（用於日誌）
+    param_sources = {}
+
+    # ========================================================
+    # 強迫參數（優先級：DNS NPY > YAML > 預設值）
+    # ========================================================
     forcing_cfg = physics_cfg.get('forcing', {})
+
+    # amplitude (DNS NPY 中的 'A' → 'forcing_amplitude')
+    if dns_params.get('forcing_amplitude') is not None:
+        amplitude = dns_params['forcing_amplitude']
+        param_sources['amplitude'] = 'DNS NPY'
+    elif forcing_cfg.get('amplitude') is not None:
+        amplitude = forcing_cfg['amplitude']
+        param_sources['amplitude'] = 'YAML'
+    else:
+        amplitude = 1.0
+        param_sources['amplitude'] = 'default'
+
+    # wavenumber (DNS NPY 中的 'k_f')
+    if dns_params.get('k_f') is not None:
+        wavenumber = int(dns_params['k_f'])
+        param_sources['k_f'] = 'DNS NPY'
+    elif forcing_cfg.get('k_f') is not None:
+        wavenumber = forcing_cfg['k_f']
+        param_sources['k_f'] = 'YAML'
+    elif forcing_cfg.get('wavenumber') is not None:
+        wavenumber = forcing_cfg['wavenumber']
+        param_sources['k_f'] = 'YAML'
+    else:
+        wavenumber = 4
+        param_sources['k_f'] = 'default'
+
     forcing_params = {
-        'amplitude': forcing_cfg.get('amplitude', 1.0),
-        'wavenumber': forcing_cfg.get('wavenumber', 4),
+        'amplitude': amplitude,
+        'wavenumber': wavenumber,
     }
-    
-    # 物理參數
+
+    # ========================================================
+    # 物理參數（優先級：DNS NPY > YAML > 預設值）
+    # ========================================================
+    if dns_params.get('nu') is not None:
+        nu = dns_params['nu']
+        param_sources['nu'] = 'DNS NPY'
+    elif physics_cfg.get('nu') is not None:
+        nu = physics_cfg['nu']
+        param_sources['nu'] = 'YAML'
+    else:
+        nu = 0.01
+        param_sources['nu'] = 'default'
+
+    # rho 通常只在 YAML 中設定（DNS NPY 通常不包含）
+    if physics_cfg.get('rho') is not None:
+        rho = physics_cfg['rho']
+        param_sources['rho'] = 'YAML'
+    else:
+        rho = 1.0
+        param_sources['rho'] = 'default'
+
     physics_params = {
-        'nu': physics_cfg.get('nu', 0.01),
-        'rho': physics_cfg.get('rho', 1.0),
+        'nu': nu,
+        'rho': rho,
     }
-    
-    # 域範圍
+
+    # ========================================================
+    # 域範圍（優先級：DNS NPY > YAML > 預設值）
+    # ========================================================
     domain_cfg = physics_cfg.get('domain', {})
+
+    # 域長度 L（DNS NPY 回填）
+    if kol_cfg.get('L') is not None:
+        L = kol_cfg['L']
+        param_sources['L'] = 'DNS NPY'
+    else:
+        L = 2 * 3.14159
+        param_sources['L'] = 'default'
+
     domain_bounds = {
-        'x': (domain_cfg.get('x_min', 0.0), domain_cfg.get('x_max', 2*3.14159)),
-        'y': (domain_cfg.get('y_min', 0.0), domain_cfg.get('y_max', 2*3.14159)),
+        'x': (domain_cfg.get('x_min', 0.0), domain_cfg.get('x_max', L)),
+        'y': (domain_cfg.get('y_min', 0.0), domain_cfg.get('y_max', L)),
     }
-    
+
     # 損失配置
     loss_cfg = config.get('losses', {})
-    
+
+    # 創建物理模塊
     physics = KolmogorovFlow2D(
         forcing_params=forcing_params,
         physics_params=physics_params,
         domain_bounds=domain_bounds,
         loss_config=loss_cfg
     )
-    
+
+    # ========================================================
+    # 日誌輸出（顯示參數來源）
+    # ========================================================
     logging.info("✅ 使用 Kolmogorov Flow 2D 求解器")
-    logging.info(f"   強迫參數: A={forcing_params['amplitude']:.3f}, k_f={forcing_params['wavenumber']}")
-    logging.info(f"   物理參數: ν={physics_params['nu']:.2e}, ρ={physics_params['rho']:.1f}")
-    
+    logging.info(f"   強迫參數: A={forcing_params['amplitude']:.3f} ({param_sources['amplitude']}), "
+                 f"k_f={forcing_params['wavenumber']} ({param_sources['k_f']})")
+    logging.info(f"   物理參數: ν={physics_params['nu']:.2e} ({param_sources['nu']}), "
+                 f"ρ={physics_params['rho']:.1f} ({param_sources['rho']})")
+    logging.info(f"   域範圍: L={L:.4f} ({param_sources['L']})")
+
+    # 如果有參數來自 DNS NPY，額外提示
+    dns_params_used = [k for k, v in param_sources.items() if v == 'DNS NPY']
+    if dns_params_used:
+        logging.info(f"   🔁 已從 DNS NPY 自動同步參數: {', '.join(dns_params_used)}")
+
     return physics
 
 
