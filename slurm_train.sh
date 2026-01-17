@@ -17,7 +17,7 @@
 # ===========================
 
 PROJECT_DIR="${HOME}/pinns-sparse-flow"
-CONFIG_FILE="configs/kolmogorov_re50_kf4_K100.yml"
+CONFIG_FILE="configs/experiments/S2_k_scan/s2_qr_K100_2d_re100.yml"
 WORKDIR="${PROJECT_DIR}/results/kflow_re50_K100_${SLURM_JOB_ID}"
 
 mkdir -p ${HOME}/logs
