@@ -101,7 +101,8 @@ START_TIME=$(date +%s)
 
 # 開始訓練
 echo "🚀 開始訓練..."
-python -m torch.distributed.run --nproc_per_node=2 scripts/train/train.py --cfg ${CONFIG_FILE}
+TORCHRUN_BIN=$(command -v torchrun)
+python "${TORCHRUN_BIN}" --nproc_per_node=2 scripts/train/train.py --cfg ${CONFIG_FILE}
 
 TRAIN_EXIT_CODE=$?
 END_TIME=$(date +%s)
