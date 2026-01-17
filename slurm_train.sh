@@ -37,6 +37,10 @@ export WANDB_MODE=offline
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=29500
 
+# 啟動虛擬環境
+source ~/python/bin/activate
+export PATH="${HOME}/bin:${HOME}/python/bin:${PATH}"
+
 # WandB 配置（從專案 .wandb_config 讀取或手動設置）
 if [ -f "${PROJECT_DIR}/.wandb_config" ]; then
     source "${PROJECT_DIR}/.wandb_config"
