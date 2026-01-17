@@ -11,6 +11,144 @@ import numpy as np
 import torch
 
 
+def _load_kolmogorov_payload(data_path: Path) -> Optional[Dict[str, Any]]:
+    """從單一 NPY 檔案載入 Kolmogorov 資料與 config。"""
+    if not data_path.is_file():
+        return None
+    if data_path.suffix.lower() != '.npy':
+        logging.warning(f"非預期副檔名，仍嘗試讀取: {data_path}")
+    try:
+        payload = np.load(data_path, allow_pickle=True)
+        if hasattr(payload, 'item'):
+            payload = payload.item()
+        if not isinstance(payload, dict):
+            logging.warning(f"NPY 內容非 dict，無法回填配置: {data_path}")
+            return None
+        return payload
+    except Exception as exc:
+        logging.warning(f"讀取 NPY 失敗，跳過回填: {exc}")
+        return None
+
+
+def _set_from_payload(target: Dict[str, Any], key: str, value: Any, label: str, updated: list) -> None:
+    """以 NPY 內容覆蓋設定，保留 YAML 僅作缺值備援。"""
+    if value is None:
+        return
+    if key in target and target[key] not in (None, '', {}) and target[key] != value:
+        logging.warning(
+            f"⚠️  kolmogorov_config.{label} YAML={target[key]} 覆寫為 NPY={value}"
+        )
+    target[key] = value
+    updated.append(label)
+
+
+def _backfill_kolmogorov_config(kol_cfg: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    """從資料檔 config 回填 kolmogorov_config（NPY 優先，YAML 作輔助）。"""
+    if not isinstance(payload, dict):
+        return
+    file_cfg = payload.get('config', {})
+    if not isinstance(file_cfg, dict):
+        return
+
+    required_physics = ['nu', 'k_f', 'A', 'L']
+    missing_physics = [key for key in required_physics if file_cfg.get(key) is None]
+    if missing_physics:
+        logging.warning(
+            f"⚠️  NPY config 缺少物理參數: {', '.join(missing_physics)}，將嘗試從 YAML 補齊"
+        )
+
+    updated_keys = []
+
+    _set_from_payload(kol_cfg, 'dt', file_cfg.get('dt'), 'dt', updated_keys)
+    _set_from_payload(kol_cfg, 'L', file_cfg.get('L'), 'L', updated_keys)
+
+    if not kol_cfg.get('time_range'):
+        time_vals = payload.get('time')
+        if time_vals is not None:
+            time_arr = np.asarray(time_vals)
+            if time_arr.size > 0:
+                _set_from_payload(
+                    kol_cfg,
+                    'time_range',
+                    [float(time_arr.min()), float(time_arr.max())],
+                    'time_range',
+                    updated_keys,
+                )
+        elif file_cfg.get('T_end') is not None:
+            _set_from_payload(
+                kol_cfg,
+                'time_range',
+                [0.0, float(file_cfg['T_end'])],
+                'time_range',
+                updated_keys,
+            )
+
+    n_val = file_cfg.get('N')
+    if n_val is None:
+        u_data = payload.get('u')
+        if isinstance(u_data, np.ndarray) and u_data.ndim >= 2:
+            n_val = u_data.shape[-1]
+    if n_val is not None:
+        _set_from_payload(
+            kol_cfg,
+            'resolution',
+            {'x': int(n_val), 'y': int(n_val)},
+            'resolution',
+            updated_keys,
+        )
+
+    vars_from_payload = [var for var in ['u', 'v', 'p'] if var in payload]
+    if vars_from_payload:
+        _set_from_payload(kol_cfg, 'variables', vars_from_payload, 'variables', updated_keys)
+
+    physics_params = kol_cfg.get('physics_params') or {}
+    if 'physics_params' not in kol_cfg:
+        kol_cfg['physics_params'] = physics_params
+
+    _set_from_payload(physics_params, 'nu', file_cfg.get('nu'), 'physics_params.nu', updated_keys)
+    _set_from_payload(physics_params, 'k_f', file_cfg.get('k_f'), 'physics_params.k_f', updated_keys)
+    _set_from_payload(
+        physics_params,
+        'forcing_amplitude',
+        file_cfg.get('A'),
+        'physics_params.forcing_amplitude',
+        updated_keys,
+    )
+
+    if updated_keys:
+        logging.info(f"🔁 kolmogorov_config 回填: {', '.join(updated_keys)}")
+
+
+def _validate_kolmogorov_config(kol_cfg: Dict[str, Any]) -> None:
+    """檢查 Kolmogorov 訓練所需參數是否完整。"""
+    missing = []
+
+    if not kol_cfg.get('time_range'):
+        missing.append('time_range')
+    if kol_cfg.get('dt') is None:
+        missing.append('dt')
+
+    resolution_cfg = kol_cfg.get('resolution')
+    if not isinstance(resolution_cfg, dict) or not resolution_cfg.get('x') or not resolution_cfg.get('y'):
+        missing.append('resolution')
+
+    physics_params = kol_cfg.get('physics_params') or {}
+    for key in ('nu', 'k_f', 'forcing_amplitude'):
+        if physics_params.get(key) is None:
+            missing.append(f'physics_params.{key}')
+
+    if not kol_cfg.get('variables'):
+        missing.append('variables')
+    if kol_cfg.get('L') is None:
+        missing.append('L')
+
+    if missing:
+        raise ValueError(
+            "Kolmogorov 訓練參數不足，請確認 NPY config 或 YAML 已提供："
+            f" {', '.join(missing)}"
+        )
+
+
 def _load_dns_metadata(data_dir: Path) -> Dict[str, Any]:
     """載入 DNS 元數據（從 JSON）"""
     metadata_file = data_dir / "metadata.json"
@@ -133,6 +271,16 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
     # 載入配置
     kol_cfg = config['data']['kolmogorov_config']
     data_path = Path(kol_cfg['data_path'])
+
+    payload = None
+    if data_path.is_file():
+        payload = _load_kolmogorov_payload(data_path)
+        if payload is not None:
+            _backfill_kolmogorov_config(kol_cfg, payload)
+            _validate_kolmogorov_config(kol_cfg)
+        else:
+            raise ValueError(f"無法從 NPY 回填配置: {data_path}")
+
     time_range = kol_cfg['time_range']
     t_start, t_end = time_range
     
@@ -198,77 +346,163 @@ def prepare_kolmogorov_training_data(config: Dict[str, Any], device: torch.devic
 
         logging.info(f"   使用 DNS values time steps: {T_selected}")
     else:
-        logging.info(f"📂 載入 DNS 數據（NPY mmap）: {data_path}")
+        if data_path.is_file():
+            logging.info(f"📂 載入 DNS 數據（NPY 檔案）: {data_path}")
+            if payload is None:
+                payload = _load_kolmogorov_payload(data_path)
+            if payload is None:
+                raise ValueError(f"無法讀取 DNS NPY 檔案: {data_path}")
 
-        time_all = np.load(data_path / 'time.npy', mmap_mode='r')
-        time_mask = (time_all >= t_start) & (time_all <= t_end)
-        time_selected = time_all[time_mask]
-        T_selected = len(time_selected)
+            time_vals = payload.get('time')
+            if time_vals is None:
+                raise ValueError("DNS NPY 缺少 time 序列")
+            time_all = np.asarray(time_vals)
+            if time_all.size == 0:
+                raise ValueError("DNS NPY 缺少 time 序列")
+            time_mask = (time_all >= t_start) & (time_all <= t_end)
+            time_selected = time_all[time_mask]
+            T_selected = len(time_selected)
 
-        logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}], 共 {T_selected} 個時間步")
+            logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}], 共 {T_selected} 個時間步")
 
-        metadata = _load_dns_metadata(data_path)
-        N = metadata.get('N', 256)
-        L = metadata.get('L', 2 * np.pi)
+            resolution_cfg = kol_cfg.get('resolution', {})
+            if isinstance(resolution_cfg, dict):
+                N = int(resolution_cfg.get('x', 256))
+            else:
+                N = int(resolution_cfg)
+            L = float(kol_cfg.get('L', 2 * np.pi))
 
-        x_1d = np.linspace(0, L, N, endpoint=False)
-        y_1d = np.linspace(0, L, N, endpoint=False)
-        X_mesh, Y_mesh = np.meshgrid(x_1d, y_1d, indexing='ij')
+            x_1d = np.asarray(payload.get('x'))
+            y_1d = np.asarray(payload.get('y'))
+            if x_1d.ndim != 1 or y_1d.ndim != 1:
+                x_1d = np.linspace(0, L, N, endpoint=False)
+                y_1d = np.linspace(0, L, N, endpoint=False)
 
-        X_flat = X_mesh.flatten()
-        Y_flat = Y_mesh.flatten()
+            X_mesh, Y_mesh = np.meshgrid(x_1d, y_1d, indexing='ij')
 
-        x_sensor_locs = X_flat[spatial_indices]
-        y_sensor_locs = Y_flat[spatial_indices]
+            X_flat = X_mesh.flatten()
+            Y_flat = Y_mesh.flatten()
 
-        u_all = np.load(data_path / 'u.npy', mmap_mode='r')
-        v_all = np.load(data_path / 'v.npy', mmap_mode='r')
+            x_sensor_locs = X_flat[spatial_indices]
+            y_sensor_locs = Y_flat[spatial_indices]
 
-        p_file = data_path / 'p.npy'
-        if p_file.exists():
-            p_all = np.load(p_file, mmap_mode='r')
+            u_all = payload.get('u')
+            v_all = payload.get('v')
+            p_all = payload.get('p')
+            if u_all is None or v_all is None:
+                raise ValueError("DNS NPY 缺少 u/v 場")
+
+            u_slice = u_all[time_mask]
+            v_slice = v_all[time_mask]
+            p_slice = p_all[time_mask] if p_all is not None else None
+
+            u_flat = u_slice.reshape(T_selected, -1)
+            v_flat = v_slice.reshape(T_selected, -1)
+            p_flat = p_slice.reshape(T_selected, -1) if p_slice is not None else None
+
+            N_total = u_flat.shape[1]
+            if spatial_indices.max() >= N_total:
+                raise IndexError(
+                    f"❌ Sensor 索引越界！最大索引 {spatial_indices.max()} >= 總點數 {N_total}\n"
+                    f"   可能原因：Sensor 檔案基於不同網格解析度生成\n"
+                    f"   DNS 網格: {N}x{N} = {N_total} 點\n"
+                    f"   Sensor 索引範圍: [{spatial_indices.min()}, {spatial_indices.max()}]"
+                )
+            if spatial_indices.min() < 0:
+                raise IndexError(
+                    f"❌ Sensor 索引無效！最小索引 {spatial_indices.min()} < 0"
+                )
+
+            logging.info(
+                f"✅ Sensor 索引驗證通過: [{spatial_indices.min()}, {spatial_indices.max()}] "
+                f"⊂ [0, {N_total-1}]"
+            )
+
+            u_sensors_vals = u_flat[:, spatial_indices]
+            v_sensors_vals = v_flat[:, spatial_indices]
+            p_sensors_vals = p_flat[:, spatial_indices] if p_flat is not None else None
+
+            expected_shape = (T_selected, K)
+            if u_sensors_vals.shape != expected_shape:
+                raise ValueError(
+                    f"❌ Sensor 資料形狀錯誤！\n"
+                    f"   預期: {expected_shape}\n"
+                    f"   實際: {u_sensors_vals.shape}"
+                )
+
+            logging.info(f"✅ Sensor 資料形狀驗證: u_sensors_vals.shape = {u_sensors_vals.shape}")
         else:
-            p_all = None
+            logging.info(f"📂 載入 DNS 數據（NPY mmap）: {data_path}")
 
-        u_slice = u_all[time_mask]
-        v_slice = v_all[time_mask]
-        p_slice = p_all[time_mask] if p_all is not None else None
+            time_all = np.load(data_path / 'time.npy', mmap_mode='r')
+            time_mask = (time_all >= t_start) & (time_all <= t_end)
+            time_selected = time_all[time_mask]
+            T_selected = len(time_selected)
 
-        u_flat = u_slice.reshape(T_selected, -1)
-        v_flat = v_slice.reshape(T_selected, -1)
-        p_flat = p_slice.reshape(T_selected, -1) if p_slice is not None else None
+            logging.info(f"   時間範圍: [{t_start:.1f}, {t_end:.1f}], 共 {T_selected} 個時間步")
 
-        N_total = u_flat.shape[1]
-        if spatial_indices.max() >= N_total:
-            raise IndexError(
-                f"❌ Sensor 索引越界！最大索引 {spatial_indices.max()} >= 總點數 {N_total}\n"
-                f"   可能原因：Sensor 檔案基於不同網格解析度生成\n"
-                f"   DNS 網格: {N}x{N} = {N_total} 點\n"
-                f"   Sensor 索引範圍: [{spatial_indices.min()}, {spatial_indices.max()}]"
+            metadata = _load_dns_metadata(data_path)
+            N = metadata.get('N', 256)
+            L = metadata.get('L', 2 * np.pi)
+
+            x_1d = np.linspace(0, L, N, endpoint=False)
+            y_1d = np.linspace(0, L, N, endpoint=False)
+            X_mesh, Y_mesh = np.meshgrid(x_1d, y_1d, indexing='ij')
+
+            X_flat = X_mesh.flatten()
+            Y_flat = Y_mesh.flatten()
+
+            x_sensor_locs = X_flat[spatial_indices]
+            y_sensor_locs = Y_flat[spatial_indices]
+
+            u_all = np.load(data_path / 'u.npy', mmap_mode='r')
+            v_all = np.load(data_path / 'v.npy', mmap_mode='r')
+
+            p_file = data_path / 'p.npy'
+            if p_file.exists():
+                p_all = np.load(p_file, mmap_mode='r')
+            else:
+                p_all = None
+
+            u_slice = u_all[time_mask]
+            v_slice = v_all[time_mask]
+            p_slice = p_all[time_mask] if p_all is not None else None
+
+            u_flat = u_slice.reshape(T_selected, -1)
+            v_flat = v_slice.reshape(T_selected, -1)
+            p_flat = p_slice.reshape(T_selected, -1) if p_slice is not None else None
+
+            N_total = u_flat.shape[1]
+            if spatial_indices.max() >= N_total:
+                raise IndexError(
+                    f"❌ Sensor 索引越界！最大索引 {spatial_indices.max()} >= 總點數 {N_total}\n"
+                    f"   可能原因：Sensor 檔案基於不同網格解析度生成\n"
+                    f"   DNS 網格: {N}x{N} = {N_total} 點\n"
+                    f"   Sensor 索引範圍: [{spatial_indices.min()}, {spatial_indices.max()}]"
+                )
+            if spatial_indices.min() < 0:
+                raise IndexError(
+                    f"❌ Sensor 索引無效！最小索引 {spatial_indices.min()} < 0"
+                )
+
+            logging.info(
+                f"✅ Sensor 索引驗證通過: [{spatial_indices.min()}, {spatial_indices.max()}] "
+                f"⊂ [0, {N_total-1}]"
             )
-        if spatial_indices.min() < 0:
-            raise IndexError(
-                f"❌ Sensor 索引無效！最小索引 {spatial_indices.min()} < 0"
-            )
 
-        logging.info(
-            f"✅ Sensor 索引驗證通過: [{spatial_indices.min()}, {spatial_indices.max()}] "
-            f"⊂ [0, {N_total-1}]"
-        )
+            u_sensors_vals = u_flat[:, spatial_indices]
+            v_sensors_vals = v_flat[:, spatial_indices]
+            p_sensors_vals = p_flat[:, spatial_indices] if p_flat is not None else None
 
-        u_sensors_vals = u_flat[:, spatial_indices]
-        v_sensors_vals = v_flat[:, spatial_indices]
-        p_sensors_vals = p_flat[:, spatial_indices] if p_flat is not None else None
+            expected_shape = (T_selected, K)
+            if u_sensors_vals.shape != expected_shape:
+                raise ValueError(
+                    f"❌ Sensor 資料形狀錯誤！\n"
+                    f"   預期: {expected_shape}\n"
+                    f"   實際: {u_sensors_vals.shape}"
+                )
 
-        expected_shape = (T_selected, K)
-        if u_sensors_vals.shape != expected_shape:
-            raise ValueError(
-                f"❌ Sensor 資料形狀錯誤！\n"
-                f"   預期: {expected_shape}\n"
-                f"   實際: {u_sensors_vals.shape}"
-            )
-
-        logging.info(f"✅ Sensor 資料形狀驗證: u_sensors_vals.shape = {u_sensors_vals.shape}")
+            logging.info(f"✅ Sensor 資料形狀驗證: u_sensors_vals.shape = {u_sensors_vals.shape}")
     
     # 4. 構建訓練張量 (T * K 樣本)
     # 我們需要將 [T, K] 展平成 [T*K, 1]

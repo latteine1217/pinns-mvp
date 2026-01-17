@@ -121,9 +121,6 @@ class KolmogorovFlow2D(NavierStokesBase):
         # === Momentum Merging 參數 ===
         self.merge_momentum = (loss_config or {}).get('merge_momentum', False)
 
-        # === 🚀 向量化殘差計算（Wave 3 優化）===
-        self.use_vectorized_residual = (loss_config or {}).get('use_vectorized_residual', False)
-
         # 驗證配置
         self._verify_configuration()
 
@@ -238,8 +235,8 @@ class KolmogorovFlow2D(NavierStokesBase):
         Returns:
             殘差字典 {'momentum_x', 'momentum_y', 'continuity'}
         """
-        # === 🚀 Wave 3 優化：向量化殘差計算（早期返回）===
-        if gradients is None and self.use_vectorized_residual:
+        # === 🚀 向量化殘差計算（無梯度快取時使用）===
+        if gradients is None:
             from pinnx.losses.residuals_vectorized import ns_residual_2d_vectorized
             forcing_x = self.compute_forcing_term(coords)
             source = torch.cat([forcing_x, torch.zeros_like(forcing_x)], dim=1)
@@ -254,53 +251,28 @@ class KolmogorovFlow2D(NavierStokesBase):
                 merge_momentum=self.merge_momentum
             )
 
+        # === 🚀 使用預計算梯度快取（Wave 2 優化路徑）===
         # 提取速度與壓力
         u, v, p = self.parse_velocity_pressure(predictions)
 
-        # === 計算連續方程殘差 ===
-        if gradients is not None:
-            # 🚀 Wave 2 優化：使用快取的梯度
-            u_x = gradients['u_x']
-            v_y = gradients['v_y']
-            continuity = u_x + v_y
-        else:
-            # 🐌 Wave 1 相容：自動計算
-            continuity = self.compute_continuity_residual(coords, [u, v])
+        # 連續方程殘差
+        u_x = gradients['u_x']
+        v_y = gradients['v_y']
+        continuity = u_x + v_y
 
-        # === 計算對流項 ===
-        if gradients is not None:
-            # 🚀 Wave 2 優化：使用快取的梯度
-            # u 的對流項: u * ∂u/∂x + v * ∂u/∂y
-            conv_u = u * gradients['u_x'] + v * gradients['u_y']
-            # v 的對流項: u * ∂v/∂x + v * ∂v/∂y
-            conv_v = u * gradients['v_x'] + v * gradients['v_y']
-        else:
-            # 🐌 Wave 1 相容：自動計算
-            conv_u = self.compute_advection_term(coords, u, [u, v])
-            conv_v = self.compute_advection_term(coords, v, [u, v])
+        # 對流項
+        conv_u = u * gradients['u_x'] + v * gradients['u_y']
+        conv_v = u * gradients['v_x'] + v * gradients['v_y']
 
-        # === 計算壓力梯度項 ===
-        if gradients is not None:
-            # 🚀 Wave 2 優化：使用快取的梯度
-            p_x = gradients['p_x']
-            p_y = gradients['p_y']
-        else:
-            # 🐌 Wave 1 相容：自動計算
-            p_x = self.compute_gradient(p, coords, component=0)
-            p_y = self.compute_gradient(p, coords, component=1)
+        # 壓力梯度項
+        p_x = gradients['p_x']
+        p_y = gradients['p_y']
         pressure_x = p_x / self.rho
         pressure_y = p_y / self.rho
 
-        # === 計算黏性項 ===
-        if gradients is not None:
-            # 🚀 Wave 2 優化：使用快取的梯度
-            # ν∇²u = ν(∂²u/∂x² + ∂²u/∂y²)
-            viscous_u = self.nu * (gradients['u_xx'] + gradients['u_yy'])
-            viscous_v = self.nu * (gradients['v_xx'] + gradients['v_yy'])
-        else:
-            # 🐌 Wave 1 相容：自動計算
-            viscous_u = self.compute_viscous_term(coords, u)
-            viscous_v = self.compute_viscous_term(coords, v)
+        # 黏性項
+        viscous_u = self.nu * (gradients['u_xx'] + gradients['u_yy'])
+        viscous_v = self.nu * (gradients['v_xx'] + gradients['v_yy'])
 
         # === 計算強迫項（Kolmogorov 特有） ===
         forcing_u = self.compute_forcing_term(coords)

@@ -23,7 +23,7 @@ import logging
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
-from pinnx.utils.config_loader import load_config
+from pinnx.train.config_loader import load_config
 from pinnx.train.trainer_builder import TrainerBuilder
 from scripts.train.train import prepare_training_data
 

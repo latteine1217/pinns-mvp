@@ -261,6 +261,24 @@ data:
 - ❌ Kolmogorov Flow 未啟用: "Time Window mode requires Kolmogorov Flow enabled"
 - ⚠️ 窗口過短: "窗口持續時間過短：建議減少窗口數量"
 
+#### Kolmogorov data_path 自動回填
+
+當 `data.kolmogorov_config.data_path` 指向單一 NPY 檔（包含 `config` 欄位）時，系統會自動回填缺失參數：
+- `dt`, `resolution`
+- `physics_params.nu`, `physics_params.k_f`, `physics_params.forcing_amplitude`
+- `variables`, `L`
+
+`time_range` 仍以 YAML 為準（訓練期間需求），其餘欄位 NPY 優先、YAML 補缺。若 NPY 缺少必要物理參數會警告。
+
+```yaml
+data:
+  kolmogorov_config:
+    enabled: true
+    data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy
+    time_range: [15.0, 35.0]  # 訓練時間窗必填
+    # 其餘欄位可省略，若 NPY 缺值再由 YAML 補齊
+```
+
 #### DDP Multi-GPU 訓練
 
 建議使用 `torchrun` 啟動，系統會自動偵測並啟用 DDP：

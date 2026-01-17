@@ -30,6 +30,20 @@ data:
     - p
   normalize: true
   cache_dir: ./data/jhtdb/cache
+
+  # kolmogorov_config:
+  #   enabled: true
+  #   data_path: ./data/kolmogorov_dns/kolmogorov_dns_100.npy  # 支援 NPY 目錄或單一 NPY 檔案（含 config）
+  #   time_range: [15.0, 35.0]  # 訓練時間窗（需手動設定）
+  #   dt: 0.001                 # NPY config 優先，YAML 僅補缺
+  #   resolution:
+  #     x: 256
+  #     y: 256
+  #   physics_params:
+  #     nu: 0.039374
+  #     k_f: 4
+  #     forcing_amplitude: 1.0
+  #   variables: [u, v, p]
 lowfi_prior:
   enabled: false
   data_path: ''
