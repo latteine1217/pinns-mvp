@@ -27,8 +27,8 @@ data:
       x: 256
       y: 256
     time_range:
-    - 15.0
-    - 35.0
+    - 0.0
+    - 20.0
     dt: 0.001
     variables:
     - u
@@ -50,8 +50,8 @@ normalization:
   steady_state:
     enabled: true
     time_window:
-    - 15.0
-    - 35.0
+    - 0.0
+    - 20.0
 sensors:
   K: 100
   selection_method: precomputed
@@ -203,8 +203,8 @@ evaluation:
     kinetic_energy_rmse: 0.05
   reference_data: ./data/kolmogorov_dns/dns_re100_t100.h5
   reference_time_window:
+  - 0.0
   - 20.0
-  - 40.0
 physics_validation:
   enabled: true
   save_metrics: true
