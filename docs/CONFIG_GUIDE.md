@@ -57,12 +57,9 @@ model:              # 網路架構
     fourier_sigma: 4.0
 
 physics:            # 物理方程與邊界條件
-  type: "vs_pinn_channel_flow"
-  nu: 5.0e-5
-  domain:
-    x_range: [0.0, 25.13]
-    y_range: [-1.0, 1.0]
-    z_range: [0.0, 9.42]
+  type: "kolmogorov_flow_2d"
+  rho: 1.0
+  # Kolmogorov 其餘物理參數由 DNS NPY 自動回補
 
 losses:             # ⚠️ 注意：複數形式，不是 'loss'
   data_weight: 10.0

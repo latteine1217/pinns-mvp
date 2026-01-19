@@ -1,0 +1,15 @@
+{
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": false,
+  "reportMissingImports": true,
+  "exclude": [
+    ".venv",
+    "external",
+    "data",
+    "results",
+    "checkpoints",
+    "wandb",
+    "profiler_results"
+  ]
+}

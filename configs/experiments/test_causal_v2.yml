@@ -34,7 +34,7 @@ sensors:
   selection_method: random
   spatial_coverage: uniform
 model:
-  type: kolmogorov_flow_2d
+  type: fourier_vs_mlp
   in_dim: 3
   out_dim: 3
   output_variables:
@@ -60,19 +60,9 @@ model:
         domain_size: 6.283185307179586
         n_modes: 64
     trainable_fourier: false
-  nu: 0.0001
+physics:
+  type: kolmogorov_flow_2d
   rho: 1.0
-  forcing:
-    amplitude: 2.0
-    wavenumber: 4
-  domain:
-    x_min: 0.0
-    x_max: 6.283185307179586
-    y_min: 0.0
-    y_max: 6.283185307179586
-  boundary_conditions:
-    periodic_x: true
-    periodic_y: true
 losses:
   data_weight: 100.0
   prior_weight: 0.1
@@ -95,10 +85,10 @@ training:
     - 0.9
     - 0.999
     weight_decay: 0.0
-    scheduler:
-      type: exponential
-      decay_steps: 1000
-      decay_rate: 0.95
+  lr_scheduler:
+    type: exponential
+    decay_steps: 1000
+    decay_rate: 0.95
   sampling:
     N_pde: 8000
     N_ic: 128

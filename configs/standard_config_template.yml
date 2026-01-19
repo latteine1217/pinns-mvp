@@ -136,6 +136,11 @@ model:
     channel_half_height: 1.0
     viscous_length: 0.001
   use_gradient_checkpointing: false
+
+# Kolmogorov Flow 最小物理配置（其餘參數由 DNS NPY 自動回補）
+# physics:
+#   type: kolmogorov_flow_2d
+#   rho: 1.0
 physics:
   type: vs_pinn_channel_flow
   nu: 5.0e-05

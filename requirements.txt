@@ -1,3 +1,9 @@
+# ⚠️  DEPRECATED: This file is no longer used
+# Please use pyproject.toml + uv for dependency management
+# Install dependencies with: uv sync
+# This file is kept only for legacy tooling and should not be referenced
+# See: https://docs.astral.sh/uv/
+
 # Core deep learning stack
 torch>=2.7.1
 

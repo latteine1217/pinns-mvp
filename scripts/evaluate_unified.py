@@ -51,7 +51,7 @@ import torch
 import yaml
 
 # 添加專案路徑
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
 # 專案模組

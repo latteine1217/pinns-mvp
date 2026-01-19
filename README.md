@@ -4,7 +4,7 @@
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.9.1-orange)](https://pytorch.org/)
 [![WandB](https://img.shields.io/badge/WandB-Logging-yellow)](https://wandb.ai/)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
 
 ## 核心特性
 
@@ -20,44 +20,44 @@
 ## 快速開始
 
 ```bash
-# 1. 環境設置
-conda env create -f environment.yml && conda activate pinns-sparse-flow
+# 1. 環境設置（uv）
+uv sync
 
 # 2. 配置 WandB（必須，僅需一次）
 echo "WANDB_API_KEY=your_key_here" > .wandb_config
 
 # 3. 感測器生成（LES 選點 + DNS values）
-python scripts/generate/sensors/generate_kolmogorov_temporal_qr.py \
+uv run python scripts/generate/sensors/generate_kolmogorov_temporal_qr.py \
   --input data/kolmogorov_les/kolmogorov_les_re100.npy \
   --output data/kolmogorov_sensors/re100 \
   --K 400 --time-range 0 20 --time-stride 10 \
   --include-dns-values
 
 # 4. 驗證配置（必跑，Fail Fast）
-python scripts/tools/validate_config_keys.py configs/kolmogorov_re50_kf4_K100.yml
-python scripts/tools/validate_config.py --config configs/main.yml
+uv run python scripts/tools/validate_config_keys.py configs/kolmogorov_re50_kf4_K100.yml
+uv run python scripts/tools/validate_config.py --config configs/main.yml
 
 # 5. 訓練
 # 5a. 單 GPU 訓練
-python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
+uv run python scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 
 # 5b. 多 GPU DDP 訓練（🆕 自動加速 ~1.7x）
 torchrun --nproc_per_node=2 scripts/train/train.py --cfg configs/kolmogorov_re50_kf4_K100.yml
 
 # 6. 評估
 # 6a. 快速評估（訓練中驗證，1-2 分鐘）
-python scripts/evaluate_unified.py \
+uv run python scripts/evaluate_unified.py \
   --checkpoint checkpoints/<exp>/best_model.pth \
   --output results/evaluation
 
 # 6b. 多模型比較
-python scripts/evaluate_unified.py \
+uv run python scripts/evaluate_unified.py \
   --checkpoints checkpoints/model1.pth checkpoints/model2.pth checkpoints/model3.pth \
   --labels "RANS Prior" "Vanilla" "Proposed" \
   --output results/comparison
 
 # 6c. 進階科學分析（論文前評估，5-10 分鐘，含能譜/壁剪應力）
-python scripts/evaluate/comprehensive_evaluation.py \
+uv run python scripts/evaluate/comprehensive_evaluation.py \
   --checkpoint checkpoints/<exp>/best_model.pth \
   --reference_dir data/jhtdb \
   --output results/comprehensive_eval
@@ -67,7 +67,7 @@ python scripts/evaluate/comprehensive_evaluation.py \
 
 ```bash
 MPLCONFIGDIR=./.mplconfig PYTHONPATH=. \
-  python scripts/train/train.py --cfg configs/quick_test_full.yml
+  uv run python scripts/train/train.py --cfg configs/quick_test_full.yml
 ```
 
 ## 支援場景

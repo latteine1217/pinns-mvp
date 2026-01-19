@@ -14,74 +14,30 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 # 添加專案根目錄到 Python 路徑
-sys.path.insert(0, str(Path(__file__).parent.parent))
+project_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(project_root))
 
 # 導入 pinnx 以觸發 GPU 環境偵測
 import pinnx
 
-from pinnx.losses.residuals import NSResidualLoss, BoundaryConditionLoss
-from pinnx.losses.priors import PriorLossManager
-from pinnx.losses.weighting import GradNormWeighter, CausalWeighter, AdaptiveWeightScheduler
-from pinnx.losses import MeanConstraintLoss  # ⭐ Phase 6C: 均值約束損失
-from pinnx.train.trainer import Trainer  # 新的訓練器類
-from pinnx.train.trainer_builder import TrainerBuilder  # ✨ P2-3: TrainerBuilder
-from pinnx.utils.normalization import InputTransform, InputNormConfig, OutputTransform
-
-# 從重構模組導入配置、檢查點與工廠函數
-from pinnx.train.config_loader import (
-    load_config,
-    normalize_config_structure,
-    derive_loss_weights,
-)
-from pinnx.train.checkpointing import (
-    save_checkpoint,
-    load_checkpoint,
-)
-from pinnx.train.model_physics_factory import (
-    get_device,
-    create_model,
-    create_physics,
-)
-from pinnx.train.factories import (
-    create_optimizer,
-    create_scheduler,
-)
-from pinnx.utils.setup import (
-    setup_logging,
-    set_random_seed,
-)
-
-# 導入調度器模組 (Phase 1)
-from pinnx.train.schedulers import WarmupCosineScheduler, StagedWeightScheduler, CurriculumScheduler
-
-# 導入採樣模組 (Phase 2)
-from pinnx.dataio.sampling import sample_boundary_points, sample_interior_points
-
-# 導入資料載入與驗證模組 (Phase 3)
-from pinnx.dataio.validation import validate_sensor_data_quality
 from pinnx.dataio.loaders.kolmogorov import prepare_kolmogorov_training_data
 from pinnx.dataio.loaders.rans_prior import load_rans_prior_data
-
-# 導入標準化輔助模組 (Phase 4)
-from pinnx.utils.normalization_helpers import (
-    setup_output_normalization,
-    create_input_normalizer,
-)
-
-# 導入工廠函數 (Phase 5)
+from pinnx.dataio.sampling import sample_boundary_points, sample_interior_points
+from pinnx.train.config_loader import load_config
 from pinnx.train.loss_factory import create_loss_functions
+from pinnx.train.model_physics_factory import create_model, create_physics, get_device
+from pinnx.train.trainer_builder import TrainerBuilder  # ✨ P2-3: TrainerBuilder
 from pinnx.train.weighter_factory import create_weighters
-
-from pinnx.utils.config_snapshot import ConfigSnapshot  # 🆕 配置快照追蹤
+from pinnx.utils.normalization_helpers import create_input_normalizer, setup_output_normalization
+from pinnx.utils.setup import set_random_seed, setup_logging
 
 
 # ============================================================================
@@ -181,356 +137,14 @@ def _collect_coordinate_tensors(training_data: Dict[str, torch.Tensor]) -> List[
 
 
 # ============================================================================
-# Warmup + CosineAnnealing 學習率調度器
+# 調度器定義已移至 pinnx.train.schedulers
 # ============================================================================
-class WarmupCosineScheduler:
-    """
-    Warmup + CosineAnnealing 學習率調度器
-    
-    前 warmup_epochs 個 epoch 線性增加學習率從 0 到 base_lr
-    之後使用 CosineAnnealing 衰減到 min_lr
-    """
-    
-    def __init__(self, optimizer, warmup_epochs: int, max_epochs: int, 
-                 base_lr: float, min_lr: float = 0.0):
-        """
-        Args:
-            optimizer: PyTorch 優化器
-            warmup_epochs: Warmup 階段的 epoch 數量
-            max_epochs: 總訓練 epoch 數量
-            base_lr: 基礎學習率（Warmup 後的峰值）
-            min_lr: 最小學習率（CosineAnnealing 的下限）
-        """
-        self.optimizer = optimizer
-        self.warmup_epochs = warmup_epochs
-        self.max_epochs = max_epochs
-        self.base_lr = base_lr
-        self.min_lr = min_lr
-        self.current_epoch = 0
-        
-        # 建立內部的 CosineAnnealing 調度器（用於 Warmup 後階段）
-        self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, 
-            T_max=max_epochs - warmup_epochs,
-            eta_min=min_lr
-        )
-        
-        logging.info(f"✅ WarmupCosineScheduler initialized:")
-        logging.info(f"   Warmup epochs: {warmup_epochs}")
-        logging.info(f"   Max epochs: {max_epochs}")
-        logging.info(f"   Base LR: {base_lr:.6f}")
-        logging.info(f"   Min LR: {min_lr:.6f}")
-    
-    def step(self):
-        """更新學習率"""
-        if self.current_epoch < self.warmup_epochs:
-            # Warmup 階段：線性增加
-            lr = self.base_lr * (self.current_epoch + 1) / self.warmup_epochs
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = lr
-        else:
-            # CosineAnnealing 階段
-            self.cosine_scheduler.step()
-        
-        self.current_epoch += 1
-    
-    def get_last_lr(self):
-        """返回當前學習率（兼容性接口）"""
-        return [param_group['lr'] for param_group in self.optimizer.param_groups]
-
-
-# ============================================================================
-# 階段式權重調度器
-# ============================================================================
-class StagedWeightScheduler:
-    """階段式權重調度器 - 根據 epoch 切換不同訓練階段的權重"""
-    
-    def __init__(self, phases: list):
-        """
-        Args:
-            phases: 階段配置列表，每個元素包含:
-                - name: 階段名稱
-                - epoch_range: [start, end] epoch 範圍
-                - weights: 該階段的權重字典
-        """
-        self.phases = phases
-        self.current_phase_idx = 0
-        self.current_phase_name = phases[0]['name'] if phases else "default"
-        
-        # 按 epoch_range 排序
-        self.phases.sort(key=lambda p: p['epoch_range'][0])
-        
-        logging.info(f"✅ StagedWeightScheduler initialized with {len(phases)} phases:")
-        for p in self.phases:
-            logging.info(f"   {p['name']}: Epoch {p['epoch_range'][0]}-{p['epoch_range'][1]}")
-    
-    def get_phase_weights(self, epoch: int) -> tuple:
-        """
-        獲取當前 epoch 對應的權重
-        
-        Returns:
-            (weights_dict, phase_name, is_transition)
-        """
-        # 找到當前 epoch 所屬階段
-        for idx, phase in enumerate(self.phases):
-            start, end = phase['epoch_range']
-            if start <= epoch < end:
-                # 檢測是否為階段切換點
-                is_transition = (idx != self.current_phase_idx)
-                self.current_phase_idx = idx
-                self.current_phase_name = phase['name']
-                
-                return phase['weights'], phase['name'], is_transition
-        
-        # 如果超出所有階段，返回最後階段
-        last_phase = self.phases[-1]
-        return last_phase['weights'], last_phase['name'], False
-
-
-# 課程訓練調度器 - 支援雷諾數動態變化
-class CurriculumScheduler:
-    """
-    課程訓練調度器 - 逐步提升雷諾數，從層流到湍流
-    
-    特性：
-    - 動態調整 Re_tau, nu, pressure_gradient
-    - 階段式權重切換
-    - 階段式學習率調整
-    - 階段式採樣策略調整
-    """
-    
-    def __init__(self, stages: list, physics_module):
-        """
-        Args:
-            stages: 課程階段列表，每個元素包含:
-                - name: 階段名稱
-                - epoch_range: [start, end]
-                - Re_tau: 雷諾數
-                - nu: 黏度
-                - pressure_gradient: 壓力梯度
-                - weights: 損失權重字典
-                - sampling: 採樣配置
-                - lr: 學習率
-            physics_module: 物理方程模組（用於更新參數）
-        """
-        self.stages = stages
-        self.physics = physics_module
-        self.current_stage_idx = 0
-        self.current_stage = stages[0] if stages else None
-        
-        # 按 epoch_range 排序
-        self.stages.sort(key=lambda s: s['epoch_range'][0])
-        
-        logging.info("="*80)
-        logging.info("🚀 CurriculumScheduler initialized - Progressive Weight & Sampling Training")
-        logging.info("="*80)
-        for i, s in enumerate(self.stages, 1):
-            logging.info(f"Stage {i}: {s['name']}")
-            logging.info(f"  Epochs: {s['epoch_range'][0]}-{s['epoch_range'][1]}")
-
-            # 根據場景類型顯示不同的物理參數（如果存在）
-            if 'Re_tau' in s and s['Re_tau'] is not None:  # Channel Flow
-                if s.get('pressure_gradient') is not None:
-                    logging.info(f"  Re_tau: {s['Re_tau']:.1f}, nu: {s['nu']:.6f}, dP/dx: {s['pressure_gradient']:.3f}")
-                else:
-                    logging.info(f"  Re_tau: {s['Re_tau']:.1f}, nu: {s['nu']:.6f}")
-            elif 'Re' in s and s['Re'] is not None:  # Kolmogorov Flow
-                logging.info(f"  Re: {s['Re']:.1f}, nu: {s['nu']:.6f}")
-            elif 'nu' in s and s['nu'] is not None:
-                logging.info(f"  nu: {s['nu']:.6f}")
-            else:
-                # 沒有物理參數 - curriculum 只控制權重和採樣
-                logging.info(f"  Physics params: inherited from main config")
-
-            # 顯示採樣配置
-            if 'sampling' in s:
-                pde_pts = s['sampling'].get('N_pde', 'N/A')
-                bc_pts = s['sampling'].get('boundary_points', 0)
-                logging.info(f"  PDE points: {pde_pts}, BC points: {bc_pts}")
-
-            # 處理 lr（可選參數）
-            if 'lr' in s:
-                lr_value = float(s['lr']) if isinstance(s['lr'], (str, int)) else s['lr']
-                logging.info(f"  Learning rate: {lr_value:.6f} (explicit)")
-            else:
-                logging.info(f"  Learning rate: controlled by global scheduler")
-
-            # 顯示主要權重變化（如果存在）
-            if 'weights' in s:
-                key_weights = {k: v for k, v in s['weights'].items() if k in ['data', 'continuity', 'prior']}
-                if key_weights:
-                    weights_str = ', '.join([f"{k}={v}" for k, v in key_weights.items()])
-                    logging.info(f"  Key weights: {weights_str}")
-        logging.info("="*80)
-    
-    def get_stage_config(self, epoch: int) -> Dict[str, Any]:
-        """
-        獲取當前 epoch 對應的階段配置
-        
-        Returns:
-            {
-                'stage_name': str,
-                'is_transition': bool,
-                'weights': dict,
-                'Re_tau': float,
-                'nu': float,
-                'pressure_gradient': float,
-                'sampling': dict,
-                'lr': float
-            }
-        """
-        # 找到當前階段
-        for idx, stage in enumerate(self.stages):
-            start, end = stage['epoch_range']
-            if start <= epoch < end:
-                # 檢測階段切換
-                is_transition = (idx != self.current_stage_idx)
-                
-                if is_transition:
-                    self.current_stage_idx = idx
-                    self.current_stage = stage
-
-                    # 更新物理參數（如果有）
-                    if any(key in stage for key in ['Re_tau', 'Re', 'nu', 'pressure_gradient']):
-                        self._update_physics_parameters(stage)
-
-                    logging.info("="*80)
-                    logging.info(f"🎯 CURRICULUM STAGE TRANSITION at Epoch {epoch}")
-                    logging.info(f"📚 New Stage: {stage['name']}")
-
-                    # 根據場景類型顯示不同的物理參數（如果存在）
-                    if 'Re_tau' in stage and stage['Re_tau'] is not None:  # Channel Flow
-                        logging.info(f"🔬 Re_tau: {stage['Re_tau']:.1f}, nu: {stage['nu']:.6f}")
-                    elif 'Re' in stage and stage['Re'] is not None:  # Kolmogorov Flow
-                        logging.info(f"🔬 Re: {stage['Re']:.1f}, nu: {stage['nu']:.6f}")
-                    elif 'nu' in stage and stage['nu'] is not None:
-                        logging.info(f"🔬 nu: {stage['nu']:.6f}")
-                    else:
-                        logging.info(f"🔬 Physics params: inherited from main config")
-
-                    # 顯示採樣配置
-                    if 'sampling' in stage:
-                        pde_pts = stage['sampling'].get('N_pde', 'N/A')
-                        bc_pts = stage['sampling'].get('boundary_points', 0)
-                        logging.info(f"⚙️  PDE/BC points: {pde_pts}/{bc_pts}")
-
-                    # 顯示權重
-                    if 'weights' in stage:
-                        logging.info(f"📊 Weights: {stage['weights']}")
-
-                    # 顯示學習率（如果指定）
-                    if 'lr' in stage:
-                        lr_value = float(stage['lr']) if isinstance(stage['lr'], (str, int)) else stage['lr']
-                        logging.info(f"📉 Learning rate: {lr_value:.6f} (explicit reset)")
-                    else:
-                        logging.info(f"📉 Learning rate: controlled by global scheduler")
-                    logging.info("="*80)
-                
-                # 構建返回配置（只包含實際存在的參數）
-                config_dict = {
-                    'stage_name': stage['name'],
-                    'is_transition': is_transition,
-                    'weights': stage.get('weights', {}),
-                    'sampling': stage.get('sampling', {}),
-                }
-
-                # 可選物理參數
-                if 'nu' in stage:
-                    config_dict['nu'] = stage['nu']
-                if 'Re_tau' in stage:
-                    config_dict['Re_tau'] = stage['Re_tau']
-                if 'Re' in stage:
-                    config_dict['Re'] = stage['Re']
-                if 'pressure_gradient' in stage:
-                    config_dict['pressure_gradient'] = stage['pressure_gradient']
-
-                # lr 是可選參數（如果未指定，則繼續使用全域 scheduler）
-                if 'lr' in stage:
-                    config_dict['lr'] = stage['lr']
-
-                return config_dict
-        
-        # 超出範圍，返回最後階段
-        last_stage = self.stages[-1]
-        config_dict = {
-            'stage_name': last_stage['name'],
-            'is_transition': False,
-            'weights': last_stage.get('weights', {}),
-            'sampling': last_stage.get('sampling', {}),
-        }
-
-        # 可選物理參數
-        if 'nu' in last_stage:
-            config_dict['nu'] = last_stage['nu']
-        if 'Re_tau' in last_stage:
-            config_dict['Re_tau'] = last_stage['Re_tau']
-        if 'Re' in last_stage:
-            config_dict['Re'] = last_stage['Re']
-        if 'pressure_gradient' in last_stage:
-            config_dict['pressure_gradient'] = last_stage['pressure_gradient']
-
-        # lr 是可選參數
-        if 'lr' in last_stage:
-            config_dict['lr'] = last_stage['lr']
-
-        return config_dict
-    
-    def _update_physics_parameters(self, stage: Dict[str, Any]):
-        """更新物理方程模組的參數（避免梯度計算問題）"""
-        import torch
-
-        updated_params = []
-
-        # nu 是 torch.nn.Buffer，使用 .data 來避免梯度追蹤
-        if 'nu' in stage and hasattr(self.physics, 'nu'):
-            if isinstance(self.physics.nu, torch.Tensor):
-                # 使用 .data.fill_() 來避免影響計算圖
-                self.physics.nu.data = torch.tensor(stage['nu'], dtype=self.physics.nu.dtype, device=self.physics.nu.device)
-            else:
-                self.physics.nu = stage['nu']
-            updated_params.append(f"nu={stage['nu']:.6f}")
-
-        # Channel Flow 參數
-        if hasattr(self.physics, 'Re_tau') and 'Re_tau' in stage:
-            if isinstance(self.physics.Re_tau, torch.Tensor):
-                self.physics.Re_tau.data = torch.tensor(stage['Re_tau'], dtype=self.physics.Re_tau.dtype, device=self.physics.Re_tau.device)
-            else:
-                self.physics.Re_tau = stage['Re_tau']
-            updated_params.append(f"Re_tau={stage['Re_tau']:.1f}")
-
-        if hasattr(self.physics, 'pressure_gradient') and 'pressure_gradient' in stage:
-            if isinstance(self.physics.pressure_gradient, torch.Tensor):
-                self.physics.pressure_gradient.data = torch.tensor(stage['pressure_gradient'], dtype=self.physics.pressure_gradient.dtype, device=self.physics.pressure_gradient.device)
-            else:
-                self.physics.pressure_gradient = stage['pressure_gradient']
-            updated_params.append(f"dP/dx={stage['pressure_gradient']:.3f}")
-
-        # Kolmogorov Flow 參數
-        if hasattr(self.physics, 'Re') and 'Re' in stage:
-            if isinstance(self.physics.Re, torch.Tensor):
-                self.physics.Re.data = torch.tensor(stage['Re'], dtype=self.physics.Re.dtype, device=self.physics.Re.device)
-            else:
-                self.physics.Re = stage['Re']
-            updated_params.append(f"Re={stage['Re']:.1f}")
-
-        # 日誌輸出
-        if updated_params:
-            logging.debug(f"✅ Physics parameters updated: {', '.join(updated_params)}")
-        else:
-            logging.debug("ℹ️  No physics parameters to update (controlled by main config)")
-
 # 全域快取，用於存儲 Channel Flow 資料和統計資訊
 _channel_data_cache: Optional[Dict[str, Any]] = None
 
 # ============================================================================
 # 訓練專用輔助函數（保留，未在模組中實現）
 # ============================================================================
-
-
-# ============================================================================
-# 📦 create_weighters 已遷移至 pinnx.train.weighter_factory (Phase 5)
-# ============================================================================
-
 
 def prepare_training_data(config: Dict[str, Any], device: torch.device, config_path: Optional[str] = None) -> Dict[str, torch.Tensor]:
     """準備訓練資料 - 支援 JHTDB Channel Flow 或 Mock 資料
@@ -565,10 +179,10 @@ def prepare_training_data(config: Dict[str, Any], device: torch.device, config_p
 
 
 def _apply_validation_split(
-    training_dict: Dict[str, torch.Tensor],
+    training_dict: Dict[str, Any],
     validation_split: float,
     is_vs_pinn: bool
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, Any]:
     """
     依據 validation_split 將感測點資料切分成訓練/驗證集合，並在 training_dict 中新增
     'validation' 索引。
@@ -649,16 +263,23 @@ def _apply_validation_split(
         coord_parts.append(z_val)
     validation_coords = torch.cat(coord_parts, dim=1).detach()
     
-    target_parts = [u_val, v_val]
-    component_order = ['u', 'v']
+    target_parts: List[torch.Tensor] = []
+    component_order = []
+    if u_val is not None:
+        target_parts.append(u_val)
+        component_order.append('u')
+    if v_val is not None:
+        target_parts.append(v_val)
+        component_order.append('v')
     if is_vs_pinn:
         if w_val is not None and w_val.shape[0] == validation_coords.shape[0]:
             target_parts.append(w_val)
-        else:
+        elif u_val is not None:
             target_parts.append(torch.zeros_like(u_val))
         component_order.append('w')
-    target_parts.append(p_val)
-    component_order.append('p')
+    if p_val is not None:
+        target_parts.append(p_val)
+        component_order.append('p')
     validation_targets = torch.cat(target_parts, dim=1).detach()
     
     if t_val is not None:
